@@ -25,6 +25,7 @@ export interface ChatroomInfo {
   readonly id: string
   readonly title: string
   readonly aiDisplayName: string
+  readonly sessionId: string
 }
 
 /** Initial identity lookup result. */
@@ -38,14 +39,7 @@ export interface ChatroomSnapshotEvent {
   readonly type: 'snapshot'
   readonly room: ChatroomInfo
   readonly identity: ChatroomIdentity
-  readonly messages: readonly ChatroomMessage[]
   readonly online: number
-}
-
-/** Incremental room message event. */
-export interface ChatroomMessageEvent {
-  readonly type: 'message'
-  readonly message: ChatroomMessage
 }
 
 /** Online connection count event. */
@@ -54,7 +48,7 @@ export interface ChatroomPresenceEvent {
   readonly online: number
 }
 
-export type ChatroomServerEvent = ChatroomSnapshotEvent | ChatroomMessageEvent | ChatroomPresenceEvent
+export type ChatroomServerEvent = ChatroomSnapshotEvent | ChatroomPresenceEvent
 
 /** Browser-visible error envelope. */
 export interface ChatroomErrorResponse {

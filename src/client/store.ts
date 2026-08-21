@@ -3,7 +3,6 @@ import type {
   ChatroomErrorResponse,
   ChatroomIdentity,
   ChatroomInfo,
-  ChatroomMessage,
   ChatroomServerEvent,
   ChatroomSessionResponse,
 } from '../types.js'
@@ -12,35 +11,33 @@ import { CHATROOM_API_PREFIX } from '../routes.js'
 export type ChatroomPhase = 'loading' | 'identity-required' | 'ready' | 'error'
 export type ChatroomConnection = 'offline' | 'connecting' | 'online'
 
-/** Immutable browser projection consumed through the slot host's observable hook. */
+/** Browser identity and presence around the native Harness Session. */
 export interface ChatroomView {
   readonly open: boolean
   readonly phase: ChatroomPhase
   readonly connection: ChatroomConnection
   readonly room: ChatroomInfo | undefined
   readonly identity: ChatroomIdentity | undefined
-  readonly messages: readonly ChatroomMessage[]
   readonly online: number
-  readonly sending: boolean
   readonly error: string | undefined
 }
 
-/** React-free owner of room HTTP, SSE, navigation, and immutable UI state. */
+/** React-free owner of room identity, presence, and native Session navigation. */
 export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private snapshot: ChatroomView = {
-    open: true,
+    open: false,
     phase: 'loading',
     connection: 'offline',
     room: undefined,
     identity: undefined,
-    messages: [],
     online: 0,
-    sending: false,
     error: undefined,
   }
   private readonly listeners = new Set<() => void>()
   private eventSource: EventSource | undefined
   private stopped = false
+
+  constructor(private readonly openSession: (sessionId: string) => boolean = () => false) {}
 
   /** Current immutable room projection. */
   getSnapshot = (): ChatroomView => this.snapshot
@@ -51,7 +48,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     return () => { this.listeners.delete(listener) }
   }
 
-  /** Resolve the persistent browser identity and start live synchronization. */
+  /** Resolve the persistent browser identity and start presence synchronization. */
   async start(): Promise<void> {
     this.stopped = false
     await this.loadSession()
@@ -64,17 +61,27 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.listeners.clear()
   }
 
-  /** Open the full room overlay. */
+  /** Open the native shared Session or show the identity dialog first. */
   openRoom = (): void => {
-    this.set({ open: true })
+    this.set({ open: true, error: undefined })
+    this.resumeOpen()
   }
 
-  /** Return to Harness while retaining the persistent room identity. */
+  /** Close only the additive identity/status dialog. */
   closeRoom = (): void => {
     this.set({ open: false })
   }
 
-  /** Create the first persistent browser identity. */
+  /** Retry pending navigation when the Host Session list changes. */
+  resumeOpen = (): void => {
+    const { open, phase, room, identity } = this.snapshot
+    if (!open || phase !== 'ready' || room === undefined || identity === undefined) return
+    if (this.openSession(room.sessionId)) {
+      this.set({ open: false, error: undefined })
+    }
+  }
+
+  /** Create the first persistent browser identity, then enter the shared Session. */
   join = async (displayName: string): Promise<void> => {
     this.set({ phase: 'loading', error: undefined })
     try {
@@ -92,65 +99,35 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         error: undefined,
       })
       this.openEvents()
+      this.resumeOpen()
     } catch (error) {
       this.set({ phase: 'identity-required', error: errorMessage(error) })
     }
   }
 
-  /** Revoke the current identity so this browser can choose another name. */
+  /** Revoke the current identity and reopen the identity dialog. */
   resetIdentity = async (): Promise<void> => {
     this.closeEvents()
     try {
       await requestEmpty(`${CHATROOM_API_PREFIX}/session`, { method: 'DELETE' })
       this.set({
+        open: true,
         phase: 'identity-required',
         connection: 'offline',
         identity: undefined,
-        messages: [],
         online: 0,
-        sending: false,
         error: undefined,
       })
     } catch (error) {
-      this.set({ error: errorMessage(error) })
+      this.set({ open: true, phase: 'error', error: errorMessage(error) })
     }
   }
 
-  /** Persist one message; SSE remains the authoritative transcript path. */
-  send = async (text: string): Promise<boolean> => {
-    if (this.snapshot.sending || this.snapshot.phase !== 'ready') return false
-    this.set({ sending: true, error: undefined })
-    try {
-      await requestJson(`${CHATROOM_API_PREFIX}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      })
-      this.set({ sending: false })
-      return true
-    } catch (error) {
-      if (error instanceof HttpError && error.status === 401) {
-        this.closeEvents()
-        this.set({
-          phase: 'identity-required',
-          connection: 'offline',
-          identity: undefined,
-          messages: [],
-          online: 0,
-          sending: false,
-          error: '身份已失效，请重新选择。',
-        })
-      } else {
-        this.set({ sending: false, error: errorMessage(error) })
-      }
-      return false
-    }
-  }
-
-  /** Retry startup after the room API was temporarily unavailable. */
+  /** Retry identity recovery and pending Session navigation. */
   retry = async (): Promise<void> => {
     this.set({ phase: 'loading', error: undefined })
     await this.loadSession()
+    this.resumeOpen()
   }
 
   private async loadSession(): Promise<void> {
@@ -163,7 +140,6 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           connection: 'offline',
           room: session.room,
           identity: undefined,
-          messages: [],
           online: 0,
           error: undefined,
         })
@@ -217,16 +193,10 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           connection: 'online',
           room: event.room,
           identity: event.identity,
-          messages: sortMessages(event.messages),
           online: event.online,
           error: undefined,
         })
         return
-      case 'message': {
-        const messages = this.snapshot.messages.filter(message => message.id !== event.message.id)
-        this.set({ messages: sortMessages([...messages, event.message]) })
-        return
-      }
       case 'presence':
         this.set({ online: event.online })
     }
@@ -239,17 +209,13 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   }
 }
 
-function sortMessages(messages: readonly ChatroomMessage[]): readonly ChatroomMessage[] {
-  return [...messages].sort((left, right) => left.sequence - right.sequence)
-}
-
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
     super(message)
   }
 }
 
-async function requestJson<T = unknown>(url: string, init?: RequestInit): Promise<T> {
+async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, credentials: 'same-origin' })
   if (!response.ok) throw await responseError(response)
   return await response.json() as T

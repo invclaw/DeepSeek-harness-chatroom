@@ -2,20 +2,20 @@
 
 [简体中文](README.zh.md) | English
 
-An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web plugin that turns the one-to-one agent surface into a synchronized multi-user AI chatroom.
+An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web plugin that lets multiple browsers share one persistent Harness Session while retaining the complete native conversation UI.
 
 ## Features
 
 - First-visit display-name selection with a durable, opaque browser-session cookie
-- One shared room transcript synchronized to every connected browser through Server-Sent Events
-- One persistent Harness Agent session containing every participant's message in room order
-- Autonomous AI participation: the model can reply or explicitly remain silent for each human message
-- Current participant messages on the right; AI and other participants on the left
-- A full-screen room surface using the Harness theme, spacing, content width, composer, and bubble language
-- Durable identities and transcript across Harness restarts
-- Automatic reconciliation of an AI turn that completed immediately before a process interruption
-- Asynchronous room initialization: missing model configuration or room storage failure leaves only the room offline and never blocks Harness Web startup
+- One persistent Session shared by every participant; Harness's native live channel synchronizes messages, replies, and execution state
+- Native sidebar, Conversation/Trajectory tabs, reasoning and tool flow, Session log, model selection, and composer
+- Native images, stop/queue/steer behavior, slash commands, approvals, and question interactions without plugin reimplementation
+- Participant names added immediately before the native prompt admission, so every browser and the model see the same identity
+- Current identity and online count in the native Session header, including identity switching
+- Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
+
+Version 0.2.0 removes the former full-screen custom transcript and the model-silence prompt. The plugin is now only the identity and navigation layer around a native shared Session, so AI replies behave like an ordinary Harness conversation.
 
 ## Requirements
 
@@ -26,7 +26,10 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 
 ## Install from GitHub
 
+When upgrading, remove the previous plugin record before installing the current repository:
+
 ```sh
+pnpm dsh plugin --profile web remove deepseek-harness-chatroom
 pnpm dsh plugin --profile web add github:sliverp/DeepSeek-harness-chatroom
 pnpm dsh --profile web
 ```
@@ -38,7 +41,7 @@ pnpm dsh plugin --profile web add /absolute/path/to/DeepSeek-harness-chatroom
 pnpm dsh --profile web
 ```
 
-The browser bundle is discovered through the plugin's `dsh.client` manifest. The plugin contributes an additive `shell.overlay` entry and does not replace Harness conversation, sidebar, or details components.
+The browser bundle is discovered through the plugin's `dsh.client` manifest. It contributes only a `shell.overlay` launcher and identity status in the native Session header; it does not replace the conversation, sidebar, details, or composer components.
 
 ## Configure
 
@@ -49,14 +52,14 @@ Installation adds this row to the Web profile:
   name: deepseek-harness-chatroom
   config:
     roomId: lobby
-    roomTitle: AI 聊天室
+    roomTitle: AI Chatroom
     aiDisplayName: DeepSeek
     sessionId: chatroom-v1-lobby
     cwd: !!js process.env.DSH_CHATROOM_CWD ?? process.cwd()
     agentPreset: standard
 ```
 
-Override that row in `~/.dsh/profiles/web/cordis.patch.yml` to change room behavior:
+Override it in the Web profile's `cordis.patch.yml` when needed:
 
 ```yaml
 - id: chatroom
@@ -66,47 +69,36 @@ Override that row in `~/.dsh/profiles/web/cordis.patch.yml` to change room behav
     roomTitle: Team AI Room
     aiDisplayName: DeepSeek
     sessionId: chatroom-v1-team-room
-    cwd: /absolute/path/available/to/the-room-agent
+    cwd: /absolute/path/available/to-the-room-agent
     agentPreset: standard
     cookieName: dsh_chatroom_session
     cookieMaxAgeSeconds: 31536000
     maxDisplayNameChars: 24
-    maxMessageChars: 4000
-    responseTimeoutMs: 180000
-    aiRetryDelayMs: 5000
     sseHeartbeatMs: 15000
-    noReplyToken: <CHATROOM_NO_REPLY>
-    systemPrompt: |-
-      You participate in a multi-user AI room. Every input identifies its speaker.
-      Read the full room history and decide independently whether a response is useful.
-      If no response is needed, output exactly <CHATROOM_NO_REPLY> and nothing else.
-      Otherwise output only the natural-language message to send to the room.
 ```
 
-`systemPrompt` must contain `noReplyToken`. The token gives every queued human message an explicit, durable AI decision without showing a synthetic reply in the room.
+`sessionId` is the one persistent Session opened by every participant. Change it only when intentionally starting a fresh AI context. Upgrading the plugin does not create a separate conversation per participant.
 
-`sessionId` identifies the room's single persistent Harness Agent. Change it when intentionally starting a fresh AI context. Human identities and the displayed transcript remain in the plugin storage domain; changing only `sessionId` does not delete them.
-
-The API route is registered immediately and reports `503` until storage and the Agent are ready. Initialization runs in the background, and all failures are contained within the plugin so Harness Web can continue running.
+The API route is registered immediately and reports `503` until identity storage and the Session are ready. Initialization runs in the background, and failures remain isolated from Harness Web startup.
 
 ## Browser identity and security
 
-The browser receives a random 256-bit token in an `HttpOnly`, `SameSite=Strict` cookie scoped to the chatroom API. The server stores only its SHA-256 digest. Reloading the page or restarting Harness restores the same participant identity until the cookie expires or the user selects **Switch identity**.
+The browser receives a random 256-bit token in an `HttpOnly`, `SameSite=Strict` cookie scoped to the chatroom API. The server stores only its SHA-256 digest. Reloading the page or restarting Harness restores the identity until the cookie expires or the user selects the identity control in the Session header.
 
-A display name is room presentation, not account authentication. Deploy Harness Web behind the access control appropriate for the workspace. Every participant who can reach this room can submit input to the configured Agent preset and therefore to its tools. Use a restricted preset and a narrow `cwd` for rooms exposed beyond a trusted team.
+A display name is presentation, not authentication. Every participant who can reach the room can submit input to the configured Agent preset and may use its tools. Use a restricted preset and narrow `cwd` for rooms exposed beyond a trusted team.
 
 ## Verify
 
-1. Open Harness Web in one browser profile. Enter `Alice` on the identity screen.
-2. Open the same URL in a private window or another browser. Enter `Bob`.
-3. Send a message from Alice. It must appear immediately on the right for Alice and on the left for Bob.
-4. Send a message from Bob. Both transcripts must remain in identical sequence.
-5. Ask `DeepSeek，请回复“多人链路正常”`. The AI reply must appear on the left in both browsers.
-6. Send an ordinary side remark that does not require an answer. The model may remain silent; the human message must still be present in the persistent room Agent session.
-7. Reload both pages. Each browser must restore its own identity and the complete shared transcript.
-8. Stop and restart Harness Web. The same identities, transcript, and AI context must recover.
+1. Open Harness Web, select **Enter AI Chatroom**, and choose `Alice`.
+2. The existing native Session must open with sidebar, Conversation/Trajectory tabs, native composer, and Session log. The former custom full-screen transcript must not appear.
+3. In a private window or another browser choose `Bob`; both pages must open the same `sessionId`.
+4. Send text from Alice and Bob. Messages must appear as `Alice: …` and `Bob: …`, remain ordered in both pages, and receive normal AI replies.
+5. Send an image and ask the model to describe it. The image and response must use native message nodes.
+6. Run built-in commands such as `/new`; Harness's native command path must handle them.
+7. Trigger an approval-requiring tool. The native approval composer must appear and complete the authorization.
+8. Reload and restart Harness. The browser identity and shared Session context must recover.
 
-The health endpoint is available at `/plugins/deepseek-harness-chatroom/api/health`, which remains reachable when a deployment proxies only Harness plugin paths. `/chatroom/api/health` is retained for direct Harness Web deployments. A ready room returns:
+The health endpoint is `/plugins/deepseek-harness-chatroom/api/health`; direct Harness Web deployments may also use `/chatroom/api/health`. A ready room returns:
 
 ```json
 {"ready":true}

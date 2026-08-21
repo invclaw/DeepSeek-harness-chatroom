@@ -10,12 +10,7 @@ export interface Config {
     cookieName: string;
     cookieMaxAgeSeconds: number;
     maxDisplayNameChars: number;
-    maxMessageChars: number;
-    responseTimeoutMs: number;
-    aiRetryDelayMs: number;
     sseHeartbeatMs: number;
-    noReplyToken: string;
-    systemPrompt: string;
 }
 export declare const Config: z<Config>;
 /** Validate relationships Schemastery cannot express by individual fields. */

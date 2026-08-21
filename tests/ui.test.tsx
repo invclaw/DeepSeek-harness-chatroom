@@ -2,65 +2,75 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ChatroomShell } from '../src/client/ChatroomShell.js'
+import { ChatroomEntry } from '../src/client/ChatroomEntry.js'
+import { RoomIdentityAction } from '../src/client/RoomIdentityAction.js'
 import type { ChatroomView } from '../src/client/store.js'
 
 afterEach(cleanup)
 
-describe('ChatroomShell', () => {
-  it('keeps the current participant on the right and everyone else on the left', () => {
-    const view: ChatroomView = {
-      open: true,
-      phase: 'ready',
-      connection: 'online',
-      room: { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek' },
-      identity: { participantId: 'self', displayName: '我' },
-      messages: [
-        { id: 'self-message', sequence: 1, role: 'human', participantId: 'self', displayName: '我', text: '右边', createdAt: 1 },
-        { id: 'other-message', sequence: 2, role: 'human', participantId: 'other', displayName: '朋友', text: '左边', createdAt: 2 },
-        { id: 'ai-message', sequence: 3, role: 'ai', participantId: 'ai', displayName: 'DeepSeek', text: '也在左边', createdAt: 3 },
-      ],
-      online: 2,
-      sending: false,
-      error: undefined,
-    }
-    renderShell(view)
-
-    expect(document.querySelector('[data-message-id="self-message"]')?.getAttribute('data-message-side')).toBe('right')
-    expect(document.querySelector('[data-message-id="other-message"]')?.getAttribute('data-message-side')).toBe('left')
-    expect(document.querySelector('[data-message-id="ai-message"]')?.getAttribute('data-message-side')).toBe('left')
-    expect(screen.getByText('已同步 · 2 人在线')).toBeTruthy()
+describe('native chatroom integration', () => {
+  it('shows only a launcher outside the room instead of replacing the conversation UI', () => {
+    renderEntry(view({ open: false }), 'ordinary-session')
+    expect(screen.getByText('◉ 进入 AI 聊天室')).toBeTruthy()
+    expect(screen.queryByTestId('chatroom-dialog')).toBeNull()
   })
 
-  it('requires a name before the first browser identity can join', () => {
+  it('requires a name before navigating to the native shared Session', () => {
     const join = vi.fn(async () => undefined)
-    renderShell({
-      open: true,
-      phase: 'identity-required',
-      connection: 'offline',
-      room: { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek' },
-      identity: undefined,
-      messages: [],
-      online: 0,
-      sending: false,
-      error: undefined,
-    }, { join })
+    renderEntry(view({ open: true, phase: 'identity-required', identity: undefined }), undefined, { join })
     const button = screen.getByTestId('chatroom-join')
     expect((button as HTMLButtonElement).disabled).toBe(true)
     fireEvent.change(screen.getByTestId('chatroom-identity-input'), { target: { value: 'Alice' } })
     fireEvent.click(button)
     expect(join).toHaveBeenCalledWith('Alice')
+    expect(screen.getByText('进入后使用 Harness 原生对话界面。', { exact: false })).toBeTruthy()
+  })
+
+  it('adds identity and presence to the native Session header only', () => {
+    const room = view({ connection: 'online', online: 2 })
+    const { rerender } = render(<RoomIdentityAction
+      sessionId={'chatroom-v1-lobby' as never}
+      useChatroom={selector => selector(room)}
+      openRoom={vi.fn()}
+      resetIdentity={vi.fn(async () => undefined)}
+    />)
+    expect(screen.getByText('Alice · 2 人在线')).toBeTruthy()
+
+    rerender(<RoomIdentityAction
+      sessionId={'another-session' as never}
+      useChatroom={selector => selector(room)}
+      openRoom={vi.fn()}
+      resetIdentity={vi.fn(async () => undefined)}
+    />)
+    expect(screen.queryByText('Alice · 2 人在线')).toBeNull()
   })
 })
 
-function renderShell(view: ChatroomView, overrides: Partial<Parameters<typeof ChatroomShell>[0]> = {}): void {
-  render(<ChatroomShell
-    useChatroom={selector => selector(view)}
+function view(patch: Partial<ChatroomView> = {}): ChatroomView {
+  return {
+    open: false,
+    phase: 'ready',
+    connection: 'connecting',
+    room: { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' },
+    identity: { participantId: 'alice-id', displayName: 'Alice' },
+    online: 1,
+    error: undefined,
+    ...patch,
+  }
+}
+
+function renderEntry(
+  room: ChatroomView,
+  current: string | undefined,
+  overrides: Partial<Parameters<typeof ChatroomEntry>[0]> = {},
+): void {
+  render(<ChatroomEntry
+    useSessions={selector => selector({ current } as never)}
+    useWorkspaces={vi.fn() as never}
+    useChatroom={selector => selector(room)}
     openRoom={vi.fn()}
     closeRoom={vi.fn()}
     join={vi.fn(async () => undefined)}
-    resetIdentity={vi.fn(async () => undefined)}
-    send={vi.fn(async () => true)}
     retry={vi.fn(async () => undefined)}
     {...overrides}
   />)

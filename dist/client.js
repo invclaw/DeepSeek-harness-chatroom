@@ -9,252 +9,184 @@ window.__ModuleLoader__.load({
 		});
 		let react = require("react");
 		let react_jsx_runtime = require("react/jsx-runtime");
-		//#region src/client/ChatroomShell.tsx
-		/** Frame-wide chatroom entry and full-screen one-to-many conversation surface. */
-		function ChatroomShell(props) {
+		//#region src/client/ChatroomEntry.tsx
+		/** Additive room launcher plus the first-visit identity dialog. */
+		function ChatroomEntry(props) {
 			const room = props.useChatroom((snapshot) => snapshot);
-			if (!room.open) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-				className: "dsh-chatroom-launcher",
+			const currentSession = props.useSessions((snapshot) => snapshot.current);
+			const selected = room.room !== void 0 && String(currentSession) === room.room.sessionId;
+			const identityNeeded = selected && room.identity === void 0 && room.phase !== "loading";
+			if (!room.open && !identityNeeded) {
+				if (selected) return null;
+				return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					className: "dsh-chatroom-launcher",
+					"data-dsh-chatroom-entry": true,
+					type: "button",
+					onClick: props.openRoom,
+					children: "◉ 进入 AI 聊天室"
+				});
+			}
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "dsh-chatroom-dialog-layer",
 				"data-dsh-chatroom-entry": true,
-				type: "button",
-				onClick: props.openRoom,
-				children: "◉ 进入 AI 聊天室"
-			});
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
-				className: "dsh-chatroom-shell",
-				"data-dsh-chatroom-entry": true,
-				"data-testid": "chatroom-shell",
+				"data-testid": "chatroom-dialog",
 				children: [
 					room.phase === "identity-required" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IdentityStep, {
 						room,
-						join: props.join
+						join: props.join,
+						close: props.closeRoom
 					}),
 					room.phase === "loading" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusCard, {
 						title: "正在进入聊天室",
-						detail: "正在恢复此浏览器的身份与房间状态…"
+						detail: "正在恢复此浏览器的身份与共享会话…",
+						close: props.closeRoom
+					}),
+					room.phase === "ready" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusCard, {
+						title: "正在打开共享会话",
+						detail: "房间 Session 正在加入 Harness 会话列表，完成后会自动打开。",
+						action: "重试",
+						onAction: props.retry,
+						close: props.closeRoom
 					}),
 					room.phase === "error" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusCard, {
 						title: "聊天室暂时不可用",
 						detail: room.error ?? "请稍后重试。",
 						action: "重试",
-						onAction: props.retry
-					}),
-					room.phase === "ready" && room.identity !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(RoomView, {
-						room,
-						closeRoom: props.closeRoom,
-						resetIdentity: props.resetIdentity,
-						send: props.send
+						onAction: props.retry,
+						close: props.closeRoom
 					})
 				]
 			});
 		}
-		function IdentityStep({ room, join }) {
+		function IdentityStep({ room, join, close }) {
 			const [name, setName] = (0, react.useState)("");
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				className: "dsh-chatroom-center",
-				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("form", {
-					className: "dsh-chatroom-card",
-					onSubmit: (event) => {
-						event.preventDefault();
-						join(name);
-					},
-					children: [
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", { children: room.room?.title ?? "AI 聊天室" }),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: "第一次进入，请选择你在房间中显示的身份。此浏览器会在后续访问时自动恢复。" }),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-							className: "dsh-chatroom-name",
-							"data-testid": "chatroom-identity-input",
-							autoFocus: true,
-							maxLength: 80,
-							placeholder: "你的名字",
-							value: name,
-							onChange: (event) => {
-								setName(event.target.value);
-							}
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							className: "dsh-chatroom-button primary",
-							"data-testid": "chatroom-join",
-							type: "submit",
-							disabled: name.trim() === "",
-							children: "进入聊天室"
-						}),
-						room.error !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-							className: "dsh-chatroom-error",
-							role: "alert",
-							children: room.error
-						})
-					]
-				})
-			});
-		}
-		function RoomView({ room, closeRoom, resetIdentity, send }) {
-			const [draft, setDraft] = (0, react.useState)("");
-			const bottomRef = (0, react.useRef)(null);
-			(0, react.useEffect)(() => {
-				bottomRef.current?.scrollIntoView?.({ block: "end" });
-			}, [room.messages.length]);
-			const submit = async () => {
-				const text = draft.trim();
-				if (text === "") return;
-				if (await send(text)) setDraft("");
-			};
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
-				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("header", {
-					className: "dsh-chatroom-header",
-					children: [
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							className: "dsh-chatroom-icon-button",
-							title: "返回 Harness",
-							type: "button",
-							onClick: closeRoom,
-							children: "‹"
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-							className: "dsh-chatroom-heading",
-							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h1", {
-								className: "dsh-chatroom-title",
-								children: room.room?.title ?? "AI 聊天室"
-							}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-								className: "dsh-chatroom-presence",
-								children: [
-									connectionLabel(room.connection),
-									" · ",
-									room.online,
-									" 人在线"
-								]
-							})]
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-							className: "dsh-chatroom-header-actions",
-							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-								className: "dsh-chatroom-presence dsh-chatroom-identity-label",
-								children: room.identity?.displayName
-							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								className: "dsh-chatroom-icon-button",
-								title: "切换身份",
-								type: "button",
-								onClick: () => {
-									resetIdentity();
-								},
-								children: "↻"
-							})]
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("main", {
-					className: "dsh-chatroom-transcript",
-					"data-testid": "chatroom-transcript",
-					children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						className: "dsh-chatroom-column",
-						children: [
-							room.messages.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-								className: "dsh-chatroom-empty",
-								children: "房间还没有消息，来打个招呼吧。"
-							}),
-							room.messages.map((message) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(MessageRow, {
-								message,
-								own: message.participantId === room.identity?.participantId
-							}, message.id)),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { ref: bottomRef })
-						]
-					})
-				}),
-				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("footer", {
-					className: "dsh-chatroom-composer-wrap",
-					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						className: "dsh-chatroom-composer",
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("textarea", {
-							className: "dsh-chatroom-textarea",
-							"data-testid": "chatroom-composer",
-							"aria-label": "发送聊天室消息",
-							rows: 1,
-							placeholder: "给房间里的大家发消息…",
-							value: draft,
-							onChange: (event) => {
-								setDraft(event.target.value);
-							},
-							onKeyDown: (event) => {
-								if (event.key === "Enter" && !event.shiftKey) {
-									event.preventDefault();
-									submit();
-								}
-							}
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							className: "dsh-chatroom-send",
-							"data-testid": "chatroom-send",
-							title: "发送",
-							type: "button",
-							disabled: draft.trim() === "" || room.sending,
-							onClick: () => {
-								submit();
-							},
-							children: "↑"
-						})]
-					}), room.error !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("form", {
+				className: "dsh-chatroom-card",
+				onSubmit: (event) => {
+					event.preventDefault();
+					join(name);
+				},
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						className: "dsh-chatroom-close",
+						"aria-label": "关闭",
+						type: "button",
+						onClick: close,
+						children: "×"
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", { children: room.room?.title ?? "AI 聊天室" }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: "选择你在共享会话中显示的名字。进入后使用 Harness 原生对话界面。" }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+						className: "dsh-chatroom-name",
+						"data-testid": "chatroom-identity-input",
+						autoFocus: true,
+						maxLength: 80,
+						placeholder: "你的名字",
+						value: name,
+						onChange: (event) => {
+							setName(event.target.value);
+						}
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						className: "dsh-chatroom-button",
+						"data-testid": "chatroom-join",
+						type: "submit",
+						disabled: name.trim() === "",
+						children: "进入共享会话"
+					}),
+					room.error !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: "dsh-chatroom-error",
 						role: "alert",
 						children: room.error
-					})]
-				})
-			] });
-		}
-		function MessageRow({ message, own }) {
-			const ai = message.role === "ai";
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("article", {
-				className: `dsh-chatroom-row${own ? " own" : ""}`,
-				"data-message-id": message.id,
-				"data-message-side": own ? "right" : "left",
-				children: [!own && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					className: `dsh-chatroom-avatar${ai ? "" : " human"}`,
-					children: ai ? "AI" : firstGrapheme(message.displayName)
-				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					className: "dsh-chatroom-message",
-					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						className: "dsh-chatroom-meta",
-						children: [
-							message.displayName,
-							" · ",
-							formatTime(message.createdAt)
-						]
-					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						className: "dsh-chatroom-bubble",
-						children: message.text
-					})]
-				})]
+					})
+				]
 			});
 		}
-		function StatusCard({ title, detail, action, onAction }) {
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				className: "dsh-chatroom-center",
-				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					className: "dsh-chatroom-card",
-					children: [
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", { children: title }),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: detail }),
-						action !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							className: "dsh-chatroom-button primary",
-							type: "button",
-							onClick: () => {
-								onAction?.();
-							},
-							children: action
-						})
-					]
-				})
+		function StatusCard({ title, detail, action, onAction, close }) {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "dsh-chatroom-card",
+				role: "status",
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						className: "dsh-chatroom-close",
+						"aria-label": "关闭",
+						type: "button",
+						onClick: close,
+						children: "×"
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", { children: title }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: detail }),
+					action !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						className: "dsh-chatroom-button",
+						type: "button",
+						onClick: () => {
+							onAction?.();
+						},
+						children: action
+					})
+				]
 			});
 		}
-		function connectionLabel(connection) {
-			return connection === "online" ? "已同步" : connection === "connecting" ? "连接中" : "离线";
+		//#endregion
+		//#region src/client/native-prompt.ts
+		/** Prefix one native prompt with the browser participant visible to every room member. */
+		function identifyPrompt(content, displayName) {
+			let identified = false;
+			const output = content.map((part) => {
+				if (identified || part.type !== "text") return part;
+				identified = true;
+				return {
+					...part,
+					text: `${displayName}：${part.text}`
+				};
+			});
+			return identified ? output : [{
+				type: "text",
+				text: `${displayName} 发送了一张图片。`
+			}, ...output];
 		}
-		function firstGrapheme(value) {
-			return [...value][0]?.toUpperCase() ?? "?";
+		/** Route only the configured shared Session through the identity decorator. */
+		function installNativePromptIdentity(api, store) {
+			const original = api.sessions.prompt;
+			const wrapped = (payload, signal) => {
+				const room = store.getSnapshot();
+				if (room.room === void 0 || String(payload.sessionId) !== room.room.sessionId) return original(payload, signal);
+				if (room.identity === void 0) return Promise.reject(/* @__PURE__ */ new Error("请先选择聊天室身份。"));
+				return original({
+					...payload,
+					content: identifyPrompt(payload.content, room.identity.displayName)
+				}, signal);
+			};
+			api.sessions.prompt = wrapped;
+			return () => {
+				if (api.sessions.prompt === wrapped) api.sessions.prompt = original;
+			};
 		}
-		function formatTime(timestamp) {
-			return new Intl.DateTimeFormat("zh-CN", {
-				hour: "2-digit",
-				minute: "2-digit"
-			}).format(timestamp);
+		//#endregion
+		//#region src/client/RoomIdentityAction.tsx
+		/** Show the current room identity and presence inside the native session header. */
+		function RoomIdentityAction(props) {
+			const room = props.useChatroom((snapshot) => snapshot);
+			if (room.room === void 0 || String(props.sessionId) !== room.room.sessionId) return null;
+			const identity = room.identity;
+			const presence = room.connection === "online" ? `${room.online} 人在线` : "连接中";
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+				className: "dsh-chatroom-identity-action",
+				type: "button",
+				title: identity === void 0 ? "选择聊天室身份" : "切换聊天室身份",
+				onClick: () => {
+					identity === void 0 ? props.openRoom() : props.resetIdentity();
+				},
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						className: "dsh-chatroom-presence-dot",
+						"data-online": room.connection === "online"
+					}),
+					identity?.displayName ?? "选择身份",
+					" · ",
+					presence
+				]
+			});
 		}
 		//#endregion
 		//#region src/routes.ts
@@ -262,22 +194,24 @@ window.__ModuleLoader__.load({
 		const CHATROOM_API_PREFIX = "/plugins/deepseek-harness-chatroom/api";
 		//#endregion
 		//#region src/client/store.ts
-		/** React-free owner of room HTTP, SSE, navigation, and immutable UI state. */
+		/** React-free owner of room identity, presence, and native Session navigation. */
 		var ChatroomClientStore = class {
+			openSession;
 			snapshot = {
-				open: true,
+				open: false,
 				phase: "loading",
 				connection: "offline",
 				room: void 0,
 				identity: void 0,
-				messages: [],
 				online: 0,
-				sending: false,
 				error: void 0
 			};
 			listeners = /* @__PURE__ */ new Set();
 			eventSource;
 			stopped = false;
+			constructor(openSession = () => false) {
+				this.openSession = openSession;
+			}
 			/** Current immutable room projection. */
 			getSnapshot = () => this.snapshot;
 			/** Subscribe to room projection changes. */
@@ -287,7 +221,7 @@ window.__ModuleLoader__.load({
 					this.listeners.delete(listener);
 				};
 			};
-			/** Resolve the persistent browser identity and start live synchronization. */
+			/** Resolve the persistent browser identity and start presence synchronization. */
 			async start() {
 				this.stopped = false;
 				await this.loadSession();
@@ -298,15 +232,28 @@ window.__ModuleLoader__.load({
 				this.closeEvents();
 				this.listeners.clear();
 			}
-			/** Open the full room overlay. */
+			/** Open the native shared Session or show the identity dialog first. */
 			openRoom = () => {
-				this.set({ open: true });
+				this.set({
+					open: true,
+					error: void 0
+				});
+				this.resumeOpen();
 			};
-			/** Return to Harness while retaining the persistent room identity. */
+			/** Close only the additive identity/status dialog. */
 			closeRoom = () => {
 				this.set({ open: false });
 			};
-			/** Create the first persistent browser identity. */
+			/** Retry pending navigation when the Host Session list changes. */
+			resumeOpen = () => {
+				const { open, phase, room, identity } = this.snapshot;
+				if (!open || phase !== "ready" || room === void 0 || identity === void 0) return;
+				if (this.openSession(room.sessionId)) this.set({
+					open: false,
+					error: void 0
+				});
+			};
+			/** Create the first persistent browser identity, then enter the shared Session. */
 			join = async (displayName) => {
 				this.set({
 					phase: "loading",
@@ -327,6 +274,7 @@ window.__ModuleLoader__.load({
 						error: void 0
 					});
 					this.openEvents();
+					this.resumeOpen();
 				} catch (error) {
 					this.set({
 						phase: "identity-required",
@@ -334,65 +282,35 @@ window.__ModuleLoader__.load({
 					});
 				}
 			};
-			/** Revoke the current identity so this browser can choose another name. */
+			/** Revoke the current identity and reopen the identity dialog. */
 			resetIdentity = async () => {
 				this.closeEvents();
 				try {
 					await requestEmpty(`${CHATROOM_API_PREFIX}/session`, { method: "DELETE" });
 					this.set({
+						open: true,
 						phase: "identity-required",
 						connection: "offline",
 						identity: void 0,
-						messages: [],
 						online: 0,
-						sending: false,
 						error: void 0
 					});
 				} catch (error) {
-					this.set({ error: errorMessage(error) });
-				}
-			};
-			/** Persist one message; SSE remains the authoritative transcript path. */
-			send = async (text) => {
-				if (this.snapshot.sending || this.snapshot.phase !== "ready") return false;
-				this.set({
-					sending: true,
-					error: void 0
-				});
-				try {
-					await requestJson(`${CHATROOM_API_PREFIX}/messages`, {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ text })
-					});
-					this.set({ sending: false });
-					return true;
-				} catch (error) {
-					if (error instanceof HttpError && error.status === 401) {
-						this.closeEvents();
-						this.set({
-							phase: "identity-required",
-							connection: "offline",
-							identity: void 0,
-							messages: [],
-							online: 0,
-							sending: false,
-							error: "身份已失效，请重新选择。"
-						});
-					} else this.set({
-						sending: false,
+					this.set({
+						open: true,
+						phase: "error",
 						error: errorMessage(error)
 					});
-					return false;
 				}
 			};
-			/** Retry startup after the room API was temporarily unavailable. */
+			/** Retry identity recovery and pending Session navigation. */
 			retry = async () => {
 				this.set({
 					phase: "loading",
 					error: void 0
 				});
 				await this.loadSession();
+				this.resumeOpen();
 			};
 			async loadSession() {
 				try {
@@ -404,7 +322,6 @@ window.__ModuleLoader__.load({
 							connection: "offline",
 							room: session.room,
 							identity: void 0,
-							messages: [],
 							online: 0,
 							error: void 0
 						});
@@ -462,16 +379,10 @@ window.__ModuleLoader__.load({
 							connection: "online",
 							room: event.room,
 							identity: event.identity,
-							messages: sortMessages(event.messages),
 							online: event.online,
 							error: void 0
 						});
 						return;
-					case "message": {
-						const messages = this.snapshot.messages.filter((message) => message.id !== event.message.id);
-						this.set({ messages: sortMessages([...messages, event.message]) });
-						return;
-					}
 					case "presence": this.set({ online: event.online });
 				}
 			}
@@ -484,9 +395,6 @@ window.__ModuleLoader__.load({
 				for (const listener of this.listeners) listener();
 			}
 		};
-		function sortMessages(messages) {
-			return [...messages].sort((left, right) => left.sequence - right.sequence);
-		}
 		var HttpError = class extends Error {
 			status;
 			constructor(status, message) {
@@ -522,102 +430,145 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region src/client/styles.ts
-		/** Scoped stylesheet for the frame overlay; colors and type follow Harness theme tokens. */
-		const CHATROOM_STYLES = String.raw`
-[data-dsh-chatroom-entry] { pointer-events: auto; }
+		/** Small additive surfaces around the Harness-owned conversation UI. */
+		const CHATROOM_STYLES = `
 .dsh-chatroom-launcher {
-  position: fixed; right: 24px; bottom: 24px; z-index: 40;
-  display: inline-flex; align-items: center; gap: 8px; height: 42px;
-  border: 1px solid var(--dsw-alias-border-l2); border-radius: 22px; padding: 0 16px;
-  color: var(--dsw-alias-label-primary); background: var(--dsw-alias-button-floating-fill);
-  box-shadow: var(--dsw-shadow-lv2); font: var(--dsw-font-s-strong-14); cursor: pointer;
+  pointer-events: auto;
+  position: fixed;
+  right: 28px;
+  bottom: 28px;
+  z-index: 40;
+  border: 1px solid var(--border-primary, #e5e7eb);
+  border-radius: 999px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #111827);
+  padding: 12px 20px;
+  font: inherit;
+  font-weight: 600;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 10%);
+  cursor: pointer;
 }
-.dsh-chatroom-launcher:hover { background: var(--dsw-alias-button-floating-hover); }
-.dsh-chatroom-shell {
-  position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; min-width: 0;
-  color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); pointer-events: auto;
+
+.dsh-chatroom-dialog-layer {
+  pointer-events: auto;
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 28%);
+  backdrop-filter: blur(2px);
 }
-.dsh-chatroom-header {
-  flex: none; min-height: 58px; display: grid; grid-template-columns: 1fr auto 1fr;
-  align-items: center; gap: 12px; padding: 0 18px; border-bottom: 1px solid var(--dsw-alias-border-l2);
-  background: var(--dsw-alias-bg-layer-1);
-}
-.dsh-chatroom-heading { min-width: 0; text-align: center; }
-.dsh-chatroom-title { margin: 0; font: var(--dsw-font-m-strong-16); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dsh-chatroom-presence { margin-top: 2px; color: var(--dsw-alias-label-caption); font: var(--dsw-font-xs-13); }
-.dsh-chatroom-header-actions { justify-self: end; display: flex; align-items: center; gap: 8px; }
-.dsh-chatroom-button, .dsh-chatroom-icon-button {
-  border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-bg-layer-1); font: var(--dsw-font-s-strong-14); cursor: pointer;
-}
-.dsh-chatroom-button { min-height: 38px; padding: 0 16px; }
-.dsh-chatroom-button.primary { border-color: var(--dsw-static-deepseek-500); color: #fff; background: var(--dsw-static-deepseek-500); }
-.dsh-chatroom-button:disabled { opacity: .55; cursor: default; }
-.dsh-chatroom-icon-button { width: 36px; height: 36px; padding: 0; font-size: 18px; line-height: 1; }
-.dsh-chatroom-transcript { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 20px 24px 28px; }
-.dsh-chatroom-column { width: 100%; max-width: var(--dsh-chat-content-width, 760px); margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
-.dsh-chatroom-empty { margin: auto; padding: 64px 20px; color: var(--dsw-alias-label-tertiary); text-align: center; }
-.dsh-chatroom-row { display: flex; align-items: flex-start; gap: 10px; }
-.dsh-chatroom-row.own { justify-content: flex-end; }
-.dsh-chatroom-avatar {
-  flex: 0 0 32px; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%;
-  color: #fff; background: var(--dsw-static-deepseek-500); font: var(--dsw-font-s-strong-14);
-}
-.dsh-chatroom-avatar.human { color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-module-platform); }
-.dsh-chatroom-message { max-width: min(76%, 640px); min-width: 0; }
-.dsh-chatroom-meta { margin: 0 4px 5px; color: var(--dsw-alias-label-caption); font: var(--dsw-font-xs-13); }
-.dsh-chatroom-row.own .dsh-chatroom-meta { text-align: right; }
-.dsh-chatroom-bubble {
-  border-radius: 10px; padding: 10px 13px; color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-bg-module-platform); font: var(--dsw-font-s-14); line-height: 1.6;
-  white-space: pre-wrap; overflow-wrap: anywhere;
-}
-.dsh-chatroom-row.own .dsh-chatroom-bubble { color: #fff; background: var(--dsw-static-deepseek-500); }
-.dsh-chatroom-composer-wrap { flex: none; padding: 0 24px 22px; }
-.dsh-chatroom-composer {
-  width: 100%; max-width: calc(var(--dsh-chat-content-width, 760px) + 16px); margin: 0 auto;
-  display: flex; align-items: flex-end; gap: 10px; border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 14px; padding: 10px; background: var(--dsw-alias-bg-layer-1); box-shadow: var(--dsw-shadow-lv2);
-}
-.dsh-chatroom-textarea {
-  flex: 1 1 auto; min-width: 0; min-height: 24px; max-height: 150px; resize: none; border: 0; outline: 0;
-  padding: 6px 8px; color: var(--dsw-alias-label-primary); background: transparent; font: var(--dsw-font-s-14); line-height: 1.5;
-}
-.dsh-chatroom-send { flex: none; width: 38px; height: 38px; border: 0; border-radius: 10px; color: #fff; background: var(--dsw-static-deepseek-500); font-size: 18px; cursor: pointer; }
-.dsh-chatroom-send:disabled { opacity: .45; cursor: default; }
-.dsh-chatroom-error { max-width: var(--dsh-chat-content-width, 760px); margin: 8px auto 0; color: var(--dsw-alias-state-error-primary); font: var(--dsw-font-xs-13); }
-.dsh-chatroom-center { flex: 1 1 auto; min-height: 0; display: grid; place-items: center; padding: 24px; }
+
 .dsh-chatroom-card {
-  width: min(100%, 420px); border: 1px solid var(--dsw-alias-border-l2); border-radius: 16px; padding: 28px;
-  background: var(--dsw-alias-bg-layer-1); box-shadow: var(--dsw-shadow-lv2); text-align: center;
+  position: relative;
+  width: min(420px, calc(100vw - 48px));
+  border: 1px solid var(--border-primary, #e5e7eb);
+  border-radius: 18px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #111827);
+  padding: 28px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 18%);
 }
-.dsh-chatroom-card h2 { margin: 0 0 8px; font: var(--dsw-font-l-strong-18); }
-.dsh-chatroom-card p { margin: 0 0 22px; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-s-14); line-height: 1.6; }
-.dsh-chatroom-name { box-sizing: border-box; width: 100%; height: 42px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 9px; padding: 0 12px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font: var(--dsw-font-s-14); outline: none; }
-.dsh-chatroom-name:focus { border-color: var(--dsw-static-deepseek-500); }
-.dsh-chatroom-card .dsh-chatroom-button { width: 100%; margin-top: 12px; }
-.dsh-chatroom-card .dsh-chatroom-error { margin-top: 12px; }
-@media (max-width: 640px) {
-  .dsh-chatroom-header { grid-template-columns: auto 1fr auto; padding: 0 10px; }
-  .dsh-chatroom-transcript { padding: 16px 12px 24px; }
-  .dsh-chatroom-composer-wrap { padding: 0 10px 10px; }
-  .dsh-chatroom-message { max-width: 84%; }
-  .dsh-chatroom-identity-label { display: none; }
+
+.dsh-chatroom-card h2 { margin: 0 0 10px; font-size: 22px; }
+.dsh-chatroom-card p { margin: 0 0 20px; color: var(--text-secondary, #6b7280); line-height: 1.6; }
+
+.dsh-chatroom-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  font: inherit;
+  font-size: 24px;
+  cursor: pointer;
 }
+
+.dsh-chatroom-name {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--border-primary, #d1d5db);
+  border-radius: 10px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #111827);
+  padding: 11px 13px;
+  font: inherit;
+  outline: none;
+}
+
+.dsh-chatroom-name:focus { border-color: var(--brand-primary, #4f7cff); }
+
+.dsh-chatroom-button {
+  width: 100%;
+  margin-top: 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--brand-primary, #4f7cff);
+  color: #fff;
+  padding: 11px 16px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dsh-chatroom-button:disabled { cursor: not-allowed; opacity: .45; }
+.dsh-chatroom-error { margin-top: 12px; color: #d14343; font-size: 13px; }
+
+.dsh-chatroom-identity-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.dsh-chatroom-presence-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #a0a7b2;
+}
+
+.dsh-chatroom-presence-dot[data-online="true"] { background: #20b26b; }
 `;
 		//#endregion
 		//#region src/client/index.tsx
-		const inject = ["slots"];
-		/** Register one additive frame overlay and start its React-free room client. */
+		const inject = [
+			"connection",
+			"sessions",
+			"slots"
+		];
+		/** Add room identity and navigation around the existing Harness conversation UI. */
 		function apply(ctx) {
-			const store = new ChatroomClientStore();
+			const connection = ctx.get("connection");
+			if (connection === void 0) throw new Error("chatroom: client connection service unavailable");
+			const sessions = ctx.get("sessions");
+			if (sessions === void 0) throw new Error("chatroom: client sessions service unavailable");
+			const store = new ChatroomClientStore((rawSessionId) => {
+				const sessionId = rawSessionId;
+				if (sessions.list.getSnapshot().byId[sessionId] === void 0) return false;
+				sessions.open(sessionId);
+				return true;
+			});
 			ctx.effect(() => {
 				const style = document.createElement("style");
 				style.dataset.dshChatroomStyles = "";
 				style.textContent = CHATROOM_STYLES;
 				document.head.append(style);
+				const restorePrompt = installNativePromptIdentity(connection.api, store);
+				const unsubscribeSessions = sessions.list.subscribe(store.resumeOpen);
 				store.start();
 				return () => {
+					unsubscribeSessions();
+					restorePrompt();
 					store.stop();
 					style.remove();
 				};
@@ -631,11 +582,19 @@ window.__ModuleLoader__.load({
 					openRoom: store.openRoom,
 					closeRoom: store.closeRoom,
 					join: store.join,
-					resetIdentity: store.resetIdentity,
-					send: store.send,
 					retry: store.retry
 				})
-			}, ChatroomShell));
+			}, ChatroomEntry));
+			ctx.slots.inject("conversation.session.header.actions", () => ctx.slots.register({
+				name: "conversation.session.header.actions",
+				id: "chatroom-identity",
+				order: -5,
+				inject: () => ({
+					hooks: { chatroom: store },
+					openRoom: store.openRoom,
+					resetIdentity: store.resetIdentity
+				})
+			}, RoomIdentityAction));
 		}
 		var client_default = {
 			inject,

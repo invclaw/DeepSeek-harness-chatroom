@@ -12,7 +12,6 @@ export declare class ChatroomHttpController {
     handle(request: IncomingMessage, response: ServerResponse): Promise<void>;
     private handleSession;
     private handleEvents;
-    private handleMessages;
     private requireIdentity;
     private token;
 }

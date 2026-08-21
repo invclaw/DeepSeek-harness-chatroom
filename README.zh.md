@@ -2,20 +2,20 @@
 
 简体中文 | [English](README.md)
 
-这是一个独立于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 主仓库的 Web 插件，把原本的一对一 Agent 对话扩展为实时同步的多人 AI 聊天室。
+这是一个独立于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 主仓库的 Web 插件。多人浏览器共享一个持久 Harness Session，同时完整复用 Harness 原生会话界面。
 
 ## 功能
 
 - 首次访问选择显示身份；后续通过不透明浏览器会话 Cookie 自动恢复
-- 所有人共享一份房间消息流，通过 Server-Sent Events 实时同步
-- 房间使用一个持久 Harness Agent，会按顺序获取每个人的所有消息
-- AI 对每条真人消息自主决定回复或保持沉默
-- 自己的消息在右侧；AI 与其他人的消息在左侧
-- 复用 Harness 主题、间距、正文宽度、输入框和气泡视觉语言的全屏聊天室
-- 身份与消息在 Harness 重启后继续保留
-- 进程中断前已经完成的 AI 回合可在启动时自动对账
-- 房间异步初始化：模型未配置或房间存储失败只会让聊天室离线，不会阻碍 Harness Web 启动
+- 所有人打开同一个持久 Session，消息、AI 回复和运行状态由 Harness 原生实时通道同步
+- 保留原生侧栏、对话/轨迹页签、思考与工具过程、Session log、模型选择和输入框
+- 原生图片发送、停止/排队/转向、斜杠命令、批准授权和问答交互不经过插件重写
+- 真人消息在进入原生 prompt 前附加显示名称，其他房间成员和模型看到同一身份
+- 会话头显示当前身份与在线人数，可随时切换身份
+- 房间异步初始化：模型、存储或 Session 初始化失败只会让聊天室离线，不会阻碍 Harness Web 启动
 - 不修改 DeepSeek Harness 主仓库
+
+0.2.0 移除了旧版自绘全屏聊天页和“AI 可静默”提示。聊天室现在只是原生共享 Session 的身份与导航层；AI 回复行为与普通 Harness 会话一致。
 
 ## 环境要求
 
@@ -26,7 +26,10 @@
 
 ## 从 GitHub 安装
 
+升级旧版本时先移除原插件记录，再安装当前仓库：
+
 ```sh
+pnpm dsh plugin --profile web remove deepseek-harness-chatroom
 pnpm dsh plugin --profile web add github:sliverp/DeepSeek-harness-chatroom
 pnpm dsh --profile web
 ```
@@ -38,7 +41,7 @@ pnpm dsh plugin --profile web add /absolute/path/to/DeepSeek-harness-chatroom
 pnpm dsh --profile web
 ```
 
-浏览器包通过插件的 `dsh.client` manifest 自动发现。插件只向 `shell.overlay` 添加一个独立入口，不会替换 Harness 的主对话、侧栏或详情组件。
+浏览器包通过插件的 `dsh.client` manifest 自动发现。插件只向 `shell.overlay` 添加入口，并向原生会话头添加身份状态；不会替换 Harness 的主对话、侧栏、详情或输入组件。
 
 ## 配置
 
@@ -56,7 +59,7 @@ pnpm dsh --profile web
     agentPreset: standard
 ```
 
-需要调整时，在 `~/.dsh/profiles/web/cordis.patch.yml` 覆盖该行：
+需要调整时，在 Web profile 的 `cordis.patch.yml` 覆盖配置：
 
 ```yaml
 - id: chatroom
@@ -71,42 +74,31 @@ pnpm dsh --profile web
     cookieName: dsh_chatroom_session
     cookieMaxAgeSeconds: 31536000
     maxDisplayNameChars: 24
-    maxMessageChars: 4000
-    responseTimeoutMs: 180000
-    aiRetryDelayMs: 5000
     sseHeartbeatMs: 15000
-    noReplyToken: <CHATROOM_NO_REPLY>
-    systemPrompt: |-
-      你正在一个多人 AI 聊天室中参与讨论，每条输入都会标出发言者。
-      阅读完整房间记录，自主判断当前是否值得回复。
-      不需要回复时，只输出 <CHATROOM_NO_REPLY>，不得添加其他字符。
-      决定回复时，只输出要发到房间的自然语言正文。
 ```
 
-`systemPrompt` 必须包含 `noReplyToken`。这样每条排队处理的真人消息都有明确且可持久化的 AI 决策，但保持沉默时不会在房间里生成伪消息。
+`sessionId` 是所有成员共同打开的唯一持久 Session。只有在确实需要全新 AI 上下文时才修改它。插件升级不会新建每位成员各自的会话。
 
-`sessionId` 对应房间唯一的持久 Harness Agent。需要主动开始全新 AI 上下文时再修改它。浏览器身份和房间展示记录位于插件自己的存储域；只改 `sessionId` 不会删除这些数据。
-
-API 路由会立即注册，在存储和 Agent 就绪前返回 `503`。初始化始终在后台运行，失败被限制在插件内部，Harness Web 仍可正常运行。
+API 路由会立即注册，在存储和 Session 就绪前返回 `503`。初始化始终在后台运行，失败被限制在插件内部，Harness Web 仍可正常运行。
 
 ## 浏览器身份与安全
 
-浏览器收到一个随机 256 位令牌，Cookie 使用 `HttpOnly`、`SameSite=Strict`，且仅作用于聊天室 API。服务端只保存令牌的 SHA-256 摘要。刷新页面或重启 Harness 会恢复同一身份，直到 Cookie 过期或用户点击“切换身份”。
+浏览器收到随机 256 位令牌，Cookie 使用 `HttpOnly`、`SameSite=Strict`，且仅作用于聊天室 API。服务端只保存令牌的 SHA-256 摘要。刷新页面或重启 Harness 会恢复同一身份，直到 Cookie 过期或用户点击会话头的身份按钮。
 
-显示名称只是房间展示身份，不是账号认证。请根据工作区敏感程度为 Harness Web 配置访问控制。所有能进入房间的人都能向所选 Agent preset 提交输入，也可能使用该 preset 提供的工具。面向非完全可信成员时，应使用受限 preset 和范围尽可能小的 `cwd`。
+显示名称只是房间展示身份，不是账号认证。所有能进入房间的人都能向所选 Agent preset 提交输入，并可能使用该 preset 提供的工具。面向非完全可信成员时，应使用受限 preset 和范围尽可能小的 `cwd`。
 
 ## 验收
 
-1. 用一个浏览器 profile 打开 Harness Web，身份填写 `Alice`。
-2. 用无痕窗口或另一个浏览器打开同一地址，身份填写 `Bob`。
-3. Alice 发送消息；Alice 侧应显示在右边，Bob 侧应显示在左边。
-4. Bob 发送消息；两个页面的消息顺序必须完全一致。
-5. 发送 `DeepSeek，请回复“多人链路正常”`；AI 回复应同时出现在两个页面左侧。
-6. 发送一条不需要回答的普通旁白；AI 可以保持沉默，但真人消息必须进入持久房间 Agent 会话。
-7. 刷新两个页面；各自身份和完整共享记录必须恢复。
-8. 停止并重启 Harness Web；身份、记录和 AI 上下文必须继续恢复。
+1. 打开 Harness Web，点击“进入 AI 聊天室”并填写 `Alice`。
+2. 页面应切换到现有原生 Session，保留侧栏、对话/轨迹、原生输入框和 Session log；不应出现旧版全屏聊天页。
+3. 用无痕窗口或另一个浏览器填写 `Bob`，两个页面应打开相同 `sessionId`。
+4. Alice 和 Bob 分别发送文字；消息应显示为 `Alice：…`、`Bob：…`，两个页面顺序一致且 AI 正常回复。
+5. 发送图片并要求 AI 描述；图片与回复应使用原生消息节点显示。
+6. 执行 `/new` 等内置斜杠命令；命令应由 Harness 原生命令链处理。
+7. 触发需要批准的工具；原生批准面板应出现在输入区并可完成授权。
+8. 刷新和重启 Harness；身份与共享 Session 上下文应继续恢复。
 
-健康检查位于 `/plugins/deepseek-harness-chatroom/api/health`，即使部署只代理 Harness 插件路径也能访问。直接部署 Harness Web 时仍可使用 `/chatroom/api/health`。房间就绪时返回：
+健康检查位于 `/plugins/deepseek-harness-chatroom/api/health`。直接部署 Harness Web 时也可使用 `/chatroom/api/health`。房间就绪时返回：
 
 ```json
 {"ready":true}

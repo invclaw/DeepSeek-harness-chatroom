@@ -43,10 +43,6 @@ export class ChatroomHttpController {
         this.handleEvents(request, response)
         return
       }
-      if (route.endpoint === '/messages') {
-        await this.handleMessages(request, response)
-        return
-      }
       json(response, 404, { error: '接口不存在。' } satisfies ChatroomErrorResponse)
     } catch (error) {
       if (error instanceof ChatroomInputError) {
@@ -121,23 +117,6 @@ export class ChatroomHttpController {
     })
   }
 
-  private async handleMessages(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const identity = this.requireIdentity(request, response)
-    if (identity === undefined) return
-    if (request.method === 'GET') {
-      json(response, 200, { messages: this.runtime.history() })
-      return
-    }
-    if (request.method === 'POST') {
-      assertSameOrigin(request)
-      const body = await readJson(request, requestLimit(this.config))
-      const message = await this.runtime.send(identity, fieldString(body, 'text'))
-      json(response, 202, { message })
-      return
-    }
-    methodNotAllowed(response, 'GET, POST')
-  }
-
   private requireIdentity(request: IncomingMessage, response: ServerResponse) {
     const identity = this.runtime.identity(this.token(request))
     if (identity === undefined) {
@@ -209,5 +188,5 @@ function fieldString(body: Record<string, unknown>, field: string): string {
 }
 
 function requestLimit(config: Config): number {
-  return Math.max(config.maxDisplayNameChars, config.maxMessageChars) * 4 + 1_024
+  return config.maxDisplayNameChars * 4 + 1_024
 }

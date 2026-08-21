@@ -28,67 +28,58 @@ afterEach(() => {
 })
 
 describe('ChatroomClientStore', () => {
-  it('selects a first identity and synchronizes the shared transcript over SSE', async () => {
+  it('selects an identity and opens the existing native Session', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice' }
-    const room = { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek' }
+    const room = roomInfo()
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({ identity: null, room }))
       .mockResolvedValueOnce(jsonResponse({ identity, room }, 201))
-      .mockResolvedValueOnce(jsonResponse({ message: { id: 'm2' } }, 202))
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('EventSource', FakeEventSource)
-    const store = new ChatroomClientStore()
+    const openSession = vi.fn(() => true)
+    const store = new ChatroomClientStore(openSession)
 
     await store.start()
-    expect(store.getSnapshot().phase).toBe('identity-required')
-
+    store.openRoom()
     await store.join('Alice')
-    expect(store.getSnapshot().identity).toEqual(identity)
-    const source = FakeEventSource.instances[0]
-    expect(source?.url).toBe('/plugins/deepseek-harness-chatroom/api/events')
-    source?.emit({
-      type: 'snapshot',
-      room,
-      identity,
-      online: 2,
-      messages: [{
-        id: 'm1', sequence: 1, role: 'human', participantId: 'bob-id', displayName: 'Bob',
-        text: '你好', createdAt: 1,
-      }],
-    })
-    expect(store.getSnapshot()).toMatchObject({ phase: 'ready', connection: 'online', online: 2 })
-    expect(store.getSnapshot().messages.map(message => message.text)).toEqual(['你好'])
 
-    source?.emit({
-      type: 'message',
-      message: {
-        id: 'm2', sequence: 2, role: 'ai', participantId: 'ai', displayName: 'DeepSeek',
-        text: '大家好', createdAt: 2,
-      },
-    })
-    expect(store.getSnapshot().messages.map(message => message.text)).toEqual(['你好', '大家好'])
-    expect(await store.send('欢迎')).toBe(true)
-    expect(fetchMock).toHaveBeenLastCalledWith(
-      '/plugins/deepseek-harness-chatroom/api/messages',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    store.stop()
-    expect(source?.closed).toBe(true)
+    expect(openSession).toHaveBeenCalledWith('chatroom-v1-lobby')
+    expect(store.getSnapshot()).toMatchObject({ open: false, phase: 'ready', identity })
+    expect(FakeEventSource.instances[0]?.url).toBe('/plugins/deepseek-harness-chatroom/api/events')
   })
 
-  it('restores a persisted identity without showing the identity step', async () => {
+  it('waits for the Host list when the room Session is still initializing', async () => {
     const identity = { participantId: 'returning-id', displayName: '回访者' }
-    const room = { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek' }
+    const openSession = vi.fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true)
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ identity, room: roomInfo() })))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore(openSession)
+
+    await store.start()
+    store.openRoom()
+    expect(store.getSnapshot().open).toBe(true)
+    store.resumeOpen()
+    expect(store.getSnapshot().open).toBe(false)
+  })
+
+  it('synchronizes room presence without owning the transcript', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice' }
+    const room = roomInfo()
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ identity, room })))
     vi.stubGlobal('EventSource', FakeEventSource)
     const store = new ChatroomClientStore()
-
     await store.start()
 
-    expect(store.getSnapshot()).toMatchObject({ phase: 'ready', identity, connection: 'connecting' })
-    expect(FakeEventSource.instances).toHaveLength(1)
+    FakeEventSource.instances[0]?.emit({ type: 'snapshot', room, identity, online: 2 })
+    expect(store.getSnapshot()).toMatchObject({ connection: 'online', online: 2 })
   })
 })
+
+function roomInfo() {
+  return { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' }
+}
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {

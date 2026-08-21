@@ -45,7 +45,7 @@ const messageSchema = z.object({
   aiProcessed: z.boolean().optional(),
 }) as z.ZodType<MessageRecord>
 
-/** Durable browser identities and room messages. */
+/** Durable identities plus the version-zero message table retained for on-disk compatibility. */
 export const chatroomDomainSpec = defineDomain({
   name: 'chatroom',
   version: 0,

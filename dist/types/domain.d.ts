@@ -16,7 +16,7 @@ export interface MessageRecord {
     readonly inReplyTo?: string;
     readonly aiProcessed?: boolean;
 }
-/** Durable browser identities and room messages. */
+/** Durable identities plus the version-zero message table retained for on-disk compatibility. */
 export declare const chatroomDomainSpec: {
     name: string;
     version: number;

@@ -22,6 +22,7 @@ export const inject = [
   'sessions',
   'storageDomain',
   'webServer',
+  'workspaceRegistry',
 ]
 
 export { Config, ChatroomHttpController, ChatroomRuntime }

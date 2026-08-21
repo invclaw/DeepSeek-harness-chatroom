@@ -17,10 +17,9 @@ describe('chatroom configuration and identity cookie', () => {
     expect(cookieValue('room_session=%0Aunsafe', 'room_session')).toBeUndefined()
   })
 
-  it('rejects a relative working directory and an implicit silence decision', () => {
+  it('rejects a relative working directory', () => {
     const config = validConfig()
     expect(() => validateConfig({ ...config, cwd: 'relative' })).toThrow('cwd must be absolute')
-    expect(() => validateConfig({ ...config, systemPrompt: '普通提示' })).toThrow('must contain noReplyToken')
     expect(() => validateConfig(config)).not.toThrow()
   })
 
@@ -41,8 +40,6 @@ function validConfig(): Config {
   return {
     roomId: 'lobby', roomTitle: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-lobby',
     cwd: '/tmp', agentPreset: 'standard', cookieName: 'room_session', cookieMaxAgeSeconds: 600,
-    maxDisplayNameChars: 24, maxMessageChars: 4_000, responseTimeoutMs: 180_000,
-    aiRetryDelayMs: 5_000, sseHeartbeatMs: 15_000, noReplyToken: '<CHATROOM_NO_REPLY>',
-    systemPrompt: '保持自然；无需回复时输出 <CHATROOM_NO_REPLY>',
+    maxDisplayNameChars: 24, sseHeartbeatMs: 15_000,
   }
 }
