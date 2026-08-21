@@ -136,21 +136,99 @@ window.__ModuleLoader__.load({
 			});
 		}
 		//#endregion
+		//#region src/client/ChatroomMessageNodeView.tsx
+		const PARTICIPANT_MARKER_START = "⁣dsh-chatroom:";
+		const PARTICIPANT_MARKER_END = "⁣";
+		/** Add a durable, visually invisible participant id before the display name. */
+		function identifyChatroomText(text, identity) {
+			return `${PARTICIPANT_MARKER_START}${identity.participantId}${PARTICIPANT_MARKER_END}${identity.displayName}：${text}`;
+		}
+		/** Participant-specific display projection of one durable native user node. */
+		function projectChatroomMessage(node, identity) {
+			let own = false;
+			let projected = false;
+			const content = node.data.content.map((block) => {
+				if (projected || block.type !== "text") return block;
+				projected = true;
+				const marker = participantMarker(block.text);
+				const visibleText = marker === void 0 ? block.text : block.text.slice(marker.length);
+				const legacyName = /^([^：]{1,80})：/.exec(visibleText)?.[1];
+				own = marker === void 0 ? legacyName === identity.displayName : marker.participantId === identity.participantId;
+				return marker === void 0 ? block : {
+					...block,
+					text: visibleText
+				};
+			});
+			return {
+				node: projected ? {
+					...node,
+					data: {
+						...node.data,
+						content
+					}
+				} : node,
+				own
+			};
+		}
+		/** Reuse Harness' native user renderer and move only peer user messages to the left. */
+		const ChatroomUserMessageNodeView = (0, react.memo)(function ChatroomUserMessageNodeView(props) {
+			const room = props.useChatroom((snapshot) => snapshot);
+			const NativeView = props.nativeMessageView;
+			if (room.room === void 0 || String(props.sessionId) !== room.room.sessionId || room.identity === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, { ...props });
+			const projection = projectChatroomMessage(props.node, room.identity);
+			const native = /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, {
+				...props,
+				node: projection.node
+			});
+			return projection.own ? native : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: "dsh-chatroom-peer-message",
+				"data-dsh-chatroom-peer-message": true,
+				children: native
+			});
+		});
+		/** Reuse Harness' native steering renderer and move only peer steering messages to the left. */
+		const ChatroomSteeringMessageNodeView = (0, react.memo)(function ChatroomSteeringMessageNodeView(props) {
+			const room = props.useChatroom((snapshot) => snapshot);
+			const NativeView = props.nativeMessageView;
+			if (room.room === void 0 || String(props.sessionId) !== room.room.sessionId || room.identity === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, { ...props });
+			const projection = projectChatroomMessage(props.node, room.identity);
+			const native = /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, {
+				...props,
+				node: projection.node
+			});
+			return projection.own ? native : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: "dsh-chatroom-peer-message",
+				"data-dsh-chatroom-peer-message": true,
+				children: native
+			});
+		});
+		function participantMarker(text) {
+			if (!text.startsWith(PARTICIPANT_MARKER_START)) return void 0;
+			const end = text.indexOf(PARTICIPANT_MARKER_END, 14);
+			if (end < 0) return void 0;
+			const participantId = text.slice(14, end);
+			if (participantId === "") return void 0;
+			return {
+				participantId,
+				length: end + 1
+			};
+		}
+		//#endregion
 		//#region src/client/native-prompt.ts
 		/** Prefix one native prompt with the browser participant visible to every room member. */
-		function identifyPrompt(content, displayName) {
+		function identifyPrompt(content, identity) {
 			let identified = false;
 			const output = content.map((part) => {
 				if (identified || part.type !== "text") return part;
 				identified = true;
 				return {
 					...part,
-					text: `${displayName}：${part.text}`
+					text: identifyChatroomText(part.text, identity)
 				};
 			});
 			return identified ? output : [{
 				type: "text",
-				text: `${displayName} 发送了一张图片。`
+				text: identifyChatroomText("发送了一张图片。", identity)
 			}, ...output];
 		}
 		/** Route only the configured shared Session through the identity decorator. */
@@ -162,7 +240,7 @@ window.__ModuleLoader__.load({
 				if (room.identity === void 0) return Promise.reject(/* @__PURE__ */ new Error("请先选择聊天室身份。"));
 				return original({
 					...payload,
-					content: identifyPrompt(payload.content, room.identity.displayName)
+					content: identifyPrompt(payload.content, room.identity)
 				}, signal);
 			};
 			api.sessions.prompt = wrapped;
@@ -546,6 +624,21 @@ window.__ModuleLoader__.load({
 }
 
 .dsh-chatroom-presence-dot[data-online="true"] { background: #20b26b; }
+
+.dsh-chatroom-peer-message {
+  width: 100%;
+}
+
+.dsh-chatroom-peer-message > * {
+  align-items: flex-start !important;
+  text-align: left;
+}
+
+.dsh-chatroom-peer-message > * > *:first-child,
+.dsh-chatroom-peer-message > * > *:first-child > * {
+  align-items: flex-start !important;
+  align-self: flex-start !important;
+}
 `;
 		//#endregion
 		//#region src/client/index.tsx
@@ -605,6 +698,36 @@ window.__ModuleLoader__.load({
 					resetIdentity: store.resetIdentity
 				})
 			}, RoomIdentityAction));
+			ctx.slots.inject("conversation.chat.node", () => {
+				const nativeEntry = ctx.slots.entries("conversation.chat.node").find((entry) => entry.options.key === "user" && (entry.options.priority ?? 0) === 0);
+				if (nativeEntry === void 0) throw new Error("chatroom: native user message renderer unavailable");
+				const nativeMessageView = nativeEntry.component;
+				return ctx.slots.register({
+					name: "conversation.chat.node",
+					key: "user",
+					priority: -10,
+					locale: "conversation",
+					inject: () => ({
+						hooks: { chatroom: store },
+						nativeMessageView
+					})
+				}, ChatroomUserMessageNodeView);
+			});
+			ctx.slots.inject("conversation.chat.node", () => {
+				const nativeEntry = ctx.slots.entries("conversation.chat.node").find((entry) => entry.options.key === "steering" && (entry.options.priority ?? 0) === 0);
+				if (nativeEntry === void 0) throw new Error("chatroom: native steering message renderer unavailable");
+				const nativeMessageView = nativeEntry.component;
+				return ctx.slots.register({
+					name: "conversation.chat.node",
+					key: "steering",
+					priority: -10,
+					locale: "conversation",
+					inject: () => ({
+						hooks: { chatroom: store },
+						nativeMessageView
+					})
+				}, ChatroomSteeringMessageNodeView);
+			});
 		}
 		var client_default = {
 			inject,

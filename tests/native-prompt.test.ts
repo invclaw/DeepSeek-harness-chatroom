@@ -5,13 +5,14 @@ import type { ChatroomClientStore } from '../src/client/store.js'
 
 describe('native prompt identity', () => {
   it('prefixes text while preserving native image blocks', () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice' }
     const image = { type: 'image' as const, mediaType: 'image/png' as const, data: 'AA==', name: 'test.png' }
-    expect(identifyPrompt([{ type: 'text', text: '你好' }, image], 'Alice')).toEqual([
-      { type: 'text', text: 'Alice：你好' },
+    expect(identifyPrompt([{ type: 'text', text: '你好' }, image], identity)).toEqual([
+      { type: 'text', text: '\u2063dsh-chatroom:alice-id\u2063Alice：你好' },
       image,
     ])
-    expect(identifyPrompt([image], 'Alice')).toEqual([
-      { type: 'text', text: 'Alice 发送了一张图片。' },
+    expect(identifyPrompt([image], identity)).toEqual([
+      { type: 'text', text: '\u2063dsh-chatroom:alice-id\u2063Alice：发送了一张图片。' },
       image,
     ])
   })
@@ -25,7 +26,7 @@ describe('native prompt identity', () => {
     const store = {
       getSnapshot: () => ({
         room: { sessionId: 'room-session' },
-        identity: { displayName: 'Alice' },
+        identity: { participantId: 'alice-id', displayName: 'Alice' },
       }),
     } as ChatroomClientStore
     const restore = installNativePromptIdentity(api, store)
@@ -36,7 +37,7 @@ describe('native prompt identity', () => {
       content: [{ type: 'text', text: '消息' }],
     })
     expect(original).toHaveBeenLastCalledWith(expect.objectContaining({
-      content: [{ type: 'text', text: 'Alice：消息' }],
+      content: [{ type: 'text', text: '\u2063dsh-chatroom:alice-id\u2063Alice：消息' }],
     }), undefined)
 
     await api.sessions.prompt({

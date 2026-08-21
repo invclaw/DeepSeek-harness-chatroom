@@ -1,10 +1,15 @@
 /** Browser half of the AI chatroom plugin. */
 
+import type { ComponentType } from 'react'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { ClientContext, ISessions, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
-import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { ChatroomEntry } from './ChatroomEntry.js'
+import {
+  ChatroomSteeringMessageNodeView,
+  ChatroomUserMessageNodeView,
+} from './ChatroomMessageNodeView.js'
 import { installNativePromptIdentity } from './native-prompt.js'
 import { RoomIdentityAction } from './RoomIdentityAction.js'
 import { ChatroomClientStore } from './store.js'
@@ -65,6 +70,34 @@ export function apply(ctx: ClientContext): void {
       resetIdentity: store.resetIdentity,
     }),
   }, RoomIdentityAction))
+
+  ctx.slots.inject('conversation.chat.node', () => {
+    const nativeEntry = ctx.slots.entries('conversation.chat.node').find(entry =>
+      entry.options.key === 'user' && (entry.options.priority ?? 0) === 0)
+    if (nativeEntry === undefined) throw new Error('chatroom: native user message renderer unavailable')
+    const nativeMessageView = nativeEntry.component as ComponentType<ChatNodeViewProps<'user'>>
+    return ctx.slots.register({
+      name: 'conversation.chat.node',
+      key: 'user',
+      priority: -10,
+      locale: 'conversation',
+      inject: () => ({ hooks: { chatroom: store }, nativeMessageView }),
+    }, ChatroomUserMessageNodeView)
+  })
+
+  ctx.slots.inject('conversation.chat.node', () => {
+    const nativeEntry = ctx.slots.entries('conversation.chat.node').find(entry =>
+      entry.options.key === 'steering' && (entry.options.priority ?? 0) === 0)
+    if (nativeEntry === undefined) throw new Error('chatroom: native steering message renderer unavailable')
+    const nativeMessageView = nativeEntry.component as ComponentType<ChatNodeViewProps<'steering'>>
+    return ctx.slots.register({
+      name: 'conversation.chat.node',
+      key: 'steering',
+      priority: -10,
+      locale: 'conversation',
+      inject: () => ({ hooks: { chatroom: store }, nativeMessageView }),
+    }, ChatroomSteeringMessageNodeView)
+  })
 }
 
 export default { inject, apply }

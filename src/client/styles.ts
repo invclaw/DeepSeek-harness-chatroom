@@ -106,4 +106,19 @@ export const CHATROOM_STYLES = `
 }
 
 .dsh-chatroom-presence-dot[data-online="true"] { background: #20b26b; }
+
+.dsh-chatroom-peer-message {
+  width: 100%;
+}
+
+.dsh-chatroom-peer-message > * {
+  align-items: flex-start !important;
+  text-align: left;
+}
+
+.dsh-chatroom-peer-message > * > *:first-child,
+.dsh-chatroom-peer-message > * > *:first-child > * {
+  align-items: flex-start !important;
+  align-self: flex-start !important;
+}
 `
