@@ -147,16 +147,19 @@ window.__ModuleLoader__.load({
 		function projectChatroomMessage(node, identity) {
 			let own = false;
 			let projected = false;
+			let displayName;
 			const content = node.data.content.map((block) => {
 				if (projected || block.type !== "text") return block;
 				projected = true;
 				const marker = participantMarker(block.text);
 				const visibleText = marker === void 0 ? block.text : block.text.slice(marker.length);
-				const legacyName = /^([^：]{1,80})：/.exec(visibleText)?.[1];
-				own = marker === void 0 ? legacyName === identity.displayName : marker.participantId === identity.participantId;
-				return marker === void 0 ? block : {
+				const namePrefix = /^([^：]{1,80})：/.exec(visibleText);
+				displayName = namePrefix?.[1];
+				own = marker === void 0 ? displayName === identity.displayName : marker.participantId === identity.participantId;
+				const messageText = namePrefix === null ? visibleText : visibleText.slice(namePrefix[0].length);
+				return messageText === block.text ? block : {
 					...block,
-					text: visibleText
+					text: messageText
 				};
 			});
 			return {
@@ -167,7 +170,8 @@ window.__ModuleLoader__.load({
 						content
 					}
 				} : node,
-				own
+				own,
+				...displayName === void 0 ? {} : { displayName }
 			};
 		}
 		/** Reuse Harness' native user renderer and move only peer user messages to the left. */
@@ -176,15 +180,10 @@ window.__ModuleLoader__.load({
 			const NativeView = props.nativeMessageView;
 			if (room.room === void 0 || String(props.sessionId) !== room.room.sessionId || room.identity === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, { ...props });
 			const projection = projectChatroomMessage(props.node, room.identity);
-			const native = /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, {
+			return participantMessage(/* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, {
 				...props,
 				node: projection.node
-			});
-			return projection.own ? native : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				className: "dsh-chatroom-peer-message",
-				"data-dsh-chatroom-peer-message": true,
-				children: native
-			});
+			}), projection);
 		});
 		/** Reuse Harness' native steering renderer and move only peer steering messages to the left. */
 		const ChatroomSteeringMessageNodeView = (0, react.memo)(function ChatroomSteeringMessageNodeView(props) {
@@ -192,16 +191,21 @@ window.__ModuleLoader__.load({
 			const NativeView = props.nativeMessageView;
 			if (room.room === void 0 || String(props.sessionId) !== room.room.sessionId || room.identity === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, { ...props });
 			const projection = projectChatroomMessage(props.node, room.identity);
-			const native = /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, {
+			return participantMessage(/* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, {
 				...props,
 				node: projection.node
-			});
-			return projection.own ? native : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				className: "dsh-chatroom-peer-message",
-				"data-dsh-chatroom-peer-message": true,
-				children: native
-			});
+			}), projection);
 		});
+		function participantMessage(native, projection) {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "dsh-chatroom-participant-message",
+				"data-dsh-chatroom-own": projection.own,
+				children: [projection.displayName !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					className: "dsh-chatroom-display-name",
+					children: projection.displayName
+				}), native]
+			});
+		}
 		function participantMarker(text) {
 			if (!text.startsWith(PARTICIPANT_MARKER_START)) return void 0;
 			const end = text.indexOf(PARTICIPANT_MARKER_END, 14);
@@ -625,17 +629,42 @@ window.__ModuleLoader__.load({
 
 .dsh-chatroom-presence-dot[data-online="true"] { background: #20b26b; }
 
-.dsh-chatroom-peer-message {
+.dsh-chatroom-participant-message {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.dsh-chatroom-peer-message > * {
+.dsh-chatroom-display-name {
+  max-width: min(525px, 82%);
+  padding: 0 4px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary, var(--text-secondary, #6b7280));
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-chatroom-participant-message[data-dsh-chatroom-own="true"] > .dsh-chatroom-display-name {
+  align-self: flex-end;
+  text-align: right;
+}
+
+.dsh-chatroom-participant-message[data-dsh-chatroom-own="false"] > .dsh-chatroom-display-name {
+  align-self: flex-start;
+  text-align: left;
+}
+
+.dsh-chatroom-participant-message[data-dsh-chatroom-own="false"] > :last-child {
   align-items: flex-start !important;
   text-align: left;
 }
 
-.dsh-chatroom-peer-message > * > *:first-child,
-.dsh-chatroom-peer-message > * > *:first-child > * {
+.dsh-chatroom-participant-message[data-dsh-chatroom-own="false"] > :last-child > *:first-child,
+.dsh-chatroom-participant-message[data-dsh-chatroom-own="false"] > :last-child > *:first-child > * {
   align-items: flex-start !important;
   align-self: flex-start !important;
 }

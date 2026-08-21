@@ -1,4 +1,4 @@
-import { type ComponentType } from 'react';
+import { type ComponentType, type ReactNode } from 'react';
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import type { ChatroomIdentity } from '../types.js';
 import type { ChatroomView } from './store.js';
@@ -17,10 +17,11 @@ export declare function identifyChatroomText(text: string, identity: ChatroomIde
 export declare function projectChatroomMessage(node: ParticipantNode, identity: ChatroomIdentity): {
     readonly node: ParticipantNode;
     readonly own: boolean;
+    readonly displayName?: string;
 };
 /** Reuse Harness' native user renderer and move only peer user messages to the left. */
-export declare const ChatroomUserMessageNodeView: import("react").MemoExoticComponent<(props: ChatroomUserMessageNodeViewProps) => import("react").JSX.Element>;
+export declare const ChatroomUserMessageNodeView: import("react").MemoExoticComponent<(props: ChatroomUserMessageNodeViewProps) => string | number | boolean | import("react").JSX.Element | Iterable<ReactNode> | null | undefined>;
 /** Reuse Harness' native steering renderer and move only peer steering messages to the left. */
-export declare const ChatroomSteeringMessageNodeView: import("react").MemoExoticComponent<(props: ChatroomSteeringMessageNodeViewProps) => import("react").JSX.Element>;
+export declare const ChatroomSteeringMessageNodeView: import("react").MemoExoticComponent<(props: ChatroomSteeringMessageNodeViewProps) => string | number | boolean | import("react").JSX.Element | Iterable<ReactNode> | null | undefined>;
 export {};
 //# sourceMappingURL=ChatroomMessageNodeView.d.ts.map

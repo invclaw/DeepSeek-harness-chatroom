@@ -23,31 +23,40 @@ describe('participant-specific native message projection', () => {
     const peer = projectChatroomMessage(node, bob)
     expect(own.own).toBe(true)
     expect(peer.own).toBe(false)
-    expect(firstText(own.node)).toBe('Alice：你好')
-    expect(firstText(peer.node)).toBe('Alice：你好')
+    expect(own.displayName).toBe('Alice')
+    expect(peer.displayName).toBe('Alice')
+    expect(firstText(own.node)).toBe('你好')
+    expect(firstText(peer.node)).toBe('你好')
   })
 
   it('classifies pre-0.3 history by its visible display-name prefix', () => {
-    expect(projectChatroomMessage(userNode('Alice：旧消息'), alice).own).toBe(true)
-    expect(projectChatroomMessage(userNode('Alice：旧消息'), bob).own).toBe(false)
+    const own = projectChatroomMessage(userNode('Alice：旧消息'), alice)
+    const peer = projectChatroomMessage(userNode('Alice：旧消息'), bob)
+    expect(own).toMatchObject({ own: true, displayName: 'Alice' })
+    expect(peer).toMatchObject({ own: false, displayName: 'Alice' })
+    expect(firstText(own.node)).toBe('旧消息')
+    expect(firstText(peer.node)).toBe('旧消息')
   })
 
-  it('keeps only the current participant on the right while reusing the native renderer', () => {
+  it('puts the participant name above a native bubble that contains only the message', () => {
     const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>
     const { rerender } = render(<ChatroomUserMessageNodeView {...messageProps(
       userNode(identifyChatroomText('自己的消息', alice)),
       alice,
       Native,
     )} />)
-    expect(screen.getByTestId('native').parentElement?.hasAttribute('data-dsh-chatroom-peer-message')).toBe(false)
+    expect(screen.getByText('Alice').className).toBe('dsh-chatroom-display-name')
+    expect(screen.getByTestId('native').textContent).toBe('自己的消息')
+    expect(screen.getByTestId('native').parentElement?.getAttribute('data-dsh-chatroom-own')).toBe('true')
 
     rerender(<ChatroomUserMessageNodeView {...messageProps(
       userNode(identifyChatroomText('别人的消息', bob)),
       alice,
       Native,
     )} />)
-    expect(screen.getByTestId('native').parentElement?.hasAttribute('data-dsh-chatroom-peer-message')).toBe(true)
-    expect(screen.getByTestId('native').textContent).toBe('Bob：别人的消息')
+    expect(screen.getByText('Bob').className).toBe('dsh-chatroom-display-name')
+    expect(screen.getByTestId('native').parentElement?.getAttribute('data-dsh-chatroom-own')).toBe('false')
+    expect(screen.getByTestId('native').textContent).toBe('别人的消息')
   })
 })
 

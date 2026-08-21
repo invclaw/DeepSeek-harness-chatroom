@@ -107,17 +107,42 @@ export const CHATROOM_STYLES = `
 
 .dsh-chatroom-presence-dot[data-online="true"] { background: #20b26b; }
 
-.dsh-chatroom-peer-message {
+.dsh-chatroom-participant-message {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.dsh-chatroom-peer-message > * {
+.dsh-chatroom-display-name {
+  max-width: min(525px, 82%);
+  padding: 0 4px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary, var(--text-secondary, #6b7280));
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-chatroom-participant-message[data-dsh-chatroom-own="true"] > .dsh-chatroom-display-name {
+  align-self: flex-end;
+  text-align: right;
+}
+
+.dsh-chatroom-participant-message[data-dsh-chatroom-own="false"] > .dsh-chatroom-display-name {
+  align-self: flex-start;
+  text-align: left;
+}
+
+.dsh-chatroom-participant-message[data-dsh-chatroom-own="false"] > :last-child {
   align-items: flex-start !important;
   text-align: left;
 }
 
-.dsh-chatroom-peer-message > * > *:first-child,
-.dsh-chatroom-peer-message > * > *:first-child > * {
+.dsh-chatroom-participant-message[data-dsh-chatroom-own="false"] > :last-child > *:first-child,
+.dsh-chatroom-participant-message[data-dsh-chatroom-own="false"] > :last-child > *:first-child > * {
   align-items: flex-start !important;
   align-self: flex-start !important;
 }
