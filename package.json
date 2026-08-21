@@ -1,0 +1,115 @@
+{
+  "name": "deepseek-harness-chatroom",
+  "version": "0.1.0",
+  "description": "Multi-user AI chatroom plugin for DeepSeek Harness Web",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/types/client/index.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  },
+  "scripts": {
+    "build:host": "tsup src/index.ts --format esm --clean --sourcemap --out-dir dist",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build:client": "tsdown",
+    "build": "npm run build:host && npm run build:types && npm run build:client",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "prepack": "npm run check"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "chatroom",
+    "multi-user",
+    "cordis"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sliverp/DeepSeek-harness-chatroom.git"
+  },
+  "homepage": "https://github.com/sliverp/DeepSeek-harness-chatroom#readme",
+  "bugs": {
+    "url": "https://github.com/sliverp/DeepSeek-harness-chatroom/issues"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "zod": "^4.2.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.1",
+    "@deepseek-ai/dsh-agent": ">=0.1.0-rc.7",
+    "@deepseek-ai/dsh-agent-default-model": ">=0.1.0-rc.7",
+    "@deepseek-ai/dsh-agent-presets": ">=0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-ui-layout": ">=0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.7",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.0-rc.7",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.7",
+    "@deepseek-ai/dsh-session": ">=0.1.0-rc.7",
+    "@deepseek-ai/dsh-session-persistence": ">=0.1.0-rc.7",
+    "@deepseek-ai/dsh-storage-domain": ">=0.1.0-rc.7",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.0-rc.7",
+    "react": ">=18.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-agent-presets": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-ui-layout": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-host-webserver": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-session-persistence": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-storage-domain": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.7",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^24.3.0",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "~18.3.1",
+    "jsdom": "^29.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "tsdown": "^0.22.2",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  },
+  "engines": {
+    "node": ">=22.19",
+    "pnpm": "10.33.4"
+  },
+  "packageManager": "pnpm@10.33.4"
+}

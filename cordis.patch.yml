@@ -1,0 +1,10 @@
+- insert:
+    - id: chatroom
+      name: deepseek-harness-chatroom
+      config:
+        roomId: lobby
+        roomTitle: AI 聊天室
+        aiDisplayName: DeepSeek
+        sessionId: chatroom-v1-lobby
+        cwd: !!js process.env.DSH_CHATROOM_CWD ?? process.cwd()
+        agentPreset: standard
