@@ -91,7 +91,7 @@ API 路由会立即注册，在存储和 Agent 就绪前返回 `503`。初始化
 
 ## 浏览器身份与安全
 
-浏览器收到一个随机 256 位令牌，Cookie 使用 `HttpOnly`、`SameSite=Strict`，且仅作用于 `/chatroom/api`。服务端只保存令牌的 SHA-256 摘要。刷新页面或重启 Harness 会恢复同一身份，直到 Cookie 过期或用户点击“切换身份”。
+浏览器收到一个随机 256 位令牌，Cookie 使用 `HttpOnly`、`SameSite=Strict`，且仅作用于聊天室 API。服务端只保存令牌的 SHA-256 摘要。刷新页面或重启 Harness 会恢复同一身份，直到 Cookie 过期或用户点击“切换身份”。
 
 显示名称只是房间展示身份，不是账号认证。请根据工作区敏感程度为 Harness Web 配置访问控制。所有能进入房间的人都能向所选 Agent preset 提交输入，也可能使用该 preset 提供的工具。面向非完全可信成员时，应使用受限 preset 和范围尽可能小的 `cwd`。
 
@@ -106,7 +106,7 @@ API 路由会立即注册，在存储和 Agent 就绪前返回 `503`。初始化
 7. 刷新两个页面；各自身份和完整共享记录必须恢复。
 8. 停止并重启 Harness Web；身份、记录和 AI 上下文必须继续恢复。
 
-健康检查位于 `/chatroom/api/health`。房间就绪时返回：
+健康检查位于 `/plugins/deepseek-harness-chatroom/api/health`，即使部署只代理 Harness 插件路径也能访问。直接部署 Harness Web 时仍可使用 `/chatroom/api/health`。房间就绪时返回：
 
 ```json
 {"ready":true}

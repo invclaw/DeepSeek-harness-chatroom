@@ -257,6 +257,10 @@ window.__ModuleLoader__.load({
 			}).format(timestamp);
 		}
 		//#endregion
+		//#region src/routes.ts
+		/** Canonical API prefix carried through the Host's existing plugin proxy route. */
+		const CHATROOM_API_PREFIX = "/plugins/deepseek-harness-chatroom/api";
+		//#endregion
 		//#region src/client/store.ts
 		/** React-free owner of room HTTP, SSE, navigation, and immutable UI state. */
 		var ChatroomClientStore = class {
@@ -309,7 +313,7 @@ window.__ModuleLoader__.load({
 					error: void 0
 				});
 				try {
-					const session = await requestJson("/chatroom/api/session", {
+					const session = await requestJson(`${CHATROOM_API_PREFIX}/session`, {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ displayName })
@@ -334,7 +338,7 @@ window.__ModuleLoader__.load({
 			resetIdentity = async () => {
 				this.closeEvents();
 				try {
-					await requestEmpty("/chatroom/api/session", { method: "DELETE" });
+					await requestEmpty(`${CHATROOM_API_PREFIX}/session`, { method: "DELETE" });
 					this.set({
 						phase: "identity-required",
 						connection: "offline",
@@ -356,7 +360,7 @@ window.__ModuleLoader__.load({
 					error: void 0
 				});
 				try {
-					await requestJson("/chatroom/api/messages", {
+					await requestJson(`${CHATROOM_API_PREFIX}/messages`, {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ text })
@@ -392,7 +396,7 @@ window.__ModuleLoader__.load({
 			};
 			async loadSession() {
 				try {
-					const session = await requestJson("/chatroom/api/session");
+					const session = await requestJson(`${CHATROOM_API_PREFIX}/session`);
 					if (this.stopped) return;
 					if (session.identity === null) {
 						this.set({
@@ -426,7 +430,7 @@ window.__ModuleLoader__.load({
 				this.closeEvents();
 				if (this.stopped || this.snapshot.identity === void 0) return;
 				this.set({ connection: "connecting" });
-				const source = new EventSource("/chatroom/api/events");
+				const source = new EventSource(`${CHATROOM_API_PREFIX}/events`);
 				this.eventSource = source;
 				source.onopen = () => {
 					if (this.eventSource === source) this.set({

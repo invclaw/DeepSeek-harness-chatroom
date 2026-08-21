@@ -45,7 +45,7 @@ describe('ChatroomClientStore', () => {
     await store.join('Alice')
     expect(store.getSnapshot().identity).toEqual(identity)
     const source = FakeEventSource.instances[0]
-    expect(source?.url).toBe('/chatroom/api/events')
+    expect(source?.url).toBe('/plugins/deepseek-harness-chatroom/api/events')
     source?.emit({
       type: 'snapshot',
       room,
@@ -68,7 +68,10 @@ describe('ChatroomClientStore', () => {
     })
     expect(store.getSnapshot().messages.map(message => message.text)).toEqual(['你好', '大家好'])
     expect(await store.send('欢迎')).toBe(true)
-    expect(fetchMock).toHaveBeenLastCalledWith('/chatroom/api/messages', expect.objectContaining({ method: 'POST' }))
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/plugins/deepseek-harness-chatroom/api/messages',
+      expect.objectContaining({ method: 'POST' }),
+    )
     store.stop()
     expect(source?.closed).toBe(true)
   })

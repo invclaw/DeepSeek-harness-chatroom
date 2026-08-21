@@ -91,7 +91,7 @@ The API route is registered immediately and reports `503` until storage and the 
 
 ## Browser identity and security
 
-The browser receives a random 256-bit token in an `HttpOnly`, `SameSite=Strict` cookie scoped to `/chatroom/api`. The server stores only its SHA-256 digest. Reloading the page or restarting Harness restores the same participant identity until the cookie expires or the user selects **Switch identity**.
+The browser receives a random 256-bit token in an `HttpOnly`, `SameSite=Strict` cookie scoped to the chatroom API. The server stores only its SHA-256 digest. Reloading the page or restarting Harness restores the same participant identity until the cookie expires or the user selects **Switch identity**.
 
 A display name is room presentation, not account authentication. Deploy Harness Web behind the access control appropriate for the workspace. Every participant who can reach this room can submit input to the configured Agent preset and therefore to its tools. Use a restricted preset and a narrow `cwd` for rooms exposed beyond a trusted team.
 
@@ -106,7 +106,7 @@ A display name is room presentation, not account authentication. Deploy Harness 
 7. Reload both pages. Each browser must restore its own identity and the complete shared transcript.
 8. Stop and restart Harness Web. The same identities, transcript, and AI context must recover.
 
-The health endpoint is available at `/chatroom/api/health`. A ready room returns:
+The health endpoint is available at `/plugins/deepseek-harness-chatroom/api/health`, which remains reachable when a deployment proxies only Harness plugin paths. `/chatroom/api/health` is retained for direct Harness Web deployments. A ready room returns:
 
 ```json
 {"ready":true}

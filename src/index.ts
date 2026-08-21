@@ -10,6 +10,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-storage-domain'
 import { Config, type Config as ChatroomConfig, validateConfig } from './config.js'
 import { ChatroomHttpController } from './http.js'
+import { CHATROOM_API_PREFIXES } from './routes.js'
 import { ChatroomRuntime } from './room.js'
 
 export const name = 'deepseek-harness-chatroom'
@@ -34,11 +35,11 @@ export function apply(ctx: Context, config: ChatroomConfig): void {
   const http = new ChatroomHttpController(ctx, runtime, config)
   const log = ctx.logger('deepseek-harness-chatroom')
   ctx.effect(() => {
-    const unregister = ctx.webServer.register({
-      kind: 'prefix',
-      path: '/chatroom/api',
+    const unregister = CHATROOM_API_PREFIXES.map(path => ctx.webServer.register({
+      kind: 'prefix' as const,
+      path,
       handler: (request, response) => http.handle(request, response),
-    })
+    }))
     const startup = runtime.start().then(() => {
       log.info('AI chatroom %s is ready', JSON.stringify(config.roomId))
     }).catch(async (error: unknown) => {
@@ -46,7 +47,7 @@ export function apply(ctx: Context, config: ChatroomConfig): void {
       await runtime.stop()
     })
     return async () => {
-      unregister()
+      for (const dispose of unregister) dispose()
       await startup
       await runtime.stop()
     }

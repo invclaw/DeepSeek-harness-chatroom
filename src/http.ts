@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config } from './config.js'
 import { cookieValue, expiredSessionCookie, sessionCookie } from './cookies.js'
+import { matchChatroomApi } from './routes.js'
 import { ChatroomInputError, ChatroomRuntime } from './room.js'
 import type { ChatroomErrorResponse, ChatroomSessionResponse } from './types.js'
 
@@ -17,11 +18,16 @@ export class ChatroomHttpController {
     this.log = ctx.logger('deepseek-harness-chatroom')
   }
 
-  /** Dispatch one request under the `/chatroom/api` prefix. */
+  /** Dispatch one request under a registered chatroom API prefix. */
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
       const pathname = new URL(request.url ?? '/', 'http://chatroom.local').pathname
-      if (pathname === '/chatroom/api/health' && request.method === 'GET') {
+      const route = matchChatroomApi(pathname)
+      if (route === undefined) {
+        json(response, 404, { error: '接口不存在。' } satisfies ChatroomErrorResponse)
+        return
+      }
+      if (route.endpoint === '/health' && request.method === 'GET') {
         json(response, this.runtime.isReady ? 200 : 503, { ready: this.runtime.isReady })
         return
       }
@@ -29,15 +35,15 @@ export class ChatroomHttpController {
         json(response, 503, { error: '聊天室正在启动，请稍后重试。' } satisfies ChatroomErrorResponse)
         return
       }
-      if (pathname === '/chatroom/api/session') {
-        await this.handleSession(request, response)
+      if (route.endpoint === '/session') {
+        await this.handleSession(request, response, route.prefix)
         return
       }
-      if (pathname === '/chatroom/api/events' && request.method === 'GET') {
+      if (route.endpoint === '/events' && request.method === 'GET') {
         this.handleEvents(request, response)
         return
       }
-      if (pathname === '/chatroom/api/messages') {
+      if (route.endpoint === '/messages') {
         await this.handleMessages(request, response)
         return
       }
@@ -56,7 +62,7 @@ export class ChatroomHttpController {
     }
   }
 
-  private async handleSession(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  private async handleSession(request: IncomingMessage, response: ServerResponse, cookiePath: string): Promise<void> {
     const token = this.token(request)
     if (request.method === 'GET') {
       const payload: ChatroomSessionResponse = {
@@ -80,6 +86,7 @@ export class ChatroomHttpController {
         this.config.cookieName,
         created.token,
         this.config.cookieMaxAgeSeconds,
+        cookiePath,
       ))
       json(response, 201, { identity: created.identity, room: this.runtime.room } satisfies ChatroomSessionResponse)
       return
@@ -87,7 +94,7 @@ export class ChatroomHttpController {
     if (request.method === 'DELETE') {
       assertSameOrigin(request)
       await this.runtime.deleteIdentity(token)
-      response.setHeader('Set-Cookie', expiredSessionCookie(this.config.cookieName))
+      response.setHeader('Set-Cookie', expiredSessionCookie(this.config.cookieName, cookiePath))
       response.writeHead(204)
       response.end()
       return

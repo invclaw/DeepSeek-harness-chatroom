@@ -7,6 +7,7 @@ import type {
   ChatroomServerEvent,
   ChatroomSessionResponse,
 } from '../types.js'
+import { CHATROOM_API_PREFIX } from '../routes.js'
 
 export type ChatroomPhase = 'loading' | 'identity-required' | 'ready' | 'error'
 export type ChatroomConnection = 'offline' | 'connecting' | 'online'
@@ -77,7 +78,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   join = async (displayName: string): Promise<void> => {
     this.set({ phase: 'loading', error: undefined })
     try {
-      const session = await requestJson<ChatroomSessionResponse>('/chatroom/api/session', {
+      const session = await requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ displayName }),
@@ -100,7 +101,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   resetIdentity = async (): Promise<void> => {
     this.closeEvents()
     try {
-      await requestEmpty('/chatroom/api/session', { method: 'DELETE' })
+      await requestEmpty(`${CHATROOM_API_PREFIX}/session`, { method: 'DELETE' })
       this.set({
         phase: 'identity-required',
         connection: 'offline',
@@ -120,7 +121,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     if (this.snapshot.sending || this.snapshot.phase !== 'ready') return false
     this.set({ sending: true, error: undefined })
     try {
-      await requestJson('/chatroom/api/messages', {
+      await requestJson(`${CHATROOM_API_PREFIX}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -154,7 +155,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   private async loadSession(): Promise<void> {
     try {
-      const session = await requestJson<ChatroomSessionResponse>('/chatroom/api/session')
+      const session = await requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/session`)
       if (this.stopped) return
       if (session.identity === null) {
         this.set({
@@ -185,7 +186,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.closeEvents()
     if (this.stopped || this.snapshot.identity === undefined) return
     this.set({ connection: 'connecting' })
-    const source = new EventSource('/chatroom/api/events')
+    const source = new EventSource(`${CHATROOM_API_PREFIX}/events`)
     this.eventSource = source
     source.onopen = () => {
       if (this.eventSource === source) this.set({ connection: 'online', error: undefined })

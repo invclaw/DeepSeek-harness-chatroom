@@ -46,11 +46,23 @@ function cookieValue(header, name2) {
   }
   return void 0;
 }
-function sessionCookie(name2, token, maxAgeSeconds) {
-  return `${name2}=${token}; Path=/chatroom/api; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Strict`;
+function sessionCookie(name2, token, maxAgeSeconds, path) {
+  return `${name2}=${token}; Path=${path}; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Strict`;
 }
-function expiredSessionCookie(name2) {
-  return `${name2}=; Path=/chatroom/api; Max-Age=0; HttpOnly; SameSite=Strict`;
+function expiredSessionCookie(name2, path) {
+  return `${name2}=; Path=${path}; Max-Age=0; HttpOnly; SameSite=Strict`;
+}
+
+// src/routes.ts
+var CHATROOM_API_PREFIX = "/plugins/deepseek-harness-chatroom/api";
+var LEGACY_CHATROOM_API_PREFIX = "/chatroom/api";
+var CHATROOM_API_PREFIXES = [CHATROOM_API_PREFIX, LEGACY_CHATROOM_API_PREFIX];
+function matchChatroomApi(pathname) {
+  for (const prefix of CHATROOM_API_PREFIXES) {
+    if (pathname === prefix) return { prefix, endpoint: "" };
+    if (pathname.startsWith(`${prefix}/`)) return { prefix, endpoint: pathname.slice(prefix.length) };
+  }
+  return void 0;
 }
 
 // src/room.ts
@@ -576,11 +588,16 @@ var ChatroomHttpController = class {
   runtime;
   config;
   log;
-  /** Dispatch one request under the `/chatroom/api` prefix. */
+  /** Dispatch one request under a registered chatroom API prefix. */
   async handle(request, response) {
     try {
       const pathname = new URL(request.url ?? "/", "http://chatroom.local").pathname;
-      if (pathname === "/chatroom/api/health" && request.method === "GET") {
+      const route = matchChatroomApi(pathname);
+      if (route === void 0) {
+        json(response, 404, { error: "\u63A5\u53E3\u4E0D\u5B58\u5728\u3002" });
+        return;
+      }
+      if (route.endpoint === "/health" && request.method === "GET") {
         json(response, this.runtime.isReady ? 200 : 503, { ready: this.runtime.isReady });
         return;
       }
@@ -588,15 +605,15 @@ var ChatroomHttpController = class {
         json(response, 503, { error: "\u804A\u5929\u5BA4\u6B63\u5728\u542F\u52A8\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002" });
         return;
       }
-      if (pathname === "/chatroom/api/session") {
-        await this.handleSession(request, response);
+      if (route.endpoint === "/session") {
+        await this.handleSession(request, response, route.prefix);
         return;
       }
-      if (pathname === "/chatroom/api/events" && request.method === "GET") {
+      if (route.endpoint === "/events" && request.method === "GET") {
         this.handleEvents(request, response);
         return;
       }
-      if (pathname === "/chatroom/api/messages") {
+      if (route.endpoint === "/messages") {
         await this.handleMessages(request, response);
         return;
       }
@@ -614,7 +631,7 @@ var ChatroomHttpController = class {
       }
     }
   }
-  async handleSession(request, response) {
+  async handleSession(request, response, cookiePath) {
     const token = this.token(request);
     if (request.method === "GET") {
       const payload = {
@@ -637,7 +654,8 @@ var ChatroomHttpController = class {
       response.setHeader("Set-Cookie", sessionCookie(
         this.config.cookieName,
         created.token,
-        this.config.cookieMaxAgeSeconds
+        this.config.cookieMaxAgeSeconds,
+        cookiePath
       ));
       json(response, 201, { identity: created.identity, room: this.runtime.room });
       return;
@@ -645,7 +663,7 @@ var ChatroomHttpController = class {
     if (request.method === "DELETE") {
       assertSameOrigin(request);
       await this.runtime.deleteIdentity(token);
-      response.setHeader("Set-Cookie", expiredSessionCookie(this.config.cookieName));
+      response.setHeader("Set-Cookie", expiredSessionCookie(this.config.cookieName, cookiePath));
       response.writeHead(204);
       response.end();
       return;
@@ -770,11 +788,11 @@ function apply(ctx, config) {
   const http = new ChatroomHttpController(ctx, runtime, config);
   const log = ctx.logger("deepseek-harness-chatroom");
   ctx.effect(() => {
-    const unregister = ctx.webServer.register({
+    const unregister = CHATROOM_API_PREFIXES.map((path) => ctx.webServer.register({
       kind: "prefix",
-      path: "/chatroom/api",
+      path,
       handler: (request, response) => http.handle(request, response)
-    });
+    }));
     const startup = runtime.start().then(() => {
       log.info("AI chatroom %s is ready", JSON.stringify(config.roomId));
     }).catch(async (error) => {
@@ -782,7 +800,7 @@ function apply(ctx, config) {
       await runtime.stop();
     });
     return async () => {
-      unregister();
+      for (const dispose of unregister) dispose();
       await startup;
       await runtime.stop();
     };
