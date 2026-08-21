@@ -26,6 +26,15 @@ describe('native chatroom integration', () => {
     expect(screen.getByText('进入后使用 Harness 原生对话界面。', { exact: false })).toBeTruthy()
   })
 
+  it('keeps a dismissed identity dialog closed on the shared Session', () => {
+    renderEntry(
+      view({ open: false, phase: 'identity-required', identity: undefined }),
+      'chatroom-v1-lobby',
+    )
+    expect(screen.queryByTestId('chatroom-dialog')).toBeNull()
+    expect(screen.queryByText('◉ 进入 AI 聊天室')).toBeNull()
+  })
+
   it('never leaves a blocking status dialog over an already selected native Session', () => {
     const closeRoom = vi.fn()
     renderEntry(view({ open: true, phase: 'ready' }), 'chatroom-v1-lobby', { closeRoom })
@@ -50,6 +59,19 @@ describe('native chatroom integration', () => {
       resetIdentity={vi.fn(async () => undefined)}
     />)
     expect(screen.queryByText('Alice · 2 人在线')).toBeNull()
+  })
+
+  it('reopens identity selection from the native Session header after dismissal', () => {
+    const openRoom = vi.fn()
+    const room = view({ open: false, phase: 'identity-required', identity: undefined })
+    render(<RoomIdentityAction
+      sessionId={'chatroom-v1-lobby' as never}
+      useChatroom={selector => selector(room)}
+      openRoom={openRoom}
+      resetIdentity={vi.fn(async () => undefined)}
+    />)
+    fireEvent.click(screen.getByTitle('选择聊天室身份'))
+    expect(openRoom).toHaveBeenCalledOnce()
   })
 })
 

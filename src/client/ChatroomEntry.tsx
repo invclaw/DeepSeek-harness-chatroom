@@ -17,7 +17,6 @@ export function ChatroomEntry(props: ChatroomEntryProps): JSX.Element | null {
   const room = props.useChatroom(snapshot => snapshot)
   const currentSession = props.useSessions(snapshot => snapshot.current)
   const selected = room.room !== undefined && String(currentSession) === room.room.sessionId
-  const identityNeeded = selected && room.identity === undefined && room.phase !== 'loading'
 
   useEffect(() => {
     if (selected && room.open && room.phase === 'ready') props.closeRoom()
@@ -25,7 +24,8 @@ export function ChatroomEntry(props: ChatroomEntryProps): JSX.Element | null {
 
   if (selected && room.phase === 'ready') return null
 
-  if (!room.open && !identityNeeded) {
+  if (!room.open) {
+    if (selected) return null
     return (
       <button className="dsh-chatroom-launcher" data-dsh-chatroom-entry type="button" onClick={props.openRoom}>
         ◉ 进入 AI 聊天室

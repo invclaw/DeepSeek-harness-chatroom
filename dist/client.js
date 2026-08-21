@@ -15,7 +15,6 @@ window.__ModuleLoader__.load({
 			const room = props.useChatroom((snapshot) => snapshot);
 			const currentSession = props.useSessions((snapshot) => snapshot.current);
 			const selected = room.room !== void 0 && String(currentSession) === room.room.sessionId;
-			const identityNeeded = selected && room.identity === void 0 && room.phase !== "loading";
 			(0, react.useEffect)(() => {
 				if (selected && room.open && room.phase === "ready") props.closeRoom();
 			}, [
@@ -25,13 +24,16 @@ window.__ModuleLoader__.load({
 				selected
 			]);
 			if (selected && room.phase === "ready") return null;
-			if (!room.open && !identityNeeded) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-				className: "dsh-chatroom-launcher",
-				"data-dsh-chatroom-entry": true,
-				type: "button",
-				onClick: props.openRoom,
-				children: "◉ 进入 AI 聊天室"
-			});
+			if (!room.open) {
+				if (selected) return null;
+				return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					className: "dsh-chatroom-launcher",
+					"data-dsh-chatroom-entry": true,
+					type: "button",
+					onClick: props.openRoom,
+					children: "◉ 进入 AI 聊天室"
+				});
+			}
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: "dsh-chatroom-dialog-layer",
 				"data-dsh-chatroom-entry": true,
