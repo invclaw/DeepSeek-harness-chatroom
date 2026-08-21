@@ -26,6 +26,13 @@ describe('native chatroom integration', () => {
     expect(screen.getByText('进入后使用 Harness 原生对话界面。', { exact: false })).toBeTruthy()
   })
 
+  it('never leaves a blocking status dialog over an already selected native Session', () => {
+    const closeRoom = vi.fn()
+    renderEntry(view({ open: true, phase: 'ready' }), 'chatroom-v1-lobby', { closeRoom })
+    expect(screen.queryByTestId('chatroom-dialog')).toBeNull()
+    expect(closeRoom).toHaveBeenCalledOnce()
+  })
+
   it('adds identity and presence to the native Session header only', () => {
     const room = view({ connection: 'online', online: 2 })
     const { rerender } = render(<RoomIdentityAction

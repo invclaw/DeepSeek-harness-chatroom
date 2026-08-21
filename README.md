@@ -15,7 +15,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.2.0 removes the former full-screen custom transcript and the model-silence prompt. The plugin is now only the identity and navigation layer around a native shared Session, so AI replies behave like an ordinary Harness conversation.
+Version 0.2.1 removes the former full-screen custom transcript and the model-silence prompt. The plugin is now only the identity and navigation layer around a native shared Session, so AI replies behave like an ordinary Harness conversation. The entry dialog also closes immediately when that Session is already selected, so it never blocks the native composer.
 
 ## Requirements
 

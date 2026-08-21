@@ -16,16 +16,22 @@ window.__ModuleLoader__.load({
 			const currentSession = props.useSessions((snapshot) => snapshot.current);
 			const selected = room.room !== void 0 && String(currentSession) === room.room.sessionId;
 			const identityNeeded = selected && room.identity === void 0 && room.phase !== "loading";
-			if (!room.open && !identityNeeded) {
-				if (selected) return null;
-				return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					className: "dsh-chatroom-launcher",
-					"data-dsh-chatroom-entry": true,
-					type: "button",
-					onClick: props.openRoom,
-					children: "◉ 进入 AI 聊天室"
-				});
-			}
+			(0, react.useEffect)(() => {
+				if (selected && room.open && room.phase === "ready") props.closeRoom();
+			}, [
+				props.closeRoom,
+				room.open,
+				room.phase,
+				selected
+			]);
+			if (selected && room.phase === "ready") return null;
+			if (!room.open && !identityNeeded) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+				className: "dsh-chatroom-launcher",
+				"data-dsh-chatroom-entry": true,
+				type: "button",
+				onClick: props.openRoom,
+				children: "◉ 进入 AI 聊天室"
+			});
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: "dsh-chatroom-dialog-layer",
 				"data-dsh-chatroom-entry": true,
@@ -554,7 +560,9 @@ window.__ModuleLoader__.load({
 			if (sessions === void 0) throw new Error("chatroom: client sessions service unavailable");
 			const store = new ChatroomClientStore((rawSessionId) => {
 				const sessionId = rawSessionId;
-				if (sessions.list.getSnapshot().byId[sessionId] === void 0) return false;
+				const list = sessions.list.getSnapshot();
+				if (list.current === sessionId) return true;
+				if (list.byId[sessionId] === void 0) return false;
 				sessions.open(sessionId);
 				return true;
 			});

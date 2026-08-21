@@ -20,7 +20,9 @@ export function apply(ctx: ClientContext): void {
   if (sessions === undefined) throw new Error('chatroom: client sessions service unavailable')
   const store = new ChatroomClientStore((rawSessionId) => {
     const sessionId = rawSessionId as SessionId
-    if (sessions.list.getSnapshot().byId[sessionId] === undefined) return false
+    const list = sessions.list.getSnapshot()
+    if (list.current === sessionId) return true
+    if (list.byId[sessionId] === undefined) return false
     sessions.open(sessionId)
     return true
   })

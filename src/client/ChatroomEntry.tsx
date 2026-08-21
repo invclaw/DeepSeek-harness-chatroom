@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
 
@@ -19,8 +19,13 @@ export function ChatroomEntry(props: ChatroomEntryProps): JSX.Element | null {
   const selected = room.room !== undefined && String(currentSession) === room.room.sessionId
   const identityNeeded = selected && room.identity === undefined && room.phase !== 'loading'
 
+  useEffect(() => {
+    if (selected && room.open && room.phase === 'ready') props.closeRoom()
+  }, [props.closeRoom, room.open, room.phase, selected])
+
+  if (selected && room.phase === 'ready') return null
+
   if (!room.open && !identityNeeded) {
-    if (selected) return null
     return (
       <button className="dsh-chatroom-launcher" data-dsh-chatroom-entry type="button" onClick={props.openRoom}>
         ◉ 进入 AI 聊天室
