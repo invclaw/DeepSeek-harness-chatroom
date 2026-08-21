@@ -4,7 +4,14 @@ import type { Config } from './config.js'
 import { cookieValue, expiredSessionCookie, sessionCookie } from './cookies.js'
 import { matchChatroomApi } from './routes.js'
 import { ChatroomInputError, ChatroomRuntime } from './room.js'
-import type { ChatroomErrorResponse, ChatroomSessionResponse } from './types.js'
+import type {
+  ChatroomErrorResponse,
+  ChatroomPromptContentPart,
+  ChatroomPromptRequest,
+  ChatroomRoomResponse,
+  ChatroomRoomsResponse,
+  ChatroomSessionResponse,
+} from './types.js'
 
 /** HTTP/SSE adapter for the browser client. */
 export class ChatroomHttpController {
@@ -21,8 +28,8 @@ export class ChatroomHttpController {
   /** Dispatch one request under a registered chatroom API prefix. */
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      const pathname = new URL(request.url ?? '/', 'http://chatroom.local').pathname
-      const route = matchChatroomApi(pathname)
+      const url = new URL(request.url ?? '/', 'http://chatroom.local')
+      const route = matchChatroomApi(url.pathname)
       if (route === undefined) {
         json(response, 404, { error: '接口不存在。' } satisfies ChatroomErrorResponse)
         return
@@ -39,8 +46,20 @@ export class ChatroomHttpController {
         await this.handleSession(request, response, route.prefix)
         return
       }
+      if (route.endpoint === '/rooms') {
+        await this.handleRooms(request, response)
+        return
+      }
+      if (route.endpoint === '/rooms/select') {
+        await this.handleRoomSelection(request, response)
+        return
+      }
+      if (route.endpoint === '/prompt') {
+        await this.handlePrompt(request, response)
+        return
+      }
       if (route.endpoint === '/events' && request.method === 'GET') {
-        this.handleEvents(request, response)
+        await this.handleEvents(request, response, url.searchParams)
         return
       }
       json(response, 404, { error: '接口不存在。' } satisfies ChatroomErrorResponse)
@@ -61,30 +80,25 @@ export class ChatroomHttpController {
   private async handleSession(request: IncomingMessage, response: ServerResponse, cookiePath: string): Promise<void> {
     const token = this.token(request)
     if (request.method === 'GET') {
-      const payload: ChatroomSessionResponse = {
-        identity: this.runtime.identity(token) ?? null,
-        room: this.runtime.room,
-      }
-      json(response, 200, payload)
+      json(response, 200, this.sessionPayload(this.runtime.identity(token) ?? null))
       return
     }
     if (request.method === 'POST') {
       assertSameOrigin(request)
       const existing = this.runtime.identity(token)
       if (existing !== undefined) {
-        json(response, 200, { identity: existing, room: this.runtime.room } satisfies ChatroomSessionResponse)
+        json(response, 200, this.sessionPayload(existing))
         return
       }
-      const body = await readJson(request, requestLimit(this.config))
-      const displayName = fieldString(body, 'displayName')
-      const created = await this.runtime.createIdentity(displayName)
+      const body = await readJson(request, smallRequestLimit(this.config))
+      const created = await this.runtime.createIdentity(fieldString(body, 'displayName'))
       response.setHeader('Set-Cookie', sessionCookie(
         this.config.cookieName,
         created.token,
         this.config.cookieMaxAgeSeconds,
         cookiePath,
       ))
-      json(response, 201, { identity: created.identity, room: this.runtime.room } satisfies ChatroomSessionResponse)
+      json(response, 201, this.sessionPayload(created.identity))
       return
     }
     if (request.method === 'DELETE') {
@@ -98,16 +112,66 @@ export class ChatroomHttpController {
     methodNotAllowed(response, 'GET, POST, DELETE')
   }
 
-  private handleEvents(request: IncomingMessage, response: ServerResponse): void {
+  private async handleRooms(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method === 'GET') {
+      json(response, 200, { rooms: this.runtime.rooms } satisfies ChatroomRoomsResponse)
+      return
+    }
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'GET, POST')
+      return
+    }
+    assertSameOrigin(request)
     const identity = this.requireIdentity(request, response)
     if (identity === undefined) return
+    const body = await readJson(request, smallRequestLimit(this.config))
+    const room = await this.runtime.createRoom(fieldString(body, 'title'), identity)
+    json(response, 201, { room } satisfies ChatroomRoomResponse)
+  }
+
+  private async handleRoomSelection(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    if (this.requireIdentity(request, response) === undefined) return
+    const body = await readJson(request, smallRequestLimit(this.config))
+    const room = await this.runtime.selectRoom(fieldString(body, 'roomId'))
+    json(response, 200, { room } satisfies ChatroomRoomResponse)
+  }
+
+  private async handlePrompt(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, this.runtime.maxPromptRequestBytes)
+    const prompt = promptRequest(body, this.config)
+    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode)
+    json(response, 200, result)
+  }
+
+  private async handleEvents(
+    request: IncomingMessage,
+    response: ServerResponse,
+    search: URLSearchParams,
+  ): Promise<void> {
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const roomId = search.get('roomId')
+    if (roomId === null || roomId === '') throw new ChatroomInputError('缺少共享会话编号。')
+    await this.runtime.selectRoom(roomId)
     response.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     })
-    const unsubscribe = this.runtime.subscribe(identity, response)
+    const unsubscribe = this.runtime.subscribe(roomId, identity, response)
     const heartbeat = setInterval(() => {
       if (!response.destroyed && !response.writableEnded) response.write(': heartbeat\n\n')
     }, this.config.sseHeartbeatMs)
@@ -115,6 +179,10 @@ export class ChatroomHttpController {
       clearInterval(heartbeat)
       unsubscribe()
     })
+  }
+
+  private sessionPayload(identity: ChatroomSessionResponse['identity']): ChatroomSessionResponse {
+    return { identity, rooms: this.runtime.rooms, room: this.runtime.room }
   }
 
   private requireIdentity(request: IncomingMessage, response: ServerResponse) {
@@ -187,6 +255,56 @@ function fieldString(body: Record<string, unknown>, field: string): string {
   return value
 }
 
-function requestLimit(config: Config): number {
-  return config.maxDisplayNameChars * 4 + 1_024
+function promptRequest(body: Record<string, unknown>, config: Config): ChatroomPromptRequest {
+  const roomId = fieldString(body, 'roomId')
+  const mode = body.mode
+  if (mode !== 'queue' && mode !== 'steer') throw new ChatroomInputError('字段 mode 必须是 queue 或 steer。')
+  if (!Array.isArray(body.content) || body.content.length === 0) {
+    throw new ChatroomInputError('消息内容不能为空。')
+  }
+  const content: ChatroomPromptContentPart[] = []
+  let textChars = 0
+  for (const raw of body.content) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new ChatroomInputError('消息内容格式无效。')
+    }
+    const part = raw as Record<string, unknown>
+    if (part.type === 'text') {
+      if (typeof part.text !== 'string') throw new ChatroomInputError('文本消息无效。')
+      textChars += [...part.text].length
+      content.push({ type: 'text', text: part.text })
+      continue
+    }
+    if (part.type === 'image') {
+      if (!isImageMediaType(part.mediaType) || typeof part.data !== 'string') {
+        throw new ChatroomInputError('图片消息无效。')
+      }
+      if (part.name !== undefined && typeof part.name !== 'string') {
+        throw new ChatroomInputError('图片名称无效。')
+      }
+      content.push({
+        type: 'image',
+        mediaType: part.mediaType,
+        data: part.data,
+        ...(part.name === undefined ? {} : { name: part.name }),
+      })
+      continue
+    }
+    throw new ChatroomInputError('消息内容类型无效。')
+  }
+  if (textChars > config.maxMessageTextChars) {
+    throw new ChatroomInputError(`消息文本不能超过 ${config.maxMessageTextChars} 个字符。`)
+  }
+  if (!content.some(part => part.type === 'image' || part.text.trim() !== '')) {
+    throw new ChatroomInputError('消息内容不能为空。')
+  }
+  return { roomId, mode, content }
+}
+
+function isImageMediaType(value: unknown): value is Extract<ChatroomPromptContentPart, { type: 'image' }>['mediaType'] {
+  return value === 'image/png' || value === 'image/jpeg' || value === 'image/webp' || value === 'image/gif'
+}
+
+function smallRequestLimit(config: Config): number {
+  return Math.max(config.maxDisplayNameChars, config.maxRoomTitleChars) * 4 + 1_024
 }

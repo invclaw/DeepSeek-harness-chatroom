@@ -3,7 +3,6 @@ import type { ChatroomView } from './store.js';
 interface RoomIdentityActionInjected {
     useChatroom<T>(selector: (snapshot: ChatroomView) => T): T;
     openRoom(): void;
-    resetIdentity(): Promise<void>;
 }
 type RoomIdentityActionProps = {
     readonly sessionId: SessionId;

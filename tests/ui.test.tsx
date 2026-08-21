@@ -9,46 +9,48 @@ import type { ChatroomView } from '../src/client/store.js'
 afterEach(cleanup)
 
 describe('native chatroom integration', () => {
-  it('shows only a launcher outside the room instead of replacing the conversation UI', () => {
-    renderEntry(view({ open: false }), 'ordinary-session')
-    expect(screen.getByText('◉ 进入 AI 聊天室')).toBeTruthy()
+  it('shows an additive shared-session launcher', () => {
+    renderEntry(view({ open: false }))
+    expect(screen.getByText('◉ 共享会话')).toBeTruthy()
     expect(screen.queryByTestId('chatroom-dialog')).toBeNull()
   })
 
-  it('requires a name before navigating to the native shared Session', () => {
+  it('requires a name and lets the identity dialog close', () => {
     const join = vi.fn(async () => undefined)
-    renderEntry(view({ open: true, phase: 'identity-required', identity: undefined }), undefined, { join })
+    const closeRoom = vi.fn()
+    renderEntry(view({ open: true, phase: 'identity-required', identity: undefined }), { join, closeRoom })
     const button = screen.getByTestId('chatroom-join')
     expect((button as HTMLButtonElement).disabled).toBe(true)
     fireEvent.change(screen.getByTestId('chatroom-identity-input'), { target: { value: 'Alice' } })
     fireEvent.click(button)
     expect(join).toHaveBeenCalledWith('Alice')
-    expect(screen.getByText('进入后使用 Harness 原生对话界面。', { exact: false })).toBeTruthy()
-  })
-
-  it('keeps a dismissed identity dialog closed on the shared Session', () => {
-    renderEntry(
-      view({ open: false, phase: 'identity-required', identity: undefined }),
-      'chatroom-v1-lobby',
-    )
-    expect(screen.queryByTestId('chatroom-dialog')).toBeNull()
-    expect(screen.queryByText('◉ 进入 AI 聊天室')).toBeNull()
-  })
-
-  it('never leaves a blocking status dialog over an already selected native Session', () => {
-    const closeRoom = vi.fn()
-    renderEntry(view({ open: true, phase: 'ready' }), 'chatroom-v1-lobby', { closeRoom })
-    expect(screen.queryByTestId('chatroom-dialog')).toBeNull()
+    fireEvent.click(screen.getByLabelText('关闭'))
     expect(closeRoom).toHaveBeenCalledOnce()
   })
 
-  it('adds identity and presence to the native Session header only', () => {
+  it('lists existing rooms and creates a new independent shared Session', () => {
+    const selectRoom = vi.fn(async () => undefined)
+    const createRoom = vi.fn(async () => undefined)
+    renderEntry(view({ open: true }), { selectRoom, createRoom })
+
+    expect(screen.getByText('AI 聊天室')).toBeTruthy()
+    expect(screen.getAllByText('@DeepSeek', { exact: false })).toHaveLength(2)
+    fireEvent.click(screen.getByTestId('chatroom-room-lobby'))
+    expect(selectRoom).toHaveBeenCalledWith('lobby')
+
+    const create = screen.getByTestId('chatroom-create')
+    expect((create as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByTestId('chatroom-title-input'), { target: { value: '项目二' } })
+    fireEvent.click(create)
+    expect(createRoom).toHaveBeenCalledWith('项目二')
+  })
+
+  it('adds identity and presence only to shared native Sessions', () => {
     const room = view({ connection: 'online', online: 2 })
     const { rerender } = render(<RoomIdentityAction
       sessionId={'chatroom-v1-lobby' as never}
       useChatroom={selector => selector(room)}
       openRoom={vi.fn()}
-      resetIdentity={vi.fn(async () => undefined)}
     />)
     expect(screen.getByText('Alice · 2 人在线')).toBeTruthy()
 
@@ -56,31 +58,31 @@ describe('native chatroom integration', () => {
       sessionId={'another-session' as never}
       useChatroom={selector => selector(room)}
       openRoom={vi.fn()}
-      resetIdentity={vi.fn(async () => undefined)}
     />)
     expect(screen.queryByText('Alice · 2 人在线')).toBeNull()
   })
 
-  it('reopens identity selection from the native Session header after dismissal', () => {
+  it('opens the room chooser from a shared Session header', () => {
     const openRoom = vi.fn()
-    const room = view({ open: false, phase: 'identity-required', identity: undefined })
+    const room = view()
     render(<RoomIdentityAction
       sessionId={'chatroom-v1-lobby' as never}
       useChatroom={selector => selector(room)}
       openRoom={openRoom}
-      resetIdentity={vi.fn(async () => undefined)}
     />)
-    fireEvent.click(screen.getByTitle('选择聊天室身份'))
+    fireEvent.click(screen.getByTitle('切换共享会话'))
     expect(openRoom).toHaveBeenCalledOnce()
   })
 })
 
 function view(patch: Partial<ChatroomView> = {}): ChatroomView {
+  const room = { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' }
   return {
     open: false,
     phase: 'ready',
     connection: 'connecting',
-    room: { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' },
+    rooms: [room],
+    room,
     identity: { participantId: 'alice-id', displayName: 'Alice' },
     online: 1,
     error: undefined,
@@ -90,16 +92,18 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
 
 function renderEntry(
   room: ChatroomView,
-  current: string | undefined,
   overrides: Partial<Parameters<typeof ChatroomEntry>[0]> = {},
 ): void {
   render(<ChatroomEntry
-    useSessions={selector => selector({ current } as never)}
+    useSessions={vi.fn() as never}
     useWorkspaces={vi.fn() as never}
     useChatroom={selector => selector(room)}
     openRoom={vi.fn()}
     closeRoom={vi.fn()}
     join={vi.fn(async () => undefined)}
+    selectRoom={vi.fn(async () => undefined)}
+    createRoom={vi.fn(async () => undefined)}
+    resetIdentity={vi.fn(async () => undefined)}
     retry={vi.fn(async () => undefined)}
     {...overrides}
   />)

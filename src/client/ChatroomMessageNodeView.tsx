@@ -1,12 +1,12 @@
 import { memo, type ComponentType, type ReactNode } from 'react'
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatroomIdentity } from '../types.js'
+import { PARTICIPANT_MARKER_END, PARTICIPANT_MARKER_START } from '../message.js'
 import type { ChatroomView } from './store.js'
 
-const PARTICIPANT_MARKER_START = '\u2063dsh-chatroom:'
-const PARTICIPANT_MARKER_END = '\u2063'
-
 type ParticipantNode = ChatNode<'user' | 'steering'>
+
+export { identifyChatroomText } from '../message.js'
 
 interface ChatroomMessageNodeInjected<Kind extends 'user' | 'steering'> {
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
@@ -22,11 +22,6 @@ export type ChatroomUserMessageNodeViewProps =
 export type ChatroomSteeringMessageNodeViewProps =
   & ChatNodeViewProps<'steering'>
   & ChatroomMessageNodeInjected<'steering'>
-
-/** Add a durable, visually invisible participant id before the display name. */
-export function identifyChatroomText(text: string, identity: ChatroomIdentity): string {
-  return `${PARTICIPANT_MARKER_START}${identity.participantId}${PARTICIPANT_MARKER_END}${identity.displayName}：${text}`
-}
 
 /** Participant-specific display projection of one durable native user node. */
 export function projectChatroomMessage(
@@ -64,8 +59,7 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
 ) {
   const room = props.useChatroom(snapshot => snapshot)
   const NativeView = props.nativeMessageView
-  if (room.room === undefined
-    || String(props.sessionId) !== room.room.sessionId
+  if (!room.rooms.some(candidate => String(props.sessionId) === candidate.sessionId)
     || room.identity === undefined) {
     return <NativeView {...props} />
   }
@@ -80,8 +74,7 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
 ) {
   const room = props.useChatroom(snapshot => snapshot)
   const NativeView = props.nativeMessageView
-  if (room.room === undefined
-    || String(props.sessionId) !== room.room.sessionId
+  if (!room.rooms.some(candidate => String(props.sessionId) === candidate.sessionId)
     || room.identity === undefined) {
     return <NativeView {...props} />
   }

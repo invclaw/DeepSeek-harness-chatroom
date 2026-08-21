@@ -2,20 +2,22 @@
 
 简体中文 | [English](README.md)
 
-这是一个独立于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 主仓库的 Web 插件。多人浏览器共享一个持久 Harness Session，同时完整复用 Harness 原生会话界面。
+这是一个独立于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 主仓库的 Web 插件。多人浏览器可以创建和切换多个持久共享 Session，同时完整复用 Harness 原生会话界面。
 
 ## 功能
 
 - 首次访问选择显示身份；后续通过不透明浏览器会话 Cookie 自动恢复
-- 所有人打开同一个持久 Session，消息、AI 回复和运行状态由 Harness 原生实时通道同步
+- 共享会话目录支持创建和切换多个相互独立的持久 Harness Session
+- 普通消息只用于人类聊天；明确输入 `@AI` 或 `@DeepSeek`（可配置名称）时才触发 Agent 回复
+- 消息、AI 回复和运行状态由 Harness 原生实时通道同步
 - 保留原生侧栏、对话/轨迹页签、思考与工具过程、Session log、模型选择和输入框
-- 原生图片发送、停止/排队/转向、斜杠命令、批准授权和问答交互不经过插件重写
-- 真人消息在进入原生 prompt 前附加显示名称，其他房间成员和模型看到同一身份
-- 会话头显示当前身份与在线人数，可随时切换身份
+- 图片先写入 Harness 原生附件存储；停止/排队/转向、斜杠命令、批准授权和问答交互继续使用原生能力
+- 真人消息在服务端写入 Session 前附加显示名称，其他房间成员和模型看到同一身份
+- 会话头显示当前身份与在线人数，可随时打开共享会话目录
 - 房间异步初始化：模型、存储或 Session 初始化失败只会让聊天室离线，不会阻碍 Harness Web 启动
 - 不修改 DeepSeek Harness 主仓库
 
-0.3.1 移除了旧版自绘全屏聊天页和“AI 可静默”提示。聊天室现在只是原生共享 Session 的身份与导航层；AI 回复行为与普通 Harness 会话一致。每个浏览器只把自己的消息放在右侧，其他参与者和 AI 的消息通过 Harness 原生消息组件显示在左侧。参与者昵称位于气泡上方，气泡内部只显示消息正文。原生共享 Session 已选中时，入口弹窗会立即关闭；身份弹窗关闭后不会自行重现，需要时可从原生会话头重新打开。
+0.4.0 在原生会话界面上增加共享会话目录。原有 `roomId`/`sessionId` 会作为第一个大厅保留，用户可以新建更多独立共享 Session。普通消息立即显示并进入同一 Session 历史，但不唤醒模型；只有 `@AI` 或 `@aiDisplayName` 才触发 DSH Agent。每个浏览器只把自己的消息放在右侧，其他参与者和 AI 在左侧；昵称位于气泡上方，气泡内部只显示消息正文。
 
 ## 环境要求
 
@@ -74,29 +76,31 @@ pnpm dsh --profile web
     cookieName: dsh_chatroom_session
     cookieMaxAgeSeconds: 31536000
     maxDisplayNameChars: 24
+    maxRoomTitleChars: 80
+    maxMessageTextChars: 20000
     sseHeartbeatMs: 15000
 ```
 
-`sessionId` 是所有成员共同打开的唯一持久 Session。只有在确实需要全新 AI 上下文时才修改它。插件升级不会新建每位成员各自的会话。
+`sessionId` 是升级前大厅继续使用的持久 Session。通过界面新建的共享会话会获得独立 Session 和上下文，并保存在同一个 `chatroom` storage domain 中。新增 `rooms` 表不改变 domain 版本，已有身份和大厅数据可直接读取。
 
 API 路由会立即注册，在存储和 Session 就绪前返回 `503`。初始化始终在后台运行，失败被限制在插件内部，Harness Web 仍可正常运行。
 
 ## 浏览器身份与安全
 
-浏览器收到随机 256 位令牌，Cookie 使用 `HttpOnly`、`SameSite=Strict`，且仅作用于聊天室 API。服务端只保存令牌的 SHA-256 摘要。刷新页面或重启 Harness 会恢复同一身份，直到 Cookie 过期或用户点击会话头的身份按钮。
+浏览器收到随机 256 位令牌，Cookie 使用 `HttpOnly`、`SameSite=Strict`，且仅作用于聊天室 API。服务端只保存令牌的 SHA-256 摘要。刷新页面或重启 Harness 会恢复同一身份，直到 Cookie 过期或用户在共享会话目录中更换身份。
 
 显示名称只是房间展示身份，不是账号认证。所有能进入房间的人都能向所选 Agent preset 提交输入，并可能使用该 preset 提供的工具。面向非完全可信成员时，应使用受限 preset 和范围尽可能小的 `cwd`。
 
 ## 验收
 
-1. 打开 Harness Web，点击“进入 AI 聊天室”并填写 `Alice`。
-2. 页面应切换到现有原生 Session，保留侧栏、对话/轨迹、原生输入框和 Session log；不应出现旧版全屏聊天页。
-3. 用无痕窗口或另一个浏览器填写 `Bob`，两个页面应打开相同 `sessionId`。
-4. Alice 和 Bob 分别发送文字；消息应显示为 `Alice：…`、`Bob：…`，两个页面顺序一致且 AI 正常回复。
-5. 发送图片并要求 AI 描述；图片与回复应使用原生消息节点显示。
-6. 执行 `/new` 等内置斜杠命令；命令应由 Harness 原生命令链处理。
-7. 触发需要批准的工具；原生批准面板应出现在输入区并可完成授权。
-8. 刷新和重启 Harness；身份与共享 Session 上下文应继续恢复。
+1. 打开 Harness Web，点击“共享会话”并填写 `Alice`，选择已有大厅。
+2. 页面应切换到原生 Session，保留侧栏、对话/轨迹、原生输入框和 Session log；不应出现自绘聊天页。
+3. 再打开共享会话目录，创建“项目二”；页面应进入新的原生 Session，侧栏能在它和大厅之间切换，历史互不混合。
+4. 用无痕窗口或另一个浏览器填写 `Bob`，进入同一共享会话。
+5. Alice 发送普通文字，两个页面应立即同步，且 AI 不回复；Alice 再发送 `@AI 请总结`，AI 应在原生会话中回复。
+6. 发送普通图片时只同步图片；发送带 `@AI` 的图片请求时，图片与 AI 回复都使用原生消息节点显示。
+7. 执行 `/new` 等内置斜杠命令，并完成批准授权、问答交互、停止/排队/转向等原生流程。
+8. 刷新和重启 Harness；身份、共享会话目录和各 Session 上下文应继续恢复。
 
 健康检查位于 `/plugins/deepseek-harness-chatroom/api/health`。直接部署 Harness Web 时也可使用 `/chatroom/api/health`。房间就绪时返回：
 

@@ -1,7 +1,7 @@
 import { isAbsolute } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 
-/** Deployment configuration for one shared AI room. */
+/** Deployment configuration for shared AI rooms. */
 export interface Config {
   roomId: string
   roomTitle: string
@@ -12,6 +12,8 @@ export interface Config {
   cookieName: string
   cookieMaxAgeSeconds: number
   maxDisplayNameChars: number
+  maxRoomTitleChars: number
+  maxMessageTextChars: number
   sseHeartbeatMs: number
 }
 
@@ -25,6 +27,8 @@ export const Config: z<Config> = z.object({
   cookieName: z.string().pattern(/^[A-Za-z0-9_]+$/u).default('dsh_chatroom_session'),
   cookieMaxAgeSeconds: z.number().step(1).min(60).max(31_536_000).default(31_536_000),
   maxDisplayNameChars: z.number().step(1).min(1).max(80).default(24),
+  maxRoomTitleChars: z.number().step(1).min(1).max(160).default(80),
+  maxMessageTextChars: z.number().step(1).min(1).max(200_000).default(20_000),
   sseHeartbeatMs: z.number().step(1).min(5_000).max(120_000).default(15_000),
 })
 

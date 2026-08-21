@@ -26,7 +26,37 @@ export interface ChatroomInfo {
 /** Initial identity lookup result. */
 export interface ChatroomSessionResponse {
     readonly identity: ChatroomIdentity | null;
+    readonly rooms: readonly ChatroomInfo[];
+    /** Configured legacy room retained during rolling browser bundle upgrades. */
     readonly room: ChatroomInfo;
+}
+/** Room directory response. */
+export interface ChatroomRoomsResponse {
+    readonly rooms: readonly ChatroomInfo[];
+}
+/** One selected or newly created room. */
+export interface ChatroomRoomResponse {
+    readonly room: ChatroomInfo;
+}
+export type ChatroomPromptContentPart = {
+    readonly type: 'text';
+    readonly text: string;
+} | {
+    readonly type: 'image';
+    readonly mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+    readonly data: string;
+    readonly name?: string;
+};
+/** Browser submission routed through human-first room admission. */
+export interface ChatroomPromptRequest {
+    readonly roomId: string;
+    readonly mode: 'queue' | 'steer';
+    readonly content: readonly ChatroomPromptContentPart[];
+}
+/** Whether one accepted room message woke the AI. */
+export interface ChatroomPromptResponse {
+    readonly accepted: true;
+    readonly aiTriggered: boolean;
 }
 /** Full synchronization point sent when one SSE connection opens. */
 export interface ChatroomSnapshotEvent {

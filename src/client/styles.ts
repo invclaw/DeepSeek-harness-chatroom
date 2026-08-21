@@ -42,6 +42,7 @@ export const CHATROOM_STYLES = `
 
 .dsh-chatroom-card h2 { margin: 0 0 10px; font-size: 22px; }
 .dsh-chatroom-card p { margin: 0 0 20px; color: var(--text-secondary, #6b7280); line-height: 1.6; }
+.dsh-chatroom-card code { color: var(--text-primary, #111827); font-size: .92em; }
 
 .dsh-chatroom-close {
   position: absolute;
@@ -84,6 +85,78 @@ export const CHATROOM_STYLES = `
 
 .dsh-chatroom-button:disabled { cursor: not-allowed; opacity: .45; }
 .dsh-chatroom-error { margin-top: 12px; color: #d14343; font-size: 13px; }
+
+.dsh-chatroom-room-card { width: min(480px, calc(100vw - 48px)); }
+
+.dsh-chatroom-room-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(340px, 42vh);
+  overflow-y: auto;
+}
+
+.dsh-chatroom-room-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  border: 1px solid var(--border-primary, #e5e7eb);
+  border-radius: 10px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #111827);
+  padding: 11px 13px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dsh-chatroom-room-item:hover,
+.dsh-chatroom-room-item[data-active="true"] {
+  border-color: var(--brand-primary, #4f7cff);
+  background: color-mix(in srgb, var(--brand-primary, #4f7cff) 7%, transparent);
+}
+
+.dsh-chatroom-room-item small { color: var(--text-secondary, #6b7280); }
+
+.dsh-chatroom-create {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.dsh-chatroom-create-button {
+  border: 0;
+  border-radius: 10px;
+  background: var(--brand-primary, #4f7cff);
+  color: #fff;
+  padding: 0 18px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dsh-chatroom-create-button:disabled { cursor: not-allowed; opacity: .45; }
+
+.dsh-chatroom-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  color: var(--text-secondary, #6b7280);
+  font-size: 13px;
+}
+
+.dsh-chatroom-card-footer button {
+  border: 0;
+  background: transparent;
+  color: var(--brand-primary, #4f7cff);
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
 
 .dsh-chatroom-identity-action {
   display: inline-flex;

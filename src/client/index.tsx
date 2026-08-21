@@ -37,8 +37,13 @@ export function apply(ctx: ClientContext): void {
     style.textContent = CHATROOM_STYLES
     document.head.append(style)
     const restorePrompt = installNativePromptIdentity(connection.api, store)
-    const unsubscribeSessions = sessions.list.subscribe(store.resumeOpen)
-    void store.start()
+    const syncSession = () => {
+      store.resumeOpen()
+      const current = sessions.list.getSnapshot().current
+      store.activateSession(current === undefined ? undefined : String(current))
+    }
+    const unsubscribeSessions = sessions.list.subscribe(syncSession)
+    void store.start().then(syncSession)
     return () => {
       unsubscribeSessions()
       restorePrompt()
@@ -56,6 +61,9 @@ export function apply(ctx: ClientContext): void {
       openRoom: store.openRoom,
       closeRoom: store.closeRoom,
       join: store.join,
+      selectRoom: store.selectRoom,
+      createRoom: store.createRoom,
+      resetIdentity: store.resetIdentity,
       retry: store.retry,
     }),
   }, ChatroomEntry))
@@ -67,7 +75,6 @@ export function apply(ctx: ClientContext): void {
     inject: () => ({
       hooks: { chatroom: store },
       openRoom: store.openRoom,
-      resetIdentity: store.resetIdentity,
     }),
   }, RoomIdentityAction))
 

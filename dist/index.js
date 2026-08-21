@@ -11,6 +11,8 @@ var Config = z.object({
   cookieName: z.string().pattern(/^[A-Za-z0-9_]+$/u).default("dsh_chatroom_session"),
   cookieMaxAgeSeconds: z.number().step(1).min(60).max(31536e3).default(31536e3),
   maxDisplayNameChars: z.number().step(1).min(1).max(80).default(24),
+  maxRoomTitleChars: z.number().step(1).min(1).max(160).default(80),
+  maxMessageTextChars: z.number().step(1).min(1).max(2e5).default(2e4),
   sseHeartbeatMs: z.number().step(1).min(5e3).max(12e4).default(15e3)
 });
 function validateConfig(config) {
@@ -52,6 +54,8 @@ function matchChatroomApi(pathname) {
 // src/room.ts
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { resolveSessionPreset } from "@deepseek-ai/dsh-agent-presets";
+import { AttachmentError } from "@deepseek-ai/dsh-attachment";
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
 
 // src/domain.ts
@@ -78,14 +82,47 @@ var messageSchema = z2.object({
   inReplyTo: z2.string().min(1).optional(),
   aiProcessed: z2.boolean().optional()
 });
+var roomSchema = z2.object({
+  id: z2.string().min(1),
+  title: z2.string().min(1),
+  aiDisplayName: z2.string().min(1),
+  sessionId: z2.string().min(1),
+  createdAt: nonNegativeSafeInteger,
+  createdBy: z2.string().min(1)
+});
 var chatroomDomainSpec = defineDomain({
   name: "chatroom",
   version: 0,
   tables: {
     identities: domainTable(identitySchema),
-    messages: domainTable(messageSchema)
+    messages: domainTable(messageSchema),
+    rooms: domainTable(roomSchema)
   }
 });
+
+// src/message.ts
+var PARTICIPANT_MARKER_START = "\u2063dsh-chatroom:";
+var PARTICIPANT_MARKER_END = "\u2063";
+function identifyChatroomText(text, identity) {
+  return `${PARTICIPANT_MARKER_START}${identity.participantId}${PARTICIPANT_MARKER_END}${identity.displayName}\uFF1A${text}`;
+}
+function identifyPrompt(content, identity) {
+  let identified = false;
+  const output = content.map((part) => {
+    if (identified || part.type !== "text") return part;
+    identified = true;
+    return { ...part, text: identifyChatroomText(part.text, identity) };
+  });
+  return identified ? output : [{ type: "text", text: identifyChatroomText("\u53D1\u9001\u4E86\u4E00\u5F20\u56FE\u7247\u3002", identity) }, ...output];
+}
+function mentionsAi(content, aiDisplayName) {
+  const text = content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+  return [aiDisplayName, "AI"].some((name2) => mentionPattern(name2).test(text));
+}
+function mentionPattern(name2) {
+  const escaped = name2.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`@${escaped}(?=$|[^\\p{L}\\p{N}_])`, "iu");
+}
 
 // src/room.ts
 var ChatroomInputError = class extends Error {
@@ -99,43 +136,67 @@ var ChatroomRuntime = class {
   config;
   domain;
   identities;
-  binding;
+  roomRecords;
+  states = /* @__PURE__ */ new Map();
   ready = false;
   stopping = false;
-  clients = /* @__PURE__ */ new Set();
-  /** Public metadata for this configured room. */
+  /** Public metadata for the configured legacy room. */
   get room() {
-    return {
-      id: this.config.roomId,
-      title: this.config.roomTitle,
-      aiDisplayName: this.config.aiDisplayName,
-      sessionId: this.config.sessionId
-    };
+    return this.requireRoom(this.config.roomId);
   }
-  /** Whether identity persistence and the shared Session are ready. */
+  /** Ordered public room directory. */
+  get rooms() {
+    const records = [...this.states.values()].map((state) => state.record);
+    records.sort((left, right) => {
+      if (left.id === this.config.roomId) return -1;
+      if (right.id === this.config.roomId) return 1;
+      return left.createdAt - right.createdAt || left.id.localeCompare(right.id);
+    });
+    return records.map(publicRoom);
+  }
+  /** Maximum accepted JSON body for one text-and-image room submission. */
+  get maxPromptRequestBytes() {
+    const { maxImagesPerMessage, maxMessageImageBytes } = this.ctx.attachments.imageLimits;
+    const encodedImages = Math.ceil(maxMessageImageBytes / 3) * 4;
+    return encodedImages + this.config.maxMessageTextChars * 4 + maxImagesPerMessage * 2048 + 8192;
+  }
+  /** Whether identity persistence and the configured shared Session are ready. */
   get isReady() {
     return this.ready && !this.stopping;
   }
-  /** Open identity storage and acquire the shared Session without blocking Harness startup. */
+  /** Open storage, seed the original room, and acquire its Session without blocking Harness startup. */
   async start() {
     const domain = await this.ctx.storageDomain.open(chatroomDomainSpec);
     this.domain = domain;
     this.identities = domain.table("identities");
-    this.binding = await this.acquireAgent();
-    await this.attachWorkspace();
+    this.roomRecords = domain.table("rooms");
+    await this.seedConfiguredRoom();
+    for (const [, record] of this.requireRoomRecords().entries()) {
+      this.states.set(record.id, newRoomState(record));
+    }
+    await this.ensureRoom(this.config.roomId);
     this.ready = true;
   }
-  /** Stop intake, close presence streams, and release owned resources. */
+  /** Stop intake, close presence streams, and release every activated room. */
   async stop() {
     if (this.stopping) return;
     this.stopping = true;
     this.ready = false;
-    for (const client of this.clients) client.response.end();
-    this.clients.clear();
-    await this.binding?.release();
-    this.binding = void 0;
+    for (const state of this.states.values()) {
+      for (const client of state.clients) client.response.end();
+      state.clients.clear();
+    }
+    await Promise.allSettled([...this.states.values()].map(async (state) => {
+      await state.admission;
+      await state.activation?.catch(() => void 0);
+      await state.binding?.release();
+      state.binding = void 0;
+    }));
+    this.states.clear();
     await this.domain?.close();
     this.domain = void 0;
+    this.identities = void 0;
+    this.roomRecords = void 0;
   }
   /** Resolve an opaque cookie token to its durable identity. */
   identity(token) {
@@ -163,29 +224,125 @@ var ChatroomRuntime = class {
     this.assertReady();
     if (token !== void 0) await this.requireIdentities().delete(tokenHash(token));
   }
-  /** Attach one authenticated presence client and send the current room baseline. */
-  subscribe(identity, response) {
+  /** Create and activate one independent shared Harness Session. */
+  async createRoom(title, identity) {
     this.assertReady();
+    const id = randomUUID();
+    const record = {
+      id,
+      title: normalizeRoomTitle(title, this.config.maxRoomTitleChars),
+      aiDisplayName: this.config.aiDisplayName,
+      sessionId: `chatroom-v1-${id}`,
+      createdAt: Date.now(),
+      createdBy: identity.participantId
+    };
+    await this.requireRoomRecords().put(id, record);
+    const state = newRoomState(record);
+    this.states.set(id, state);
+    try {
+      await this.ensureRoom(id);
+      return publicRoom(record);
+    } catch (error) {
+      this.states.delete(id);
+      await this.requireRoomRecords().delete(id);
+      throw error;
+    }
+  }
+  /** Activate an existing room and return its public metadata. */
+  async selectRoom(roomId) {
+    this.assertReady();
+    await this.ensureRoom(roomId);
+    return this.requireRoom(roomId);
+  }
+  /** Append human chat immediately; wake the Agent only for an explicit AI mention. */
+  async submit(roomId, identity, content, mode) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    const task = state.admission.then(async () => {
+      const binding = await this.ensureRoom(roomId);
+      const aiTriggered = mentionsAi(content, state.record.aiDisplayName);
+      const { provider, model: modelId } = binding.agent.options;
+      if (aiTriggered && provider !== void 0 && modelId !== void 0 && content.some((part) => part.type === "image")) {
+        const model = await this.ctx.llm.resolveModelInfo(provider, modelId);
+        if (model.inputModalities !== void 0 && !model.inputModalities.includes("image")) {
+          throw new ChatroomInputError(`\u6A21\u578B ${JSON.stringify(modelId)} \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165\u3002`);
+        }
+      }
+      const durable = await this.durableContent(identifyPrompt(content, identity));
+      const message = createUserMessage({ content: durable, source: { kind: "user" } });
+      if (!aiTriggered) {
+        binding.agent.session.append("user/message", message, { surfaceOp: "append" });
+      } else if (mode === "steer") {
+        binding.agent.steer(message);
+      } else {
+        binding.agent.followup(message);
+      }
+      return { accepted: true, aiTriggered };
+    });
+    state.admission = task.then(() => void 0, () => void 0);
+    return await task;
+  }
+  /** Attach one authenticated presence client to one room. */
+  subscribe(roomId, identity, response) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    if (state.binding === void 0) throw new Error(`chatroom room ${JSON.stringify(roomId)} is not active`);
     const client = { participantId: identity.participantId, response };
-    this.clients.add(client);
+    state.clients.add(client);
     const snapshot = {
       type: "snapshot",
-      room: this.room,
+      room: publicRoom(state.record),
       identity,
-      online: this.onlineCount()
+      online: onlineCount(state)
     };
     writeSse(response, snapshot);
-    this.broadcastPresence();
+    this.broadcastPresence(state);
     let disposed = false;
     return () => {
       if (disposed) return;
       disposed = true;
-      this.clients.delete(client);
-      this.broadcastPresence();
+      state.clients.delete(client);
+      this.broadcastPresence(state);
     };
   }
-  async acquireAgent() {
-    const id = SessionId(this.config.sessionId);
+  async seedConfiguredRoom() {
+    const records = this.requireRoomRecords();
+    const existing = records.get(this.config.roomId);
+    const configured = {
+      id: this.config.roomId,
+      title: this.config.roomTitle,
+      aiDisplayName: this.config.aiDisplayName,
+      sessionId: this.config.sessionId,
+      createdAt: existing?.createdAt ?? Date.now(),
+      createdBy: existing?.createdBy ?? "system"
+    };
+    if (existing === void 0 || existing.title !== configured.title || existing.aiDisplayName !== configured.aiDisplayName || existing.sessionId !== configured.sessionId) {
+      await records.put(configured.id, configured);
+    }
+  }
+  async ensureRoom(roomId) {
+    const state = this.requireState(roomId);
+    if (state.binding !== void 0) return state.binding;
+    state.activation ??= this.activateRoom(state).then((binding) => {
+      state.binding = binding;
+      return binding;
+    }).finally(() => {
+      state.activation = void 0;
+    });
+    return await state.activation;
+  }
+  async activateRoom(state) {
+    const binding = await this.acquireAgent(state.record.sessionId);
+    try {
+      await this.attachWorkspace(state.record.sessionId);
+      return binding;
+    } catch (error) {
+      await binding.release();
+      throw error;
+    }
+  }
+  async acquireAgent(sessionId) {
+    const id = SessionId(sessionId);
     const live = this.ctx.agents.get(id);
     if (live !== void 0) return borrowAgent(live);
     const persisted = (await this.ctx.sessionPersistence.list()).some((header) => header.id === id);
@@ -223,30 +380,81 @@ var ChatroomRuntime = class {
       throw error;
     }
   }
-  /** Ensure the shared Session uses the same native Workspace navigation as ordinary conversations. */
-  async attachWorkspace() {
+  /** Ensure one shared Session uses native Workspace navigation. */
+  async attachWorkspace(sessionId) {
     const workspace = await this.ctx.workspaceRegistry.resolveByPath(this.config.cwd) ?? await this.ctx.workspaceRegistry.create(this.config.cwd);
-    await workspace.attachSession(SessionId(this.config.sessionId));
+    await workspace.attachSession(SessionId(sessionId));
   }
-  onlineCount() {
-    return new Set([...this.clients].map((client) => client.participantId)).size;
-  }
-  broadcast(event) {
-    for (const client of [...this.clients]) {
-      if (!writeSse(client.response, event)) this.clients.delete(client);
+  async durableContent(content) {
+    const prepared = content.map((part) => part.type === "text" ? part : { part, data: decodeBase64(part.data) });
+    const images = prepared.filter((part) => "data" in part);
+    const mediaTypes = this.ctx.attachments.imageLimits.mediaTypes;
+    for (const image of images) {
+      if (!mediaTypes.includes(image.part.mediaType)) {
+        throw new ChatroomInputError(`\u4E0D\u652F\u6301\u56FE\u7247\u683C\u5F0F ${image.part.mediaType}\u3002`);
+      }
     }
+    let refs = [];
+    try {
+      refs = await this.ctx.attachments.saveImages(images.map((image) => ({
+        data: image.data,
+        mediaType: image.part.mediaType,
+        ...image.part.name === void 0 ? {} : { name: image.part.name }
+      })));
+    } catch (error) {
+      if (error instanceof AttachmentError) throw new ChatroomInputError(`\u56FE\u7247\u65E0\u6CD5\u53D1\u9001\uFF1A${error.message}`);
+      throw error;
+    }
+    const blocks = [];
+    let imageIndex = 0;
+    for (const item of prepared) {
+      if (!("data" in item)) {
+        blocks.push({ type: "text", text: item.text });
+        continue;
+      }
+      const attachment = refs[imageIndex++];
+      if (attachment === void 0) throw new Error("chatroom attachment batch lost an image reference");
+      blocks.push({ type: "image", attachment });
+    }
+    return blocks;
   }
-  broadcastPresence() {
-    this.broadcast({ type: "presence", online: this.onlineCount() });
+  broadcastPresence(state) {
+    this.broadcast(state, { type: "presence", online: onlineCount(state) });
+  }
+  broadcast(state, event) {
+    for (const client of [...state.clients]) {
+      if (!writeSse(client.response, event)) state.clients.delete(client);
+    }
   }
   assertReady() {
     if (!this.isReady) throw new Error("chatroom is not ready");
+  }
+  requireRoom(roomId) {
+    return publicRoom(this.requireState(roomId).record);
+  }
+  requireState(roomId) {
+    const state = this.states.get(roomId);
+    if (state === void 0) throw new ChatroomInputError("\u5171\u4EAB\u4F1A\u8BDD\u4E0D\u5B58\u5728\u3002");
+    return state;
   }
   requireIdentities() {
     if (this.identities === void 0) throw new Error("chatroom identity storage is unavailable");
     return this.identities;
   }
+  requireRoomRecords() {
+    if (this.roomRecords === void 0) throw new Error("chatroom room storage is unavailable");
+    return this.roomRecords;
+  }
 };
+function newRoomState(record) {
+  return {
+    record,
+    clients: /* @__PURE__ */ new Set(),
+    binding: void 0,
+    activation: void 0,
+    admission: Promise.resolve()
+  };
+}
 function ownAgent(handle) {
   return { agent: handle.agent, release: () => handle.dispose() };
 }
@@ -256,6 +464,14 @@ function borrowAgent(agent) {
 function publicIdentity(record) {
   return { participantId: record.participantId, displayName: record.displayName };
 }
+function publicRoom(record) {
+  return {
+    id: record.id,
+    title: record.title,
+    aiDisplayName: record.aiDisplayName,
+    sessionId: record.sessionId
+  };
+}
 function normalizeDisplayName(value, maxChars) {
   const normalized = value.trim().replace(/\s+/gu, " ");
   if (normalized === "") throw new ChatroomInputError("\u8BF7\u8F93\u5165\u8EAB\u4EFD\u540D\u79F0\u3002");
@@ -263,8 +479,25 @@ function normalizeDisplayName(value, maxChars) {
   if (/\p{Cc}/u.test(normalized)) throw new ChatroomInputError("\u8EAB\u4EFD\u540D\u79F0\u4E0D\u80FD\u5305\u542B\u63A7\u5236\u5B57\u7B26\u3002");
   return normalized;
 }
+function normalizeRoomTitle(value, maxChars) {
+  const normalized = value.trim().replace(/\s+/gu, " ");
+  if (normalized === "") throw new ChatroomInputError("\u8BF7\u8F93\u5165\u5171\u4EAB\u4F1A\u8BDD\u540D\u79F0\u3002");
+  if ([...normalized].length > maxChars) throw new ChatroomInputError(`\u5171\u4EAB\u4F1A\u8BDD\u540D\u79F0\u4E0D\u80FD\u8D85\u8FC7 ${maxChars} \u4E2A\u5B57\u7B26\u3002`);
+  if (/\p{Cc}/u.test(normalized)) throw new ChatroomInputError("\u5171\u4EAB\u4F1A\u8BDD\u540D\u79F0\u4E0D\u80FD\u5305\u542B\u63A7\u5236\u5B57\u7B26\u3002");
+  return normalized;
+}
+function decodeBase64(data) {
+  const decoded = Buffer.from(data, "base64");
+  if (data.length === 0 || decoded.toString("base64") !== data) {
+    throw new ChatroomInputError("\u56FE\u7247\u6570\u636E\u4E0D\u662F\u6709\u6548\u7684 base64\u3002");
+  }
+  return new Uint8Array(decoded);
+}
 function tokenHash(token) {
   return createHash("sha256").update(token).digest("hex");
+}
+function onlineCount(state) {
+  return new Set([...state.clients].map((client) => client.participantId)).size;
 }
 function writeSse(response, event) {
   if (response.destroyed || response.writableEnded) return false;
@@ -291,8 +524,8 @@ var ChatroomHttpController = class {
   /** Dispatch one request under a registered chatroom API prefix. */
   async handle(request, response) {
     try {
-      const pathname = new URL(request.url ?? "/", "http://chatroom.local").pathname;
-      const route = matchChatroomApi(pathname);
+      const url = new URL(request.url ?? "/", "http://chatroom.local");
+      const route = matchChatroomApi(url.pathname);
       if (route === void 0) {
         json(response, 404, { error: "\u63A5\u53E3\u4E0D\u5B58\u5728\u3002" });
         return;
@@ -309,8 +542,20 @@ var ChatroomHttpController = class {
         await this.handleSession(request, response, route.prefix);
         return;
       }
+      if (route.endpoint === "/rooms") {
+        await this.handleRooms(request, response);
+        return;
+      }
+      if (route.endpoint === "/rooms/select") {
+        await this.handleRoomSelection(request, response);
+        return;
+      }
+      if (route.endpoint === "/prompt") {
+        await this.handlePrompt(request, response);
+        return;
+      }
       if (route.endpoint === "/events" && request.method === "GET") {
-        this.handleEvents(request, response);
+        await this.handleEvents(request, response, url.searchParams);
         return;
       }
       json(response, 404, { error: "\u63A5\u53E3\u4E0D\u5B58\u5728\u3002" });
@@ -330,30 +575,25 @@ var ChatroomHttpController = class {
   async handleSession(request, response, cookiePath) {
     const token = this.token(request);
     if (request.method === "GET") {
-      const payload = {
-        identity: this.runtime.identity(token) ?? null,
-        room: this.runtime.room
-      };
-      json(response, 200, payload);
+      json(response, 200, this.sessionPayload(this.runtime.identity(token) ?? null));
       return;
     }
     if (request.method === "POST") {
       assertSameOrigin(request);
       const existing = this.runtime.identity(token);
       if (existing !== void 0) {
-        json(response, 200, { identity: existing, room: this.runtime.room });
+        json(response, 200, this.sessionPayload(existing));
         return;
       }
-      const body = await readJson(request, requestLimit(this.config));
-      const displayName = fieldString(body, "displayName");
-      const created = await this.runtime.createIdentity(displayName);
+      const body = await readJson(request, smallRequestLimit(this.config));
+      const created = await this.runtime.createIdentity(fieldString(body, "displayName"));
       response.setHeader("Set-Cookie", sessionCookie(
         this.config.cookieName,
         created.token,
         this.config.cookieMaxAgeSeconds,
         cookiePath
       ));
-      json(response, 201, { identity: created.identity, room: this.runtime.room });
+      json(response, 201, this.sessionPayload(created.identity));
       return;
     }
     if (request.method === "DELETE") {
@@ -366,16 +606,59 @@ var ChatroomHttpController = class {
     }
     methodNotAllowed(response, "GET, POST, DELETE");
   }
-  handleEvents(request, response) {
+  async handleRooms(request, response) {
+    if (request.method === "GET") {
+      json(response, 200, { rooms: this.runtime.rooms });
+      return;
+    }
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "GET, POST");
+      return;
+    }
+    assertSameOrigin(request);
     const identity = this.requireIdentity(request, response);
     if (identity === void 0) return;
+    const body = await readJson(request, smallRequestLimit(this.config));
+    const room = await this.runtime.createRoom(fieldString(body, "title"), identity);
+    json(response, 201, { room });
+  }
+  async handleRoomSelection(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    if (this.requireIdentity(request, response) === void 0) return;
+    const body = await readJson(request, smallRequestLimit(this.config));
+    const room = await this.runtime.selectRoom(fieldString(body, "roomId"));
+    json(response, 200, { room });
+  }
+  async handlePrompt(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const body = await readJson(request, this.runtime.maxPromptRequestBytes);
+    const prompt = promptRequest(body, this.config);
+    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode);
+    json(response, 200, result);
+  }
+  async handleEvents(request, response, search) {
+    const identity = this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const roomId = search.get("roomId");
+    if (roomId === null || roomId === "") throw new ChatroomInputError("\u7F3A\u5C11\u5171\u4EAB\u4F1A\u8BDD\u7F16\u53F7\u3002");
+    await this.runtime.selectRoom(roomId);
     response.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no"
     });
-    const unsubscribe = this.runtime.subscribe(identity, response);
+    const unsubscribe = this.runtime.subscribe(roomId, identity, response);
     const heartbeat = setInterval(() => {
       if (!response.destroyed && !response.writableEnded) response.write(": heartbeat\n\n");
     }, this.config.sseHeartbeatMs);
@@ -383,6 +666,9 @@ var ChatroomHttpController = class {
       clearInterval(heartbeat);
       unsubscribe();
     });
+  }
+  sessionPayload(identity) {
+    return { identity, rooms: this.runtime.rooms, room: this.runtime.room };
   }
   requireIdentity(request, response) {
     const identity = this.runtime.identity(this.token(request));
@@ -447,8 +733,56 @@ function fieldString(body, field) {
   if (typeof value !== "string") throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
   return value;
 }
-function requestLimit(config) {
-  return config.maxDisplayNameChars * 4 + 1024;
+function promptRequest(body, config) {
+  const roomId = fieldString(body, "roomId");
+  const mode = body.mode;
+  if (mode !== "queue" && mode !== "steer") throw new ChatroomInputError("\u5B57\u6BB5 mode \u5FC5\u987B\u662F queue \u6216 steer\u3002");
+  if (!Array.isArray(body.content) || body.content.length === 0) {
+    throw new ChatroomInputError("\u6D88\u606F\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A\u3002");
+  }
+  const content = [];
+  let textChars = 0;
+  for (const raw of body.content) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new ChatroomInputError("\u6D88\u606F\u5185\u5BB9\u683C\u5F0F\u65E0\u6548\u3002");
+    }
+    const part = raw;
+    if (part.type === "text") {
+      if (typeof part.text !== "string") throw new ChatroomInputError("\u6587\u672C\u6D88\u606F\u65E0\u6548\u3002");
+      textChars += [...part.text].length;
+      content.push({ type: "text", text: part.text });
+      continue;
+    }
+    if (part.type === "image") {
+      if (!isImageMediaType(part.mediaType) || typeof part.data !== "string") {
+        throw new ChatroomInputError("\u56FE\u7247\u6D88\u606F\u65E0\u6548\u3002");
+      }
+      if (part.name !== void 0 && typeof part.name !== "string") {
+        throw new ChatroomInputError("\u56FE\u7247\u540D\u79F0\u65E0\u6548\u3002");
+      }
+      content.push({
+        type: "image",
+        mediaType: part.mediaType,
+        data: part.data,
+        ...part.name === void 0 ? {} : { name: part.name }
+      });
+      continue;
+    }
+    throw new ChatroomInputError("\u6D88\u606F\u5185\u5BB9\u7C7B\u578B\u65E0\u6548\u3002");
+  }
+  if (textChars > config.maxMessageTextChars) {
+    throw new ChatroomInputError(`\u6D88\u606F\u6587\u672C\u4E0D\u80FD\u8D85\u8FC7 ${config.maxMessageTextChars} \u4E2A\u5B57\u7B26\u3002`);
+  }
+  if (!content.some((part) => part.type === "image" || part.text.trim() !== "")) {
+    throw new ChatroomInputError("\u6D88\u606F\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A\u3002");
+  }
+  return { roomId, mode, content };
+}
+function isImageMediaType(value) {
+  return value === "image/png" || value === "image/jpeg" || value === "image/webp" || value === "image/gif";
+}
+function smallRequestLimit(config) {
+  return Math.max(config.maxDisplayNameChars, config.maxRoomTitleChars) * 4 + 1024;
 }
 
 // src/index.ts
@@ -457,6 +791,8 @@ var inject = [
   "agentDefaultModel",
   "agentPresets",
   "agents",
+  "attachments",
+  "llm",
   "sessionPersistence",
   "sessions",
   "storageDomain",

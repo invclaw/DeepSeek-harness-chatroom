@@ -10,30 +10,16 @@ window.__ModuleLoader__.load({
 		let react = require("react");
 		let react_jsx_runtime = require("react/jsx-runtime");
 		//#region src/client/ChatroomEntry.tsx
-		/** Additive room launcher plus the first-visit identity dialog. */
+		/** Additive shared-session launcher, identity setup, and room directory. */
 		function ChatroomEntry(props) {
 			const room = props.useChatroom((snapshot) => snapshot);
-			const currentSession = props.useSessions((snapshot) => snapshot.current);
-			const selected = room.room !== void 0 && String(currentSession) === room.room.sessionId;
-			(0, react.useEffect)(() => {
-				if (selected && room.open && room.phase === "ready") props.closeRoom();
-			}, [
-				props.closeRoom,
-				room.open,
-				room.phase,
-				selected
-			]);
-			if (selected && room.phase === "ready") return null;
-			if (!room.open) {
-				if (selected) return null;
-				return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					className: "dsh-chatroom-launcher",
-					"data-dsh-chatroom-entry": true,
-					type: "button",
-					onClick: props.openRoom,
-					children: "◉ 进入 AI 聊天室"
-				});
-			}
+			if (!room.open) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+				className: "dsh-chatroom-launcher",
+				"data-dsh-chatroom-entry": true,
+				type: "button",
+				onClick: props.openRoom,
+				children: "◉ 共享会话"
+			});
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: "dsh-chatroom-dialog-layer",
 				"data-dsh-chatroom-entry": true,
@@ -45,19 +31,19 @@ window.__ModuleLoader__.load({
 						close: props.closeRoom
 					}),
 					room.phase === "loading" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusCard, {
-						title: "正在进入聊天室",
-						detail: "正在恢复此浏览器的身份与共享会话…",
+						title: "正在载入共享会话",
+						detail: "正在恢复此浏览器的身份与会话目录…",
 						close: props.closeRoom
 					}),
-					room.phase === "ready" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusCard, {
-						title: "正在打开共享会话",
-						detail: "房间 Session 正在加入 Harness 会话列表，完成后会自动打开。",
-						action: "重试",
-						onAction: props.retry,
+					room.phase === "ready" && room.identity !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(RoomStep, {
+						room,
+						selectRoom: props.selectRoom,
+						createRoom: props.createRoom,
+						resetIdentity: props.resetIdentity,
 						close: props.closeRoom
 					}),
 					room.phase === "error" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusCard, {
-						title: "聊天室暂时不可用",
+						title: "共享会话暂时不可用",
 						detail: room.error ?? "请稍后重试。",
 						action: "重试",
 						onAction: props.retry,
@@ -82,8 +68,8 @@ window.__ModuleLoader__.load({
 						onClick: close,
 						children: "×"
 					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", { children: room.room?.title ?? "AI 聊天室" }),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: "选择你在共享会话中显示的名字。进入后使用 Harness 原生对话界面。" }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", { children: "共享会话" }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: "选择你在共享会话中显示的名字。进入后继续使用 Harness 原生对话界面。" }),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
 						className: "dsh-chatroom-name",
 						"data-testid": "chatroom-identity-input",
@@ -100,7 +86,82 @@ window.__ModuleLoader__.load({
 						"data-testid": "chatroom-join",
 						type: "submit",
 						disabled: name.trim() === "",
-						children: "进入共享会话"
+						children: "继续"
+					}),
+					room.error !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						className: "dsh-chatroom-error",
+						role: "alert",
+						children: room.error
+					})
+				]
+			});
+		}
+		function RoomStep({ room, selectRoom, createRoom, resetIdentity, close }) {
+			const [title, setTitle] = (0, react.useState)("");
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "dsh-chatroom-card dsh-chatroom-room-card",
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						className: "dsh-chatroom-close",
+						"aria-label": "关闭",
+						type: "button",
+						onClick: close,
+						children: "×"
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", { children: "共享会话" }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("p", { children: [
+						"普通消息只在人类之间聊天；输入 ",
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("code", { children: "@AI" }),
+						" 或 ",
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("code", { children: ["@", room.rooms[0]?.aiDisplayName ?? "DeepSeek"] }),
+						" 才会触发 AI 回复。"
+					] }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						className: "dsh-chatroom-room-list",
+						"data-testid": "chatroom-room-list",
+						children: room.rooms.map((item) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+							className: "dsh-chatroom-room-item",
+							"data-active": item.id === room.room?.id,
+							"data-testid": `chatroom-room-${item.id}`,
+							type: "button",
+							onClick: () => {
+								selectRoom(item.id);
+							},
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: item.title }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("small", { children: ["@", item.aiDisplayName] })]
+						}, item.id))
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("form", {
+						className: "dsh-chatroom-create",
+						onSubmit: (event) => {
+							event.preventDefault();
+							if (title.trim() !== "") createRoom(title);
+						},
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+							className: "dsh-chatroom-name",
+							"data-testid": "chatroom-title-input",
+							maxLength: 160,
+							placeholder: "新共享会话名称",
+							value: title,
+							onChange: (event) => {
+								setTitle(event.target.value);
+							}
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							className: "dsh-chatroom-create-button",
+							"data-testid": "chatroom-create",
+							type: "submit",
+							disabled: title.trim() === "",
+							children: "新建"
+						})]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "dsh-chatroom-card-footer",
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { children: ["当前身份：", room.identity?.displayName] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							onClick: () => {
+								resetIdentity();
+							},
+							children: "更换身份"
+						})]
 					}),
 					room.error !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: "dsh-chatroom-error",
@@ -135,14 +196,12 @@ window.__ModuleLoader__.load({
 				]
 			});
 		}
+		/** Whether the native command dispatcher must retain ownership of this submission. */
+		function isSlashCommand(content) {
+			return content.find((part) => part.type === "text")?.text.trimStart().startsWith("/") ?? false;
+		}
 		//#endregion
 		//#region src/client/ChatroomMessageNodeView.tsx
-		const PARTICIPANT_MARKER_START = "⁣dsh-chatroom:";
-		const PARTICIPANT_MARKER_END = "⁣";
-		/** Add a durable, visually invisible participant id before the display name. */
-		function identifyChatroomText(text, identity) {
-			return `${PARTICIPANT_MARKER_START}${identity.participantId}${PARTICIPANT_MARKER_END}${identity.displayName}：${text}`;
-		}
 		/** Participant-specific display projection of one durable native user node. */
 		function projectChatroomMessage(node, identity) {
 			let own = false;
@@ -178,7 +237,7 @@ window.__ModuleLoader__.load({
 		const ChatroomUserMessageNodeView = (0, react.memo)(function ChatroomUserMessageNodeView(props) {
 			const room = props.useChatroom((snapshot) => snapshot);
 			const NativeView = props.nativeMessageView;
-			if (room.room === void 0 || String(props.sessionId) !== room.room.sessionId || room.identity === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, { ...props });
+			if (!room.rooms.some((candidate) => String(props.sessionId) === candidate.sessionId) || room.identity === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, { ...props });
 			const projection = projectChatroomMessage(props.node, room.identity);
 			return participantMessage(/* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, {
 				...props,
@@ -189,7 +248,7 @@ window.__ModuleLoader__.load({
 		const ChatroomSteeringMessageNodeView = (0, react.memo)(function ChatroomSteeringMessageNodeView(props) {
 			const room = props.useChatroom((snapshot) => snapshot);
 			const NativeView = props.nativeMessageView;
-			if (room.room === void 0 || String(props.sessionId) !== room.room.sessionId || room.identity === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, { ...props });
+			if (!room.rooms.some((candidate) => String(props.sessionId) === candidate.sessionId) || room.identity === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, { ...props });
 			const projection = projectChatroomMessage(props.node, room.identity);
 			return participantMessage(/* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, {
 				...props,
@@ -207,8 +266,8 @@ window.__ModuleLoader__.load({
 			});
 		}
 		function participantMarker(text) {
-			if (!text.startsWith(PARTICIPANT_MARKER_START)) return void 0;
-			const end = text.indexOf(PARTICIPANT_MARKER_END, 14);
+			if (!text.startsWith("⁣dsh-chatroom:")) return void 0;
+			const end = text.indexOf("⁣", 14);
 			if (end < 0) return void 0;
 			const participantId = text.slice(14, end);
 			if (participantId === "") return void 0;
@@ -218,79 +277,19 @@ window.__ModuleLoader__.load({
 			};
 		}
 		//#endregion
-		//#region src/client/native-prompt.ts
-		/** Prefix one native prompt with the browser participant visible to every room member. */
-		function identifyPrompt(content, identity) {
-			let identified = false;
-			const output = content.map((part) => {
-				if (identified || part.type !== "text") return part;
-				identified = true;
-				return {
-					...part,
-					text: identifyChatroomText(part.text, identity)
-				};
-			});
-			return identified ? output : [{
-				type: "text",
-				text: identifyChatroomText("发送了一张图片。", identity)
-			}, ...output];
-		}
-		/** Route only the configured shared Session through the identity decorator. */
-		function installNativePromptIdentity(api, store) {
-			const original = api.sessions.prompt;
-			const wrapped = (payload, signal) => {
-				const room = store.getSnapshot();
-				if (room.room === void 0 || String(payload.sessionId) !== room.room.sessionId) return original(payload, signal);
-				if (room.identity === void 0) return Promise.reject(/* @__PURE__ */ new Error("请先选择聊天室身份。"));
-				return original({
-					...payload,
-					content: identifyPrompt(payload.content, room.identity)
-				}, signal);
-			};
-			api.sessions.prompt = wrapped;
-			return () => {
-				if (api.sessions.prompt === wrapped) api.sessions.prompt = original;
-			};
-		}
-		//#endregion
-		//#region src/client/RoomIdentityAction.tsx
-		/** Show the current room identity and presence inside the native session header. */
-		function RoomIdentityAction(props) {
-			const room = props.useChatroom((snapshot) => snapshot);
-			if (room.room === void 0 || String(props.sessionId) !== room.room.sessionId) return null;
-			const identity = room.identity;
-			const presence = room.connection === "online" ? `${room.online} 人在线` : "连接中";
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
-				className: "dsh-chatroom-identity-action",
-				type: "button",
-				title: identity === void 0 ? "选择聊天室身份" : "切换聊天室身份",
-				onClick: () => {
-					identity === void 0 ? props.openRoom() : props.resetIdentity();
-				},
-				children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						className: "dsh-chatroom-presence-dot",
-						"data-online": room.connection === "online"
-					}),
-					identity?.displayName ?? "选择身份",
-					" · ",
-					presence
-				]
-			});
-		}
-		//#endregion
 		//#region src/routes.ts
 		/** Canonical API prefix carried through the Host's existing plugin proxy route. */
 		const CHATROOM_API_PREFIX = "/plugins/deepseek-harness-chatroom/api";
 		//#endregion
 		//#region src/client/store.ts
-		/** React-free owner of room identity, presence, and native Session navigation. */
+		/** React-free owner of room identity, directory, presence, and native Session navigation. */
 		var ChatroomClientStore = class {
 			openSession;
 			snapshot = {
 				open: false,
 				phase: "loading",
 				connection: "offline",
+				rooms: [],
 				room: void 0,
 				identity: void 0,
 				online: 0,
@@ -298,12 +297,17 @@ window.__ModuleLoader__.load({
 			};
 			listeners = /* @__PURE__ */ new Set();
 			eventSource;
+			pendingOpenRoomId;
 			stopped = false;
 			constructor(openSession = () => false) {
 				this.openSession = openSession;
 			}
 			/** Current immutable room projection. */
 			getSnapshot = () => this.snapshot;
+			/** Resolve room metadata for any native Session in the shared directory. */
+			roomForSession(sessionId) {
+				return this.snapshot.rooms.find((room) => room.sessionId === sessionId);
+			}
 			/** Subscribe to room projection changes. */
 			subscribe = (listener) => {
 				this.listeners.add(listener);
@@ -311,7 +315,7 @@ window.__ModuleLoader__.load({
 					this.listeners.delete(listener);
 				};
 			};
-			/** Resolve the persistent browser identity and start presence synchronization. */
+			/** Resolve the persistent browser identity and shared room directory. */
 			async start() {
 				this.stopped = false;
 				await this.loadSession();
@@ -322,28 +326,50 @@ window.__ModuleLoader__.load({
 				this.closeEvents();
 				this.listeners.clear();
 			}
-			/** Open the native shared Session or show the identity dialog first. */
+			/** Show identity setup or the shared room directory. */
 			openRoom = () => {
 				this.set({
 					open: true,
 					error: void 0
 				});
-				this.resumeOpen();
 			};
-			/** Close only the additive identity/status dialog. */
+			/** Close only the additive room dialog. */
 			closeRoom = () => {
 				this.set({ open: false });
 			};
-			/** Retry pending navigation when the Host Session list changes. */
+			/** Retry pending native navigation when the Host Session list changes. */
 			resumeOpen = () => {
-				const { open, phase, room, identity } = this.snapshot;
-				if (!open || phase !== "ready" || room === void 0 || identity === void 0) return;
-				if (this.openSession(room.sessionId)) this.set({
+				const roomId = this.pendingOpenRoomId;
+				if (roomId === void 0) return;
+				const room = this.snapshot.rooms.find((candidate) => candidate.id === roomId);
+				if (room === void 0 || !this.openSession(room.sessionId)) return;
+				this.pendingOpenRoomId = void 0;
+				this.set({
 					open: false,
 					error: void 0
 				});
 			};
-			/** Create the first persistent browser identity, then enter the shared Session. */
+			/** Track native navigation so presence follows the room currently on screen. */
+			activateSession = (sessionId) => {
+				const room = sessionId === void 0 ? void 0 : this.roomForSession(sessionId);
+				if (room === void 0) {
+					this.closeEvents();
+					this.set({
+						room: void 0,
+						connection: "offline",
+						online: 0
+					});
+					return;
+				}
+				if (this.snapshot.room?.id === room.id && this.eventSource !== void 0) return;
+				this.set({
+					room,
+					connection: "connecting",
+					online: 0
+				});
+				this.openEvents(room);
+			};
+			/** Create the persistent browser identity, then show the room directory. */
 			join = async (displayName) => {
 				this.set({
 					phase: "loading",
@@ -358,13 +384,13 @@ window.__ModuleLoader__.load({
 					if (session.identity === null) throw new Error("服务端没有返回聊天室身份。");
 					this.set({
 						phase: "ready",
-						room: session.room,
+						rooms: session.rooms,
+						room: void 0,
 						identity: session.identity,
-						connection: "connecting",
+						connection: "offline",
+						online: 0,
 						error: void 0
 					});
-					this.openEvents();
-					this.resumeOpen();
 				} catch (error) {
 					this.set({
 						phase: "identity-required",
@@ -372,7 +398,41 @@ window.__ModuleLoader__.load({
 					});
 				}
 			};
-			/** Revoke the current identity and reopen the identity dialog. */
+			/** Activate and navigate to an existing shared room. */
+			selectRoom = async (roomId) => {
+				this.set({ error: void 0 });
+				try {
+					const response = await requestJson(`${CHATROOM_API_PREFIX}/rooms/select`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ roomId })
+					});
+					this.selectAndOpen(response.room);
+				} catch (error) {
+					this.set({
+						phase: "ready",
+						error: errorMessage(error)
+					});
+				}
+			};
+			/** Create, activate, and navigate to a new independent shared room. */
+			createRoom = async (title) => {
+				this.set({ error: void 0 });
+				try {
+					const response = await requestJson(`${CHATROOM_API_PREFIX}/rooms`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ title })
+					});
+					this.selectAndOpen(response.room);
+				} catch (error) {
+					this.set({
+						phase: "ready",
+						error: errorMessage(error)
+					});
+				}
+			};
+			/** Revoke the current identity and reopen identity setup. */
 			resetIdentity = async () => {
 				this.closeEvents();
 				try {
@@ -381,6 +441,7 @@ window.__ModuleLoader__.load({
 						open: true,
 						phase: "identity-required",
 						connection: "offline",
+						room: void 0,
 						identity: void 0,
 						online: 0,
 						error: void 0
@@ -393,24 +454,39 @@ window.__ModuleLoader__.load({
 					});
 				}
 			};
-			/** Retry identity recovery and pending Session navigation. */
+			/** Retry identity and directory recovery. */
 			retry = async () => {
 				this.set({
 					phase: "loading",
 					error: void 0
 				});
 				await this.loadSession();
-				this.resumeOpen();
 			};
+			selectAndOpen(room) {
+				const rooms = this.snapshot.rooms.some((candidate) => candidate.id === room.id) ? this.snapshot.rooms.map((candidate) => candidate.id === room.id ? room : candidate) : [...this.snapshot.rooms, room];
+				this.pendingOpenRoomId = room.id;
+				this.set({
+					phase: "ready",
+					rooms,
+					room,
+					connection: "connecting",
+					online: 0,
+					error: void 0
+				});
+				this.openEvents(room);
+				this.resumeOpen();
+			}
 			async loadSession() {
 				try {
 					const session = await requestJson(`${CHATROOM_API_PREFIX}/session`);
 					if (this.stopped) return;
 					if (session.identity === null) {
+						this.closeEvents();
 						this.set({
 							phase: "identity-required",
 							connection: "offline",
-							room: session.room,
+							rooms: session.rooms,
+							room: void 0,
 							identity: void 0,
 							online: 0,
 							error: void 0
@@ -419,12 +495,11 @@ window.__ModuleLoader__.load({
 					}
 					this.set({
 						phase: "ready",
-						connection: "connecting",
-						room: session.room,
+						connection: "offline",
+						rooms: session.rooms,
 						identity: session.identity,
 						error: void 0
 					});
-					this.openEvents();
 				} catch (error) {
 					if (!this.stopped) this.set({
 						phase: "error",
@@ -433,11 +508,11 @@ window.__ModuleLoader__.load({
 					});
 				}
 			}
-			openEvents() {
+			openEvents(room) {
 				this.closeEvents();
 				if (this.stopped || this.snapshot.identity === void 0) return;
 				this.set({ connection: "connecting" });
-				const source = new EventSource(`${CHATROOM_API_PREFIX}/events`);
+				const source = new EventSource(`${CHATROOM_API_PREFIX}/events?roomId=${encodeURIComponent(room.id)}`);
 				this.eventSource = source;
 				source.onopen = () => {
 					if (this.eventSource === source) this.set({
@@ -485,6 +560,15 @@ window.__ModuleLoader__.load({
 				for (const listener of this.listeners) listener();
 			}
 		};
+		/** Submit one native composer payload through human-first room admission. */
+		async function submitRoomPrompt(request, signal) {
+			return await requestJson(`${CHATROOM_API_PREFIX}/prompt`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(request),
+				...signal === void 0 ? {} : { signal }
+			});
+		}
 		var HttpError = class extends Error {
 			status;
 			constructor(status, message) {
@@ -517,6 +601,60 @@ window.__ModuleLoader__.load({
 		}
 		function errorMessage(error) {
 			return error instanceof Error ? error.message : String(error);
+		}
+		//#endregion
+		//#region src/client/native-prompt.ts
+		/** Route shared room chat through human-first admission while preserving native slash commands. */
+		function installNativePromptIdentity(api, store) {
+			const original = api.sessions.prompt;
+			const wrapped = async (payload, signal) => {
+				const room = store.roomForSession(String(payload.sessionId));
+				if (room === void 0) return await original(payload, signal);
+				if (isSlashCommand(payload.content)) return await original(payload, signal);
+				if (store.getSnapshot().identity === void 0) throw new Error("请先选择聊天室身份。");
+				await submitRoomPrompt({
+					roomId: room.id,
+					mode: payload.mode,
+					content: payload.content
+				}, signal);
+				return {
+					rpcId: "chatroom-human-first",
+					result: {
+						ok: true,
+						value: { accepted: true }
+					}
+				};
+			};
+			api.sessions.prompt = wrapped;
+			return () => {
+				if (api.sessions.prompt === wrapped) api.sessions.prompt = original;
+			};
+		}
+		//#endregion
+		//#region src/client/RoomIdentityAction.tsx
+		/** Show the current room identity and presence inside the native session header. */
+		function RoomIdentityAction(props) {
+			const room = props.useChatroom((snapshot) => snapshot);
+			const current = room.rooms.find((candidate) => String(props.sessionId) === candidate.sessionId);
+			if (current === void 0) return null;
+			const identity = room.identity;
+			const selected = room.room?.id === current.id;
+			const presence = selected && room.connection === "online" ? `${room.online} 人在线` : "共享会话";
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+				className: "dsh-chatroom-identity-action",
+				type: "button",
+				title: identity === void 0 ? "选择聊天室身份" : "切换共享会话",
+				onClick: props.openRoom,
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						className: "dsh-chatroom-presence-dot",
+						"data-online": selected && room.connection === "online"
+					}),
+					identity?.displayName ?? "选择身份",
+					" · ",
+					presence
+				]
+			});
 		}
 		//#endregion
 		//#region src/client/styles.ts
@@ -564,6 +702,7 @@ window.__ModuleLoader__.load({
 
 .dsh-chatroom-card h2 { margin: 0 0 10px; font-size: 22px; }
 .dsh-chatroom-card p { margin: 0 0 20px; color: var(--text-secondary, #6b7280); line-height: 1.6; }
+.dsh-chatroom-card code { color: var(--text-primary, #111827); font-size: .92em; }
 
 .dsh-chatroom-close {
   position: absolute;
@@ -606,6 +745,78 @@ window.__ModuleLoader__.load({
 
 .dsh-chatroom-button:disabled { cursor: not-allowed; opacity: .45; }
 .dsh-chatroom-error { margin-top: 12px; color: #d14343; font-size: 13px; }
+
+.dsh-chatroom-room-card { width: min(480px, calc(100vw - 48px)); }
+
+.dsh-chatroom-room-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(340px, 42vh);
+  overflow-y: auto;
+}
+
+.dsh-chatroom-room-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  border: 1px solid var(--border-primary, #e5e7eb);
+  border-radius: 10px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #111827);
+  padding: 11px 13px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dsh-chatroom-room-item:hover,
+.dsh-chatroom-room-item[data-active="true"] {
+  border-color: var(--brand-primary, #4f7cff);
+  background: color-mix(in srgb, var(--brand-primary, #4f7cff) 7%, transparent);
+}
+
+.dsh-chatroom-room-item small { color: var(--text-secondary, #6b7280); }
+
+.dsh-chatroom-create {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.dsh-chatroom-create-button {
+  border: 0;
+  border-radius: 10px;
+  background: var(--brand-primary, #4f7cff);
+  color: #fff;
+  padding: 0 18px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dsh-chatroom-create-button:disabled { cursor: not-allowed; opacity: .45; }
+
+.dsh-chatroom-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  color: var(--text-secondary, #6b7280);
+  font-size: 13px;
+}
+
+.dsh-chatroom-card-footer button {
+  border: 0;
+  background: transparent;
+  color: var(--brand-primary, #4f7cff);
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
 
 .dsh-chatroom-identity-action {
   display: inline-flex;
@@ -696,8 +907,13 @@ window.__ModuleLoader__.load({
 				style.textContent = CHATROOM_STYLES;
 				document.head.append(style);
 				const restorePrompt = installNativePromptIdentity(connection.api, store);
-				const unsubscribeSessions = sessions.list.subscribe(store.resumeOpen);
-				store.start();
+				const syncSession = () => {
+					store.resumeOpen();
+					const current = sessions.list.getSnapshot().current;
+					store.activateSession(current === void 0 ? void 0 : String(current));
+				};
+				const unsubscribeSessions = sessions.list.subscribe(syncSession);
+				store.start().then(syncSession);
 				return () => {
 					unsubscribeSessions();
 					restorePrompt();
@@ -714,6 +930,9 @@ window.__ModuleLoader__.load({
 					openRoom: store.openRoom,
 					closeRoom: store.closeRoom,
 					join: store.join,
+					selectRoom: store.selectRoom,
+					createRoom: store.createRoom,
+					resetIdentity: store.resetIdentity,
 					retry: store.retry
 				})
 			}, ChatroomEntry));
@@ -723,8 +942,7 @@ window.__ModuleLoader__.load({
 				order: -5,
 				inject: () => ({
 					hooks: { chatroom: store },
-					openRoom: store.openRoom,
-					resetIdentity: store.resetIdentity
+					openRoom: store.openRoom
 				})
 			}, RoomIdentityAction));
 			ctx.slots.inject("conversation.chat.node", () => {

@@ -5,10 +5,13 @@ interface ChatroomEntryInjected {
     openRoom(): void;
     closeRoom(): void;
     join(displayName: string): Promise<void>;
+    selectRoom(roomId: string): Promise<void>;
+    createRoom(title: string): Promise<void>;
+    resetIdentity(): Promise<void>;
     retry(): Promise<void>;
 }
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected;
-/** Additive room launcher plus the first-visit identity dialog. */
+/** Additive shared-session launcher, identity setup, and room directory. */
 export declare function ChatroomEntry(props: ChatroomEntryProps): JSX.Element | null;
 export type { ChatroomClientStore };
 //# sourceMappingURL=ChatroomEntry.d.ts.map

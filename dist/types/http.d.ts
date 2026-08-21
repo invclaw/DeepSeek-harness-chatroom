@@ -11,7 +11,11 @@ export declare class ChatroomHttpController {
     /** Dispatch one request under a registered chatroom API prefix. */
     handle(request: IncomingMessage, response: ServerResponse): Promise<void>;
     private handleSession;
+    private handleRooms;
+    private handleRoomSelection;
+    private handlePrompt;
     private handleEvents;
+    private sessionPayload;
     private requireIdentity;
     private token;
 }

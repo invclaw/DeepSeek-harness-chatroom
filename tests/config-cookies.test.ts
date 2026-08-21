@@ -40,6 +40,7 @@ function validConfig(): Config {
   return {
     roomId: 'lobby', roomTitle: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-lobby',
     cwd: '/tmp', agentPreset: 'standard', cookieName: 'room_session', cookieMaxAgeSeconds: 600,
-    maxDisplayNameChars: 24, sseHeartbeatMs: 15_000,
+    maxDisplayNameChars: 24, maxRoomTitleChars: 80, maxMessageTextChars: 20_000,
+    sseHeartbeatMs: 15_000,
   }
 }

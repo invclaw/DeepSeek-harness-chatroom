@@ -93,6 +93,7 @@ function messageProps(
       open: false,
       phase: 'ready',
       connection: 'online',
+      rooms: [{ id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' }],
       room: { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' },
       identity,
       online: 2,

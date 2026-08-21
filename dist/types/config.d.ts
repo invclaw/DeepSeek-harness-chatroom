@@ -1,5 +1,5 @@
 import z from '@deepseek-ai/schemastery';
-/** Deployment configuration for one shared AI room. */
+/** Deployment configuration for shared AI rooms. */
 export interface Config {
     roomId: string;
     roomTitle: string;
@@ -10,6 +10,8 @@ export interface Config {
     cookieName: string;
     cookieMaxAgeSeconds: number;
     maxDisplayNameChars: number;
+    maxRoomTitleChars: number;
+    maxMessageTextChars: number;
     sseHeartbeatMs: number;
 }
 export declare const Config: z<Config>;

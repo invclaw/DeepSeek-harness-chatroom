@@ -28,12 +28,13 @@ afterEach(() => {
 })
 
 describe('ChatroomClientStore', () => {
-  it('selects an identity and opens the existing native Session', async () => {
+  it('chooses identity first, then opens a selected native shared Session', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice' }
     const room = roomInfo()
     const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ identity: null, room }))
-      .mockResolvedValueOnce(jsonResponse({ identity, room }, 201))
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(null, [room])))
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room]), 201))
+      .mockResolvedValueOnce(jsonResponse({ room }))
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('EventSource', FakeEventSource)
     const openSession = vi.fn(() => true)
@@ -42,43 +43,77 @@ describe('ChatroomClientStore', () => {
     await store.start()
     store.openRoom()
     await store.join('Alice')
+    expect(openSession).not.toHaveBeenCalled()
+    expect(store.getSnapshot()).toMatchObject({ open: true, phase: 'ready', identity, room: undefined })
 
+    await store.selectRoom('lobby')
     expect(openSession).toHaveBeenCalledWith('chatroom-v1-lobby')
-    expect(store.getSnapshot()).toMatchObject({ open: false, phase: 'ready', identity })
-    expect(FakeEventSource.instances[0]?.url).toBe('/plugins/deepseek-harness-chatroom/api/events')
+    expect(store.getSnapshot()).toMatchObject({ open: false, room })
+    expect(FakeEventSource.instances[0]?.url).toBe('/plugins/deepseek-harness-chatroom/api/events?roomId=lobby')
   })
 
-  it('waits for the Host list when the room Session is still initializing', async () => {
+  it('waits for the Host list when a newly activated Session is still arriving', async () => {
     const identity = { participantId: 'returning-id', displayName: '回访者' }
-    const openSession = vi.fn()
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true)
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ identity, room: roomInfo() })))
+    const room = roomInfo()
+    const openSession = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true)
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ room })))
     vi.stubGlobal('EventSource', FakeEventSource)
     const store = new ChatroomClientStore(openSession)
 
     await store.start()
     store.openRoom()
+    await store.selectRoom('lobby')
     expect(store.getSnapshot().open).toBe(true)
     store.resumeOpen()
     expect(store.getSnapshot().open).toBe(false)
   })
 
-  it('synchronizes room presence without owning the transcript', async () => {
+  it('creates a second independent room and adds it to the directory', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice' }
+    const lobby = roomInfo()
+    const second = { id: 'second', title: '项目二', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-second' }
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [lobby])))
+      .mockResolvedValueOnce(jsonResponse({ room: second }, 201)))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const openSession = vi.fn(() => true)
+    const store = new ChatroomClientStore(openSession)
+
+    await store.start()
+    store.openRoom()
+    await store.createRoom('项目二')
+
+    expect(store.getSnapshot().rooms).toEqual([lobby, second])
+    expect(store.getSnapshot().room).toEqual(second)
+    expect(openSession).toHaveBeenCalledWith('chatroom-v1-second')
+  })
+
+  it('synchronizes presence only for the native room currently on screen', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice' }
     const room = roomInfo()
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ identity, room })))
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(identity, [room]))))
     vi.stubGlobal('EventSource', FakeEventSource)
     const store = new ChatroomClientStore()
     await store.start()
 
+    store.activateSession(room.sessionId)
     FakeEventSource.instances[0]?.emit({ type: 'snapshot', room, identity, online: 2 })
     expect(store.getSnapshot()).toMatchObject({ connection: 'online', online: 2 })
+
+    store.activateSession('ordinary-session')
+    expect(store.getSnapshot()).toMatchObject({ connection: 'offline', room: undefined, online: 0 })
+    expect(FakeEventSource.instances[0]?.closed).toBe(true)
   })
 })
 
 function roomInfo() {
   return { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' }
+}
+
+function sessionResponse(identity: { participantId: string; displayName: string } | null, rooms: ReturnType<typeof roomInfo>[]) {
+  return { identity, rooms, room: rooms[0] }
 }
 
 function jsonResponse(value: unknown, status = 200): Response {

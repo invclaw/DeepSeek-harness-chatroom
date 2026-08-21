@@ -3,6 +3,9 @@ import type {
   ChatroomErrorResponse,
   ChatroomIdentity,
   ChatroomInfo,
+  ChatroomPromptRequest,
+  ChatroomPromptResponse,
+  ChatroomRoomResponse,
   ChatroomServerEvent,
   ChatroomSessionResponse,
 } from '../types.js'
@@ -11,23 +14,25 @@ import { CHATROOM_API_PREFIX } from '../routes.js'
 export type ChatroomPhase = 'loading' | 'identity-required' | 'ready' | 'error'
 export type ChatroomConnection = 'offline' | 'connecting' | 'online'
 
-/** Browser identity and presence around the native Harness Session. */
+/** Browser identity, room directory, selection, and presence around native Harness Sessions. */
 export interface ChatroomView {
   readonly open: boolean
   readonly phase: ChatroomPhase
   readonly connection: ChatroomConnection
+  readonly rooms: readonly ChatroomInfo[]
   readonly room: ChatroomInfo | undefined
   readonly identity: ChatroomIdentity | undefined
   readonly online: number
   readonly error: string | undefined
 }
 
-/** React-free owner of room identity, presence, and native Session navigation. */
+/** React-free owner of room identity, directory, presence, and native Session navigation. */
 export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private snapshot: ChatroomView = {
     open: false,
     phase: 'loading',
     connection: 'offline',
+    rooms: [],
     room: undefined,
     identity: undefined,
     online: 0,
@@ -35,6 +40,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   }
   private readonly listeners = new Set<() => void>()
   private eventSource: EventSource | undefined
+  private pendingOpenRoomId: string | undefined
   private stopped = false
 
   constructor(private readonly openSession: (sessionId: string) => boolean = () => false) {}
@@ -42,13 +48,18 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   /** Current immutable room projection. */
   getSnapshot = (): ChatroomView => this.snapshot
 
+  /** Resolve room metadata for any native Session in the shared directory. */
+  roomForSession(sessionId: string): ChatroomInfo | undefined {
+    return this.snapshot.rooms.find(room => room.sessionId === sessionId)
+  }
+
   /** Subscribe to room projection changes. */
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
   }
 
-  /** Resolve the persistent browser identity and start presence synchronization. */
+  /** Resolve the persistent browser identity and shared room directory. */
   async start(): Promise<void> {
     this.stopped = false
     await this.loadSession()
@@ -61,27 +72,40 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.listeners.clear()
   }
 
-  /** Open the native shared Session or show the identity dialog first. */
+  /** Show identity setup or the shared room directory. */
   openRoom = (): void => {
     this.set({ open: true, error: undefined })
-    this.resumeOpen()
   }
 
-  /** Close only the additive identity/status dialog. */
+  /** Close only the additive room dialog. */
   closeRoom = (): void => {
     this.set({ open: false })
   }
 
-  /** Retry pending navigation when the Host Session list changes. */
+  /** Retry pending native navigation when the Host Session list changes. */
   resumeOpen = (): void => {
-    const { open, phase, room, identity } = this.snapshot
-    if (!open || phase !== 'ready' || room === undefined || identity === undefined) return
-    if (this.openSession(room.sessionId)) {
-      this.set({ open: false, error: undefined })
-    }
+    const roomId = this.pendingOpenRoomId
+    if (roomId === undefined) return
+    const room = this.snapshot.rooms.find(candidate => candidate.id === roomId)
+    if (room === undefined || !this.openSession(room.sessionId)) return
+    this.pendingOpenRoomId = undefined
+    this.set({ open: false, error: undefined })
   }
 
-  /** Create the first persistent browser identity, then enter the shared Session. */
+  /** Track native navigation so presence follows the room currently on screen. */
+  activateSession = (sessionId: string | undefined): void => {
+    const room = sessionId === undefined ? undefined : this.roomForSession(sessionId)
+    if (room === undefined) {
+      this.closeEvents()
+      this.set({ room: undefined, connection: 'offline', online: 0 })
+      return
+    }
+    if (this.snapshot.room?.id === room.id && this.eventSource !== undefined) return
+    this.set({ room, connection: 'connecting', online: 0 })
+    this.openEvents(room)
+  }
+
+  /** Create the persistent browser identity, then show the room directory. */
   join = async (displayName: string): Promise<void> => {
     this.set({ phase: 'loading', error: undefined })
     try {
@@ -93,19 +117,49 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       if (session.identity === null) throw new Error('服务端没有返回聊天室身份。')
       this.set({
         phase: 'ready',
-        room: session.room,
+        rooms: session.rooms,
+        room: undefined,
         identity: session.identity,
-        connection: 'connecting',
+        connection: 'offline',
+        online: 0,
         error: undefined,
       })
-      this.openEvents()
-      this.resumeOpen()
     } catch (error) {
       this.set({ phase: 'identity-required', error: errorMessage(error) })
     }
   }
 
-  /** Revoke the current identity and reopen the identity dialog. */
+  /** Activate and navigate to an existing shared room. */
+  selectRoom = async (roomId: string): Promise<void> => {
+    this.set({ error: undefined })
+    try {
+      const response = await requestJson<ChatroomRoomResponse>(`${CHATROOM_API_PREFIX}/rooms/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId }),
+      })
+      this.selectAndOpen(response.room)
+    } catch (error) {
+      this.set({ phase: 'ready', error: errorMessage(error) })
+    }
+  }
+
+  /** Create, activate, and navigate to a new independent shared room. */
+  createRoom = async (title: string): Promise<void> => {
+    this.set({ error: undefined })
+    try {
+      const response = await requestJson<ChatroomRoomResponse>(`${CHATROOM_API_PREFIX}/rooms`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      })
+      this.selectAndOpen(response.room)
+    } catch (error) {
+      this.set({ phase: 'ready', error: errorMessage(error) })
+    }
+  }
+
+  /** Revoke the current identity and reopen identity setup. */
   resetIdentity = async (): Promise<void> => {
     this.closeEvents()
     try {
@@ -114,6 +168,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         open: true,
         phase: 'identity-required',
         connection: 'offline',
+        room: undefined,
         identity: undefined,
         online: 0,
         error: undefined,
@@ -123,10 +178,19 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     }
   }
 
-  /** Retry identity recovery and pending Session navigation. */
+  /** Retry identity and directory recovery. */
   retry = async (): Promise<void> => {
     this.set({ phase: 'loading', error: undefined })
     await this.loadSession()
+  }
+
+  private selectAndOpen(room: ChatroomInfo): void {
+    const rooms = this.snapshot.rooms.some(candidate => candidate.id === room.id)
+      ? this.snapshot.rooms.map(candidate => candidate.id === room.id ? room : candidate)
+      : [...this.snapshot.rooms, room]
+    this.pendingOpenRoomId = room.id
+    this.set({ phase: 'ready', rooms, room, connection: 'connecting', online: 0, error: undefined })
+    this.openEvents(room)
     this.resumeOpen()
   }
 
@@ -135,10 +199,12 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       const session = await requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/session`)
       if (this.stopped) return
       if (session.identity === null) {
+        this.closeEvents()
         this.set({
           phase: 'identity-required',
           connection: 'offline',
-          room: session.room,
+          rooms: session.rooms,
+          room: undefined,
           identity: undefined,
           online: 0,
           error: undefined,
@@ -147,22 +213,21 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       }
       this.set({
         phase: 'ready',
-        connection: 'connecting',
-        room: session.room,
+        connection: 'offline',
+        rooms: session.rooms,
         identity: session.identity,
         error: undefined,
       })
-      this.openEvents()
     } catch (error) {
       if (!this.stopped) this.set({ phase: 'error', connection: 'offline', error: errorMessage(error) })
     }
   }
 
-  private openEvents(): void {
+  private openEvents(room: ChatroomInfo): void {
     this.closeEvents()
     if (this.stopped || this.snapshot.identity === undefined) return
     this.set({ connection: 'connecting' })
-    const source = new EventSource(`${CHATROOM_API_PREFIX}/events`)
+    const source = new EventSource(`${CHATROOM_API_PREFIX}/events?roomId=${encodeURIComponent(room.id)}`)
     this.eventSource = source
     source.onopen = () => {
       if (this.eventSource === source) this.set({ connection: 'online', error: undefined })
@@ -207,6 +272,19 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.snapshot = { ...this.snapshot, ...patch }
     for (const listener of this.listeners) listener()
   }
+}
+
+/** Submit one native composer payload through human-first room admission. */
+export async function submitRoomPrompt(
+  request: ChatroomPromptRequest,
+  signal?: AbortSignal,
+): Promise<ChatroomPromptResponse> {
+  return await requestJson<ChatroomPromptResponse>(`${CHATROOM_API_PREFIX}/prompt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+    ...(signal === undefined ? {} : { signal }),
+  })
 }
 
 class HttpError extends Error {

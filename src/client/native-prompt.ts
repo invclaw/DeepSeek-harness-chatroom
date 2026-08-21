@@ -1,42 +1,34 @@
-import type { IApiClient, PromptContentPart } from '@deepseek-ai/dsh-client-connection/client'
-import type { ChatroomIdentity } from '../types.js'
-import { identifyChatroomText } from './ChatroomMessageNodeView.js'
-import type { ChatroomClientStore } from './store.js'
+import type { IApiClient } from '@deepseek-ai/dsh-client-connection/client'
+import { identifyPrompt, isSlashCommand } from '../message.js'
+import type { ChatroomPromptContentPart } from '../types.js'
+import { submitRoomPrompt, type ChatroomClientStore } from './store.js'
 
-/** Prefix one native prompt with the browser participant visible to every room member. */
-export function identifyPrompt(
-  content: readonly PromptContentPart[],
-  identity: ChatroomIdentity,
-): PromptContentPart[] {
-  let identified = false
-  const output = content.map((part): PromptContentPart => {
-    if (identified || part.type !== 'text') return part
-    identified = true
-    return { ...part, text: identifyChatroomText(part.text, identity) }
-  })
-  return identified
-    ? output
-    : [{ type: 'text', text: identifyChatroomText('发送了一张图片。', identity) }, ...output]
-}
+export { identifyPrompt }
 
-/** Route only the configured shared Session through the identity decorator. */
+/** Route shared room chat through human-first admission while preserving native slash commands. */
 export function installNativePromptIdentity(
   api: IApiClient,
   store: ChatroomClientStore,
 ): () => void {
   const original = api.sessions.prompt
-  const wrapped: IApiClient['sessions']['prompt'] = (payload, signal) => {
-    const room = store.getSnapshot()
-    if (room.room === undefined || String(payload.sessionId) !== room.room.sessionId) {
-      return original(payload, signal)
+  const wrapped: IApiClient['sessions']['prompt'] = async (payload, signal) => {
+    const room = store.roomForSession(String(payload.sessionId))
+    if (room === undefined) return await original(payload, signal)
+    if (isSlashCommand(payload.content as readonly ChatroomPromptContentPart[])) {
+      return await original(payload, signal)
     }
-    if (room.identity === undefined) {
-      return Promise.reject(new Error('请先选择聊天室身份。'))
+    if (store.getSnapshot().identity === undefined) {
+      throw new Error('请先选择聊天室身份。')
     }
-    return original({
-      ...payload,
-      content: identifyPrompt(payload.content, room.identity),
+    await submitRoomPrompt({
+      roomId: room.id,
+      mode: payload.mode,
+      content: payload.content,
     }, signal)
+    return {
+      rpcId: 'chatroom-human-first' as never,
+      result: { ok: true, value: { accepted: true } },
+    }
   }
   api.sessions.prompt = wrapped
   return () => {
