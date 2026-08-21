@@ -29,7 +29,7 @@ afterEach(() => {
 
 describe('ChatroomClientStore', () => {
   it('chooses identity first, then opens a selected native shared Session', async () => {
-    const identity = { participantId: 'alice-id', displayName: 'Alice' }
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(sessionResponse(null, [room])))
@@ -42,7 +42,7 @@ describe('ChatroomClientStore', () => {
 
     await store.start()
     store.openRoom()
-    await store.join('Alice')
+    await store.join('Alice', 'whale')
     expect(openSession).not.toHaveBeenCalled()
     expect(store.getSnapshot()).toMatchObject({ open: true, phase: 'ready', identity, room: undefined })
 
@@ -53,7 +53,7 @@ describe('ChatroomClientStore', () => {
   })
 
   it('waits for the Host list when a newly activated Session is still arriving', async () => {
-    const identity = { participantId: 'returning-id', displayName: '回访者' }
+    const identity = { participantId: 'returning-id', displayName: '回访者', avatarId: 'panda' as const }
     const room = roomInfo()
     const openSession = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true)
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
@@ -71,7 +71,7 @@ describe('ChatroomClientStore', () => {
   })
 
   it('creates a second independent room and adds it to the directory', async () => {
-    const identity = { participantId: 'alice-id', displayName: 'Alice' }
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const lobby = roomInfo()
     const second = { id: 'second', title: '项目二', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-second' }
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
@@ -91,7 +91,7 @@ describe('ChatroomClientStore', () => {
   })
 
   it('synchronizes presence only for the native room currently on screen', async () => {
-    const identity = { participantId: 'alice-id', displayName: 'Alice' }
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(identity, [room]))))
     vi.stubGlobal('EventSource', FakeEventSource)
@@ -106,13 +106,38 @@ describe('ChatroomClientStore', () => {
     expect(store.getSnapshot()).toMatchObject({ connection: 'offline', room: undefined, online: 0 })
     expect(FakeEventSource.instances[0]?.closed).toBe(true)
   })
+
+  it('sends selected files without placeholder composer text', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ accepted: true, aiTriggered: false }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    const bytes = new TextEncoder().encode('hello').buffer
+    const file = { name: 'note.txt', type: 'text/plain', arrayBuffer: async () => bytes } as File
+
+    store.addFiles('lobby', [file])
+    await store.sendFiles('lobby')
+
+    const body = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+      content: Array<{ type: string; name: string; mediaType: string; data: string }>
+    }
+    expect(body.content).toEqual([{
+      type: 'file', name: 'note.txt', mediaType: 'text/plain', data: 'aGVsbG8=',
+    }])
+    expect(store.getSnapshot()).toMatchObject({ pendingFiles: [], composerBusy: false, composerError: undefined })
+  })
 })
 
 function roomInfo() {
   return { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' }
 }
 
-function sessionResponse(identity: { participantId: string; displayName: string } | null, rooms: ReturnType<typeof roomInfo>[]) {
+function sessionResponse(identity: { participantId: string; displayName: string; avatarId: 'whale' | 'panda' } | null, rooms: ReturnType<typeof roomInfo>[]) {
   return { identity, rooms, room: rooms[0] }
 }
 

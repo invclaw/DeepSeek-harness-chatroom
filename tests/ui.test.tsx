@@ -22,8 +22,9 @@ describe('native chatroom integration', () => {
     const button = screen.getByTestId('chatroom-join')
     expect((button as HTMLButtonElement).disabled).toBe(true)
     fireEvent.change(screen.getByTestId('chatroom-identity-input'), { target: { value: 'Alice' } })
+    fireEvent.click(screen.getByLabelText('狐狸'))
     fireEvent.click(button)
-    expect(join).toHaveBeenCalledWith('Alice')
+    expect(join).toHaveBeenCalledWith('Alice', 'fox')
     fireEvent.click(screen.getByLabelText('关闭'))
     expect(closeRoom).toHaveBeenCalledOnce()
   })
@@ -83,9 +84,14 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     connection: 'connecting',
     rooms: [room],
     room,
-    identity: { participantId: 'alice-id', displayName: 'Alice' },
+    identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' },
     online: 1,
     error: undefined,
+    composerRoomId: undefined,
+    pendingFiles: [],
+    reply: undefined,
+    composerBusy: false,
+    composerError: undefined,
     ...patch,
   }
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
   ChatroomUserMessageNodeView,
@@ -10,9 +10,10 @@ import {
   type ChatroomUserMessageNodeViewProps,
 } from '../src/client/ChatroomMessageNodeView.js'
 import type { ChatroomIdentity } from '../src/types.js'
+import { identifyFileText, identifyReplyText } from '../src/message.js'
 
-const alice: ChatroomIdentity = { participantId: 'alice-id', displayName: 'Alice' }
-const bob: ChatroomIdentity = { participantId: 'bob-id', displayName: 'Bob' }
+const alice: ChatroomIdentity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' }
+const bob: ChatroomIdentity = { participantId: 'bob-id', displayName: 'Bob', avatarId: 'fox' }
 
 afterEach(cleanup)
 
@@ -47,7 +48,7 @@ describe('participant-specific native message projection', () => {
     )} />)
     expect(screen.getByText('Alice').className).toBe('dsh-chatroom-display-name')
     expect(screen.getByTestId('native').textContent).toBe('自己的消息')
-    expect(screen.getByTestId('native').parentElement?.getAttribute('data-dsh-chatroom-own')).toBe('true')
+    expect(screen.getByTestId('native').closest('.dsh-chatroom-participant-message')?.getAttribute('data-dsh-chatroom-own')).toBe('true')
 
     rerender(<ChatroomUserMessageNodeView {...messageProps(
       userNode(identifyChatroomText('别人的消息', bob)),
@@ -55,8 +56,27 @@ describe('participant-specific native message projection', () => {
       Native,
     )} />)
     expect(screen.getByText('Bob').className).toBe('dsh-chatroom-display-name')
-    expect(screen.getByTestId('native').parentElement?.getAttribute('data-dsh-chatroom-own')).toBe('false')
+    expect(screen.getByTestId('native').closest('.dsh-chatroom-participant-message')?.getAttribute('data-dsh-chatroom-own')).toBe('false')
     expect(screen.getByTestId('native').textContent).toBe('别人的消息')
+  })
+
+  it('renders avatar, reply quote, file card, and a reply action around the native bubble', () => {
+    const reply = { messageId: 'user:1', displayName: 'Alice', text: '上一条消息' }
+    const file = { id: 'file-id', name: 'brief.pdf', mediaType: 'application/pdf', bytes: 2048 }
+    const text = identifyReplyText(`请查收${identifyFileText(file)}`, reply)
+    const setReply = vi.fn()
+    const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>
+    render(<ChatroomUserMessageNodeView {...{
+      ...messageProps(userNode(identifyChatroomText(text, bob)), alice, Native),
+      setReply,
+    }} />)
+
+    expect(screen.getByText('🦊')).toBeTruthy()
+    expect(screen.getByText('回复 Alice')).toBeTruthy()
+    expect(screen.getByText('brief.pdf')).toBeTruthy()
+    expect(screen.getByTestId('native').textContent).toBe('请查收')
+    fireEvent.click(screen.getByRole('button', { name: '↩ 回复' }))
+    expect(setReply).toHaveBeenCalledWith('lobby', expect.objectContaining({ displayName: 'Bob', text: '请查收' }))
   })
 })
 
@@ -98,7 +118,13 @@ function messageProps(
       identity,
       online: 2,
       error: undefined,
+      composerRoomId: undefined,
+      pendingFiles: [],
+      reply: undefined,
+      composerBusy: false,
+      composerError: undefined,
     }),
     nativeMessageView,
+    setReply: () => undefined,
   } as unknown as ChatroomUserMessageNodeViewProps
 }

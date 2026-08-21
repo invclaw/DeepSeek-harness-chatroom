@@ -13,11 +13,18 @@ var Config = z.object({
   maxDisplayNameChars: z.number().step(1).min(1).max(80).default(24),
   maxRoomTitleChars: z.number().step(1).min(1).max(160).default(80),
   maxMessageTextChars: z.number().step(1).min(1).max(2e5).default(2e4),
+  maxFileBytes: z.number().step(1).min(1).max(100 * 1024 * 1024).default(20 * 1024 * 1024),
+  maxFilesPerMessage: z.number().step(1).min(1).max(20).default(5),
+  maxMessageFileBytes: z.number().step(1).min(1).max(200 * 1024 * 1024).default(50 * 1024 * 1024),
+  maxImageSidePixels: z.number().step(1).min(512).max(16384).default(4096),
   sseHeartbeatMs: z.number().step(1).min(5e3).max(12e4).default(15e3)
 });
 function validateConfig(config) {
   if (!isAbsolute(config.cwd)) {
     throw new Error(`chatroom: cwd must be absolute, got ${JSON.stringify(config.cwd)}`);
+  }
+  if (config.maxMessageFileBytes < config.maxFileBytes) {
+    throw new Error("chatroom: maxMessageFileBytes must be greater than or equal to maxFileBytes");
   }
 }
 
@@ -58,6 +65,26 @@ import { AttachmentError } from "@deepseek-ai/dsh-attachment";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
 
+// src/avatars.ts
+var CHATROOM_AVATARS = [
+  { id: "whale", emoji: "\u{1F433}", label: "\u9CB8\u9C7C" },
+  { id: "panda", emoji: "\u{1F43C}", label: "\u718A\u732B" },
+  { id: "fox", emoji: "\u{1F98A}", label: "\u72D0\u72F8" },
+  { id: "cat", emoji: "\u{1F431}", label: "\u732B\u54AA" },
+  { id: "dog", emoji: "\u{1F436}", label: "\u72D7\u72D7" },
+  { id: "rabbit", emoji: "\u{1F430}", label: "\u5154\u5B50" },
+  { id: "octopus", emoji: "\u{1F419}", label: "\u7AE0\u9C7C" },
+  { id: "unicorn", emoji: "\u{1F984}", label: "\u72EC\u89D2\u517D" }
+];
+function isChatroomAvatarId(value) {
+  return typeof value === "string" && CHATROOM_AVATARS.some((avatar) => avatar.id === value);
+}
+function fallbackAvatarId(seed) {
+  let hash = 0;
+  for (const character of seed) hash = hash * 31 + character.codePointAt(0) >>> 0;
+  return CHATROOM_AVATARS[hash % CHATROOM_AVATARS.length].id;
+}
+
 // src/domain.ts
 import { z as z2 } from "zod";
 import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
@@ -65,6 +92,7 @@ var nonNegativeSafeInteger = z2.number().int().nonnegative().max(Number.MAX_SAFE
 var identitySchema = z2.object({
   participantId: z2.uuid(),
   displayName: z2.string().min(1),
+  avatarId: z2.string().refine(isChatroomAvatarId).optional(),
   createdAt: nonNegativeSafeInteger,
   lastSeenAt: nonNegativeSafeInteger
 }).refine((record) => record.lastSeenAt >= record.createdAt, {
@@ -82,6 +110,17 @@ var messageSchema = z2.object({
   inReplyTo: z2.string().min(1).optional(),
   aiProcessed: z2.boolean().optional()
 });
+var fileSchema = z2.object({
+  id: z2.uuid(),
+  roomId: z2.string().min(1),
+  participantId: z2.string().min(1),
+  displayName: z2.string().min(1),
+  name: z2.string().min(1),
+  mediaType: z2.string().min(1),
+  bytes: nonNegativeSafeInteger,
+  data: z2.string().min(1),
+  createdAt: nonNegativeSafeInteger
+});
 var roomSchema = z2.object({
   id: z2.string().min(1),
   title: z2.string().min(1),
@@ -96,24 +135,35 @@ var chatroomDomainSpec = defineDomain({
   tables: {
     identities: domainTable(identitySchema),
     messages: domainTable(messageSchema),
-    rooms: domainTable(roomSchema)
+    rooms: domainTable(roomSchema),
+    files: domainTable(fileSchema)
   }
 });
 
 // src/message.ts
 var PARTICIPANT_MARKER_START = "\u2063dsh-chatroom:";
 var PARTICIPANT_MARKER_END = "\u2063";
+var REPLY_MARKER_START = "\u2063dsh-chatroom-reply:";
+var FILE_MARKER_START = "\u2063dsh-chatroom-file:";
 function identifyChatroomText(text, identity) {
-  return `${PARTICIPANT_MARKER_START}${identity.participantId}${PARTICIPANT_MARKER_END}${identity.displayName}\uFF1A${text}`;
+  return `${PARTICIPANT_MARKER_START}${identity.participantId}|${identity.avatarId}${PARTICIPANT_MARKER_END}${identity.displayName}\uFF1A${text}`;
 }
-function identifyPrompt(content, identity) {
+function identifyPrompt(content, identity, reply) {
   let identified = false;
   const output = content.map((part) => {
     if (identified || part.type !== "text") return part;
     identified = true;
-    return { ...part, text: identifyChatroomText(part.text, identity) };
+    return { ...part, text: identifyChatroomText(reply === void 0 ? part.text : identifyReplyText(part.text, reply), identity) };
   });
-  return identified ? output : [{ type: "text", text: identifyChatroomText("\u53D1\u9001\u4E86\u4E00\u5F20\u56FE\u7247\u3002", identity) }, ...output];
+  const fallback = content.some((part) => part.type === "file") ? "\u53D1\u9001\u4E86\u6587\u4EF6\u3002" : "\u53D1\u9001\u4E86\u4E00\u5F20\u56FE\u7247\u3002";
+  return identified ? output : [{ type: "text", text: identifyChatroomText(reply === void 0 ? fallback : identifyReplyText(fallback, reply), identity) }, ...output];
+}
+function identifyReplyText(text, reply) {
+  return `${REPLY_MARKER_START}${encodePayload(reply)}${PARTICIPANT_MARKER_END}${replyPrefix(reply)}${text}`;
+}
+function identifyFileText(file) {
+  return `
+${FILE_MARKER_START}${encodePayload(file)}${PARTICIPANT_MARKER_END}${filePrefix(file)}`;
 }
 function mentionsAi(content, aiDisplayName) {
   const text = content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
@@ -122,6 +172,16 @@ function mentionsAi(content, aiDisplayName) {
 function mentionPattern(name2) {
   const escaped = name2.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   return new RegExp(`@${escaped}(?=$|[^\\p{L}\\p{N}_])`, "iu");
+}
+function replyPrefix(reply) {
+  return `\u56DE\u590D ${reply.displayName}\u300C${reply.text}\u300D
+`;
+}
+function filePrefix(file) {
+  return `\u6587\u4EF6\uFF1A${file.name}`;
+}
+function encodePayload(value) {
+  return encodeURIComponent(JSON.stringify(value));
 }
 
 // src/room.ts
@@ -137,6 +197,7 @@ var ChatroomRuntime = class {
   domain;
   identities;
   roomRecords;
+  files;
   states = /* @__PURE__ */ new Map();
   ready = false;
   stopping = false;
@@ -154,11 +215,12 @@ var ChatroomRuntime = class {
     });
     return records.map(publicRoom);
   }
-  /** Maximum accepted JSON body for one text-and-image room submission. */
+  /** Maximum accepted JSON body for one text, image, and file room submission. */
   get maxPromptRequestBytes() {
     const { maxImagesPerMessage, maxMessageImageBytes } = this.ctx.attachments.imageLimits;
     const encodedImages = Math.ceil(maxMessageImageBytes / 3) * 4;
-    return encodedImages + this.config.maxMessageTextChars * 4 + maxImagesPerMessage * 2048 + 8192;
+    const encodedFiles = Math.ceil(this.config.maxMessageFileBytes / 3) * 4;
+    return encodedImages + encodedFiles + this.config.maxMessageTextChars * 4 + (maxImagesPerMessage + this.config.maxFilesPerMessage) * 2048 + 8192;
   }
   /** Whether identity persistence and the configured shared Session are ready. */
   get isReady() {
@@ -170,6 +232,7 @@ var ChatroomRuntime = class {
     this.domain = domain;
     this.identities = domain.table("identities");
     this.roomRecords = domain.table("rooms");
+    this.files = domain.table("files");
     await this.seedConfiguredRoom();
     for (const [, record] of this.requireRoomRecords().entries()) {
       this.states.set(record.id, newRoomState(record));
@@ -197,6 +260,7 @@ var ChatroomRuntime = class {
     this.domain = void 0;
     this.identities = void 0;
     this.roomRecords = void 0;
+    this.files = void 0;
   }
   /** Resolve an opaque cookie token to its durable identity. */
   identity(token) {
@@ -205,14 +269,17 @@ var ChatroomRuntime = class {
     return record === void 0 ? void 0 : publicIdentity(record);
   }
   /** Mint and durably bind a new browser identity. */
-  async createIdentity(displayName) {
+  async createIdentity(displayName, avatarId) {
     this.assertReady();
     const normalized = normalizeDisplayName(displayName, this.config.maxDisplayNameChars);
     const token = randomBytes(32).toString("base64url");
     const now = Date.now();
+    const participantId = randomUUID();
+    if (avatarId !== void 0 && !isChatroomAvatarId(avatarId)) throw new ChatroomInputError("\u8BF7\u9009\u62E9\u6709\u6548\u7684\u5934\u50CF\u3002");
     const record = {
-      participantId: randomUUID(),
+      participantId,
       displayName: normalized,
+      avatarId: avatarId ?? fallbackAvatarId(participantId),
       createdAt: now,
       lastSeenAt: now
     };
@@ -255,7 +322,7 @@ var ChatroomRuntime = class {
     return this.requireRoom(roomId);
   }
   /** Append human chat immediately; wake the Agent only for an explicit AI mention. */
-  async submit(roomId, identity, content, mode) {
+  async submit(roomId, identity, content, mode, reply) {
     this.assertReady();
     const state = this.requireState(roomId);
     const task = state.admission.then(async () => {
@@ -268,7 +335,7 @@ var ChatroomRuntime = class {
           throw new ChatroomInputError(`\u6A21\u578B ${JSON.stringify(modelId)} \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165\u3002`);
         }
       }
-      const durable = await this.durableContent(identifyPrompt(content, identity));
+      const durable = await this.durableContent(roomId, identity, identifyPrompt(content, identity, reply));
       const message = createUserMessage({ content: durable, source: { kind: "user" } });
       if (!aiTriggered) {
         binding.agent.session.append("user/message", message, { surfaceOp: "append" });
@@ -281,6 +348,13 @@ var ChatroomRuntime = class {
     });
     state.admission = task.then(() => void 0, () => void 0);
     return await task;
+  }
+  /** Resolve one authenticated room-file download. */
+  file(fileId) {
+    this.assertReady();
+    const record = this.requireFiles().get(fileId);
+    if (record === void 0) throw new ChatroomInputError("\u6587\u4EF6\u4E0D\u5B58\u5728\u3002");
+    return { ref: publicFile(record), data: decodeBase64(record.data, "\u6587\u4EF6") };
   }
   /** Attach one authenticated presence client to one room. */
   subscribe(roomId, identity, response) {
@@ -385,18 +459,24 @@ var ChatroomRuntime = class {
     const workspace = await this.ctx.workspaceRegistry.resolveByPath(this.config.cwd) ?? await this.ctx.workspaceRegistry.create(this.config.cwd);
     await workspace.attachSession(SessionId(sessionId));
   }
-  async durableContent(content) {
-    const prepared = content.map((part) => part.type === "text" ? part : { part, data: decodeBase64(part.data) });
-    const images = prepared.filter((part) => "data" in part);
+  async durableContent(roomId, identity, content) {
+    const prepared = content.map((part) => part.type === "text" ? part : { part, data: decodeBase64(part.data, part.type === "image" ? "\u56FE\u7247" : "\u6587\u4EF6") });
+    const images = prepared.filter((item) => "data" in item && item.part.type === "image");
+    const files = prepared.filter((item) => "data" in item && item.part.type === "file");
+    this.validateFiles(files.map((file) => file.data));
     const mediaTypes = this.ctx.attachments.imageLimits.mediaTypes;
     for (const image of images) {
-      if (!mediaTypes.includes(image.part.mediaType)) {
+      if (image.part.type !== "image" || !mediaTypes.includes(image.part.mediaType)) {
         throw new ChatroomInputError(`\u4E0D\u652F\u6301\u56FE\u7247\u683C\u5F0F ${image.part.mediaType}\u3002`);
       }
     }
+    const admittedImages = await Promise.all(images.map(async (image) => ({
+      part: image.part,
+      data: await this.resizeImage(image.data)
+    })));
     let refs = [];
     try {
-      refs = await this.ctx.attachments.saveImages(images.map((image) => ({
+      refs = await this.ctx.attachments.saveImages(admittedImages.map((image) => ({
         data: image.data,
         mediaType: image.part.mediaType,
         ...image.part.name === void 0 ? {} : { name: image.part.name }
@@ -405,6 +485,13 @@ var ChatroomRuntime = class {
       if (error instanceof AttachmentError) throw new ChatroomInputError(`\u56FE\u7247\u65E0\u6CD5\u53D1\u9001\uFF1A${error.message}`);
       throw error;
     }
+    const fileRefs = /* @__PURE__ */ new Map();
+    for (const file of files) {
+      if (file.part.type !== "file") continue;
+      const record = this.fileRecord(roomId, identity, file.part, file.data);
+      await this.requireFiles().put(record.id, record);
+      fileRefs.set(file.part, publicFile(record));
+    }
     const blocks = [];
     let imageIndex = 0;
     for (const item of prepared) {
@@ -412,11 +499,69 @@ var ChatroomRuntime = class {
         blocks.push({ type: "text", text: item.text });
         continue;
       }
+      if (item.part.type === "file") {
+        const file = fileRefs.get(item.part);
+        if (file === void 0) throw new Error("chatroom file batch lost a file reference");
+        blocks.push({ type: "text", text: identifyFileText(file) });
+        continue;
+      }
       const attachment = refs[imageIndex++];
       if (attachment === void 0) throw new Error("chatroom attachment batch lost an image reference");
       blocks.push({ type: "image", attachment });
     }
     return blocks;
+  }
+  validateFiles(files) {
+    if (files.length > this.config.maxFilesPerMessage) {
+      throw new ChatroomInputError(`\u4E00\u6761\u6D88\u606F\u6700\u591A\u53D1\u9001 ${this.config.maxFilesPerMessage} \u4E2A\u6587\u4EF6\u3002`);
+    }
+    if (files.some((file) => file.byteLength > this.config.maxFileBytes)) {
+      throw new ChatroomInputError(`\u5355\u4E2A\u6587\u4EF6\u4E0D\u80FD\u8D85\u8FC7 ${formatMegabytes(this.config.maxFileBytes)}\u3002`);
+    }
+    const total = files.reduce((sum, file) => sum + file.byteLength, 0);
+    if (total > this.config.maxMessageFileBytes) {
+      throw new ChatroomInputError(`\u4E00\u6761\u6D88\u606F\u7684\u6587\u4EF6\u603B\u5927\u5C0F\u4E0D\u80FD\u8D85\u8FC7 ${formatMegabytes(this.config.maxMessageFileBytes)}\u3002`);
+    }
+  }
+  fileRecord(roomId, identity, part, data) {
+    return {
+      id: randomUUID(),
+      roomId,
+      participantId: identity.participantId,
+      displayName: identity.displayName,
+      name: normalizeFileName(part.name),
+      mediaType: normalizeMediaType(part.mediaType),
+      bytes: data.byteLength,
+      data: Buffer.from(data).toString("base64"),
+      createdAt: Date.now()
+    };
+  }
+  async resizeImage(data) {
+    try {
+      const { default: sharp } = await import("sharp");
+      const image = sharp(data, { animated: true, failOn: "error", limitInputPixels: false });
+      const metadata = await image.metadata();
+      const width = metadata.width;
+      const height = metadata.pageHeight ?? metadata.height;
+      if (width === void 0 || height === void 0) return data;
+      const maxPixels = this.ctx.attachments.imageLimits.maxImagePixels;
+      const scale = Math.min(
+        1,
+        this.config.maxImageSidePixels / width,
+        this.config.maxImageSidePixels / height,
+        Math.sqrt(maxPixels / (width * height))
+      );
+      if (scale >= 1) return data;
+      const resized = await image.resize({
+        width: Math.max(1, Math.floor(width * scale)),
+        height: Math.max(1, Math.floor(height * scale)),
+        fit: "inside",
+        withoutEnlargement: true
+      }).toBuffer();
+      return new Uint8Array(resized);
+    } catch (error) {
+      throw new ChatroomInputError(`\u56FE\u7247\u65E0\u6CD5\u53D1\u9001\uFF1A${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   broadcastPresence(state) {
     this.broadcast(state, { type: "presence", online: onlineCount(state) });
@@ -445,6 +590,10 @@ var ChatroomRuntime = class {
     if (this.roomRecords === void 0) throw new Error("chatroom room storage is unavailable");
     return this.roomRecords;
   }
+  requireFiles() {
+    if (this.files === void 0) throw new Error("chatroom file storage is unavailable");
+    return this.files;
+  }
 };
 function newRoomState(record) {
   return {
@@ -462,7 +611,14 @@ function borrowAgent(agent) {
   return { agent, release: async () => void 0 };
 }
 function publicIdentity(record) {
-  return { participantId: record.participantId, displayName: record.displayName };
+  return {
+    participantId: record.participantId,
+    displayName: record.displayName,
+    avatarId: record.avatarId ?? fallbackAvatarId(record.participantId)
+  };
+}
+function publicFile(record) {
+  return { id: record.id, name: record.name, mediaType: record.mediaType, bytes: record.bytes };
 }
 function publicRoom(record) {
   return {
@@ -486,12 +642,24 @@ function normalizeRoomTitle(value, maxChars) {
   if (/\p{Cc}/u.test(normalized)) throw new ChatroomInputError("\u5171\u4EAB\u4F1A\u8BDD\u540D\u79F0\u4E0D\u80FD\u5305\u542B\u63A7\u5236\u5B57\u7B26\u3002");
   return normalized;
 }
-function decodeBase64(data) {
+function decodeBase64(data, label) {
   const decoded = Buffer.from(data, "base64");
   if (data.length === 0 || decoded.toString("base64") !== data) {
-    throw new ChatroomInputError("\u56FE\u7247\u6570\u636E\u4E0D\u662F\u6709\u6548\u7684 base64\u3002");
+    throw new ChatroomInputError(`${label}\u6570\u636E\u4E0D\u662F\u6709\u6548\u7684 base64\u3002`);
   }
   return new Uint8Array(decoded);
+}
+function normalizeFileName(value) {
+  const normalized = value.trim().replace(/[\\/]/gu, "_").replace(/[\p{Cc}\p{Cf}]/gu, "");
+  if (normalized === "") throw new ChatroomInputError("\u6587\u4EF6\u540D\u4E0D\u80FD\u4E3A\u7A7A\u3002");
+  return [...normalized].slice(0, 255).join("");
+}
+function normalizeMediaType(value) {
+  const normalized = value.trim().toLowerCase();
+  return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u.test(normalized) ? normalized : "application/octet-stream";
+}
+function formatMegabytes(bytes) {
+  return `${Math.ceil(bytes / 1024 / 1024)} MB`;
 }
 function tokenHash(token) {
   return createHash("sha256").update(token).digest("hex");
@@ -554,6 +722,10 @@ var ChatroomHttpController = class {
         await this.handlePrompt(request, response);
         return;
       }
+      if (route.endpoint.startsWith("/files/")) {
+        this.handleFile(request, response, route.endpoint.slice("/files/".length));
+        return;
+      }
       if (route.endpoint === "/events" && request.method === "GET") {
         await this.handleEvents(request, response, url.searchParams);
         return;
@@ -586,7 +758,7 @@ var ChatroomHttpController = class {
         return;
       }
       const body = await readJson(request, smallRequestLimit(this.config));
-      const created = await this.runtime.createIdentity(fieldString(body, "displayName"));
+      const created = await this.runtime.createIdentity(fieldString(body, "displayName"), optionalFieldString(body, "avatarId"));
       response.setHeader("Set-Cookie", sessionCookie(
         this.config.cookieName,
         created.token,
@@ -643,8 +815,25 @@ var ChatroomHttpController = class {
     if (identity === void 0) return;
     const body = await readJson(request, this.runtime.maxPromptRequestBytes);
     const prompt = promptRequest(body, this.config);
-    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode);
+    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode, prompt.reply);
     json(response, 200, result);
+  }
+  handleFile(request, response, fileId) {
+    if (request.method !== "GET") {
+      methodNotAllowed(response, "GET");
+      return;
+    }
+    if (this.requireIdentity(request, response) === void 0) return;
+    if (fileId === "" || fileId.includes("/")) throw new ChatroomInputError("\u6587\u4EF6\u7F16\u53F7\u65E0\u6548\u3002");
+    const file = this.runtime.file(fileId);
+    response.writeHead(200, {
+      "Content-Type": file.ref.mediaType,
+      "Content-Length": file.data.byteLength,
+      "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.ref.name)}`,
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff"
+    });
+    response.end(file.data);
   }
   async handleEvents(request, response, search) {
     const identity = this.requireIdentity(request, response);
@@ -733,6 +922,12 @@ function fieldString(body, field) {
   if (typeof value !== "string") throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
   return value;
 }
+function optionalFieldString(body, field) {
+  const value = body[field];
+  if (value === void 0) return void 0;
+  if (typeof value !== "string") throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
+  return value;
+}
 function promptRequest(body, config) {
   const roomId = fieldString(body, "roomId");
   const mode = body.mode;
@@ -768,15 +963,37 @@ function promptRequest(body, config) {
       });
       continue;
     }
+    if (part.type === "file") {
+      if (typeof part.mediaType !== "string" || typeof part.data !== "string" || typeof part.name !== "string") {
+        throw new ChatroomInputError("\u6587\u4EF6\u6D88\u606F\u65E0\u6548\u3002");
+      }
+      content.push({ type: "file", mediaType: part.mediaType, data: part.data, name: part.name });
+      continue;
+    }
     throw new ChatroomInputError("\u6D88\u606F\u5185\u5BB9\u7C7B\u578B\u65E0\u6548\u3002");
   }
   if (textChars > config.maxMessageTextChars) {
     throw new ChatroomInputError(`\u6D88\u606F\u6587\u672C\u4E0D\u80FD\u8D85\u8FC7 ${config.maxMessageTextChars} \u4E2A\u5B57\u7B26\u3002`);
   }
-  if (!content.some((part) => part.type === "image" || part.text.trim() !== "")) {
+  if (!content.some((part) => part.type !== "text" || part.text.trim() !== "")) {
     throw new ChatroomInputError("\u6D88\u606F\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A\u3002");
   }
-  return { roomId, mode, content };
+  const reply = replyRequest(body.reply);
+  return { roomId, mode, content, ...reply === void 0 ? {} : { reply } };
+}
+function replyRequest(value) {
+  if (value === void 0) return void 0;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ChatroomInputError("\u56DE\u590D\u5F15\u7528\u65E0\u6548\u3002");
+  }
+  const reply = value;
+  const messageId = fieldString(reply, "messageId");
+  const displayName = fieldString(reply, "displayName").trim();
+  const text = fieldString(reply, "text").trim().replace(/\s+/gu, " ");
+  if (messageId === "" || displayName === "" || text === "") throw new ChatroomInputError("\u56DE\u590D\u5F15\u7528\u4E0D\u5B8C\u6574\u3002");
+  if ([...displayName].length > 80 || [...text].length > 240) throw new ChatroomInputError("\u56DE\u590D\u5F15\u7528\u8FC7\u957F\u3002");
+  if (/\p{Cc}/u.test(`${displayName}${text}`)) throw new ChatroomInputError("\u56DE\u590D\u5F15\u7528\u5305\u542B\u65E0\u6548\u5B57\u7B26\u3002");
+  return { messageId, displayName, text };
 }
 function isImageMediaType(value) {
   return value === "image/png" || value === "image/jpeg" || value === "image/webp" || value === "image/gif";

@@ -1,9 +1,22 @@
 import type { ChatroomMessageRole } from './types.js';
+import type { ChatroomAvatarId } from './avatars.js';
 export interface IdentityRecord {
     readonly participantId: string;
     readonly displayName: string;
+    readonly avatarId?: ChatroomAvatarId;
     readonly createdAt: number;
     readonly lastSeenAt: number;
+}
+export interface FileRecord {
+    readonly id: string;
+    readonly roomId: string;
+    readonly participantId: string;
+    readonly displayName: string;
+    readonly name: string;
+    readonly mediaType: string;
+    readonly bytes: number;
+    readonly data: string;
+    readonly createdAt: number;
 }
 export interface MessageRecord {
     readonly id: string;
@@ -32,6 +45,7 @@ export declare const chatroomDomainSpec: {
         identities: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, IdentityRecord>;
         messages: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, MessageRecord>;
         rooms: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, RoomRecord>;
+        files: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, FileRecord>;
     };
 };
 //# sourceMappingURL=domain.d.ts.map

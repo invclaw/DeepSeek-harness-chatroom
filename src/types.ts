@@ -1,11 +1,29 @@
 /** Shared JSON contracts between the Host room service and browser client. */
 
+import type { ChatroomAvatarId } from './avatars.js'
+
 export type ChatroomMessageRole = 'human' | 'ai'
 
 /** Public participant identity bound to one opaque browser session. */
 export interface ChatroomIdentity {
   readonly participantId: string
   readonly displayName: string
+  readonly avatarId: ChatroomAvatarId
+}
+
+/** Durable reply metadata rendered as a quote and retained in model-visible text. */
+export interface ChatroomReplyReference {
+  readonly messageId: string
+  readonly displayName: string
+  readonly text: string
+}
+
+/** Download metadata for one plugin-owned room file. */
+export interface ChatroomFileReference {
+  readonly id: string
+  readonly name: string
+  readonly mediaType: string
+  readonly bytes: number
 }
 
 /** One persisted room message delivered to every connected participant. */
@@ -54,12 +72,19 @@ export type ChatroomPromptContentPart =
     readonly data: string
     readonly name?: string
   }
+  | {
+    readonly type: 'file'
+    readonly mediaType: string
+    readonly data: string
+    readonly name: string
+  }
 
 /** Browser submission routed through human-first room admission. */
 export interface ChatroomPromptRequest {
   readonly roomId: string
   readonly mode: 'queue' | 'steer'
   readonly content: readonly ChatroomPromptContentPart[]
+  readonly reply?: ChatroomReplyReference
 }
 
 /** Whether one accepted room message woke the AI. */

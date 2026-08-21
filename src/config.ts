@@ -14,6 +14,10 @@ export interface Config {
   maxDisplayNameChars: number
   maxRoomTitleChars: number
   maxMessageTextChars: number
+  maxFileBytes: number
+  maxFilesPerMessage: number
+  maxMessageFileBytes: number
+  maxImageSidePixels: number
   sseHeartbeatMs: number
 }
 
@@ -29,6 +33,10 @@ export const Config: z<Config> = z.object({
   maxDisplayNameChars: z.number().step(1).min(1).max(80).default(24),
   maxRoomTitleChars: z.number().step(1).min(1).max(160).default(80),
   maxMessageTextChars: z.number().step(1).min(1).max(200_000).default(20_000),
+  maxFileBytes: z.number().step(1).min(1).max(100 * 1024 * 1024).default(20 * 1024 * 1024),
+  maxFilesPerMessage: z.number().step(1).min(1).max(20).default(5),
+  maxMessageFileBytes: z.number().step(1).min(1).max(200 * 1024 * 1024).default(50 * 1024 * 1024),
+  maxImageSidePixels: z.number().step(1).min(512).max(16_384).default(4_096),
   sseHeartbeatMs: z.number().step(1).min(5_000).max(120_000).default(15_000),
 })
 
@@ -36,5 +44,8 @@ export const Config: z<Config> = z.object({
 export function validateConfig(config: Config): void {
   if (!isAbsolute(config.cwd)) {
     throw new Error(`chatroom: cwd must be absolute, got ${JSON.stringify(config.cwd)}`)
+  }
+  if (config.maxMessageFileBytes < config.maxFileBytes) {
+    throw new Error('chatroom: maxMessageFileBytes must be greater than or equal to maxFileBytes')
   }
 }

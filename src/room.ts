@@ -11,13 +11,16 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
 import type { Config } from './config.js'
-import { chatroomDomainSpec, type IdentityRecord, type RoomRecord } from './domain.js'
-import { identifyPrompt, mentionsAi } from './message.js'
+import { isChatroomAvatarId, fallbackAvatarId } from './avatars.js'
+import { chatroomDomainSpec, type FileRecord, type IdentityRecord, type RoomRecord } from './domain.js'
+import { identifyFileText, identifyPrompt, mentionsAi } from './message.js'
 import type {
+  ChatroomFileReference,
   ChatroomIdentity,
   ChatroomInfo,
   ChatroomPromptContentPart,
   ChatroomPromptResponse,
+  ChatroomReplyReference,
   ChatroomServerEvent,
   ChatroomSnapshotEvent,
 } from './types.js'
@@ -48,6 +51,7 @@ export class ChatroomRuntime {
   private domain: Domain<typeof chatroomDomainSpec> | undefined
   private identities: KvTable<string, IdentityRecord> | undefined
   private roomRecords: KvTable<string, RoomRecord> | undefined
+  private files: KvTable<string, FileRecord> | undefined
   private readonly states = new Map<string, RoomState>()
   private ready = false
   private stopping = false
@@ -73,11 +77,13 @@ export class ChatroomRuntime {
     return records.map(publicRoom)
   }
 
-  /** Maximum accepted JSON body for one text-and-image room submission. */
+  /** Maximum accepted JSON body for one text, image, and file room submission. */
   get maxPromptRequestBytes(): number {
     const { maxImagesPerMessage, maxMessageImageBytes } = this.ctx.attachments.imageLimits
     const encodedImages = Math.ceil(maxMessageImageBytes / 3) * 4
-    return encodedImages + this.config.maxMessageTextChars * 4 + maxImagesPerMessage * 2_048 + 8_192
+    const encodedFiles = Math.ceil(this.config.maxMessageFileBytes / 3) * 4
+    return encodedImages + encodedFiles + this.config.maxMessageTextChars * 4
+      + (maxImagesPerMessage + this.config.maxFilesPerMessage) * 2_048 + 8_192
   }
 
   /** Whether identity persistence and the configured shared Session are ready. */
@@ -91,6 +97,7 @@ export class ChatroomRuntime {
     this.domain = domain
     this.identities = domain.table('identities')
     this.roomRecords = domain.table('rooms')
+    this.files = domain.table('files')
     await this.seedConfiguredRoom()
     for (const [, record] of this.requireRoomRecords().entries()) {
       this.states.set(record.id, newRoomState(record))
@@ -119,6 +126,7 @@ export class ChatroomRuntime {
     this.domain = undefined
     this.identities = undefined
     this.roomRecords = undefined
+    this.files = undefined
   }
 
   /** Resolve an opaque cookie token to its durable identity. */
@@ -129,14 +137,17 @@ export class ChatroomRuntime {
   }
 
   /** Mint and durably bind a new browser identity. */
-  async createIdentity(displayName: string): Promise<{ token: string; identity: ChatroomIdentity }> {
+  async createIdentity(displayName: string, avatarId?: string): Promise<{ token: string; identity: ChatroomIdentity }> {
     this.assertReady()
     const normalized = normalizeDisplayName(displayName, this.config.maxDisplayNameChars)
     const token = randomBytes(32).toString('base64url')
     const now = Date.now()
+    const participantId = randomUUID()
+    if (avatarId !== undefined && !isChatroomAvatarId(avatarId)) throw new ChatroomInputError('请选择有效的头像。')
     const record: IdentityRecord = {
-      participantId: randomUUID(),
+      participantId,
       displayName: normalized,
+      avatarId: avatarId ?? fallbackAvatarId(participantId),
       createdAt: now,
       lastSeenAt: now,
     }
@@ -188,6 +199,7 @@ export class ChatroomRuntime {
     identity: ChatroomIdentity,
     content: readonly ChatroomPromptContentPart[],
     mode: 'queue' | 'steer',
+    reply?: ChatroomReplyReference,
   ): Promise<ChatroomPromptResponse> {
     this.assertReady()
     const state = this.requireState(roomId)
@@ -201,7 +213,7 @@ export class ChatroomRuntime {
           throw new ChatroomInputError(`模型 ${JSON.stringify(modelId)} 不支持图片输入。`)
         }
       }
-      const durable = await this.durableContent(identifyPrompt(content, identity))
+      const durable = await this.durableContent(roomId, identity, identifyPrompt(content, identity, reply))
       const message = createUserMessage({ content: durable, source: { kind: 'user' } })
       if (!aiTriggered) {
         binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
@@ -214,6 +226,14 @@ export class ChatroomRuntime {
     })
     state.admission = task.then(() => undefined, () => undefined)
     return await task
+  }
+
+  /** Resolve one authenticated room-file download. */
+  file(fileId: string): { readonly ref: ChatroomFileReference; readonly data: Uint8Array } {
+    this.assertReady()
+    const record = this.requireFiles().get(fileId)
+    if (record === undefined) throw new ChatroomInputError('文件不存在。')
+    return { ref: publicFile(record), data: decodeBase64(record.data, '文件') }
   }
 
   /** Attach one authenticated presence client to one room. */
@@ -326,20 +346,32 @@ export class ChatroomRuntime {
     await workspace.attachSession(SessionId(sessionId))
   }
 
-  private async durableContent(content: readonly ChatroomPromptContentPart[]): Promise<ContentBlock[]> {
+  private async durableContent(
+    roomId: string,
+    identity: ChatroomIdentity,
+    content: readonly ChatroomPromptContentPart[],
+  ): Promise<ContentBlock[]> {
     const prepared = content.map(part => part.type === 'text'
       ? part
-      : { part, data: decodeBase64(part.data) })
-    const images = prepared.filter((part): part is Extract<typeof part, { data: Uint8Array }> => 'data' in part)
+      : { part, data: decodeBase64(part.data, part.type === 'image' ? '图片' : '文件') })
+    const images = prepared.filter((item): item is Extract<typeof item, { data: Uint8Array }> =>
+      'data' in item && item.part.type === 'image')
+    const files = prepared.filter((item): item is Extract<typeof item, { data: Uint8Array }> =>
+      'data' in item && item.part.type === 'file')
+    this.validateFiles(files.map(file => file.data))
     const mediaTypes = this.ctx.attachments.imageLimits.mediaTypes
     for (const image of images) {
-      if (!mediaTypes.includes(image.part.mediaType)) {
+      if (image.part.type !== 'image' || !mediaTypes.includes(image.part.mediaType)) {
         throw new ChatroomInputError(`不支持图片格式 ${image.part.mediaType}。`)
       }
     }
+    const admittedImages = await Promise.all(images.map(async image => ({
+      part: image.part as Extract<ChatroomPromptContentPart, { type: 'image' }>,
+      data: await this.resizeImage(image.data),
+    })))
     let refs: Awaited<ReturnType<typeof this.ctx.attachments.saveImages>> = []
     try {
-      refs = await this.ctx.attachments.saveImages(images.map(image => ({
+      refs = await this.ctx.attachments.saveImages(admittedImages.map(image => ({
         data: image.data,
         mediaType: image.part.mediaType as ImageMediaType,
         ...(image.part.name === undefined ? {} : { name: image.part.name }),
@@ -348,6 +380,13 @@ export class ChatroomRuntime {
       if (error instanceof AttachmentError) throw new ChatroomInputError(`图片无法发送：${error.message}`)
       throw error
     }
+    const fileRefs = new Map<Extract<ChatroomPromptContentPart, { type: 'file' }>, ChatroomFileReference>()
+    for (const file of files) {
+      if (file.part.type !== 'file') continue
+      const record = this.fileRecord(roomId, identity, file.part, file.data)
+      await this.requireFiles().put(record.id, record)
+      fileRefs.set(file.part, publicFile(record))
+    }
     const blocks: ContentBlock[] = []
     let imageIndex = 0
     for (const item of prepared) {
@@ -355,11 +394,77 @@ export class ChatroomRuntime {
         blocks.push({ type: 'text', text: item.text })
         continue
       }
+      if (item.part.type === 'file') {
+        const file = fileRefs.get(item.part)
+        if (file === undefined) throw new Error('chatroom file batch lost a file reference')
+        blocks.push({ type: 'text', text: identifyFileText(file) })
+        continue
+      }
       const attachment = refs[imageIndex++]
       if (attachment === undefined) throw new Error('chatroom attachment batch lost an image reference')
       blocks.push({ type: 'image', attachment })
     }
     return blocks
+  }
+
+  private validateFiles(files: readonly Uint8Array[]): void {
+    if (files.length > this.config.maxFilesPerMessage) {
+      throw new ChatroomInputError(`一条消息最多发送 ${this.config.maxFilesPerMessage} 个文件。`)
+    }
+    if (files.some(file => file.byteLength > this.config.maxFileBytes)) {
+      throw new ChatroomInputError(`单个文件不能超过 ${formatMegabytes(this.config.maxFileBytes)}。`)
+    }
+    const total = files.reduce((sum, file) => sum + file.byteLength, 0)
+    if (total > this.config.maxMessageFileBytes) {
+      throw new ChatroomInputError(`一条消息的文件总大小不能超过 ${formatMegabytes(this.config.maxMessageFileBytes)}。`)
+    }
+  }
+
+  private fileRecord(
+    roomId: string,
+    identity: ChatroomIdentity,
+    part: Extract<ChatroomPromptContentPart, { type: 'file' }>,
+    data: Uint8Array,
+  ): FileRecord {
+    return {
+      id: randomUUID(),
+      roomId,
+      participantId: identity.participantId,
+      displayName: identity.displayName,
+      name: normalizeFileName(part.name),
+      mediaType: normalizeMediaType(part.mediaType),
+      bytes: data.byteLength,
+      data: Buffer.from(data).toString('base64'),
+      createdAt: Date.now(),
+    }
+  }
+
+  private async resizeImage(data: Uint8Array): Promise<Uint8Array> {
+    try {
+      const { default: sharp } = await import('sharp')
+      const image = sharp(data, { animated: true, failOn: 'error', limitInputPixels: false })
+      const metadata = await image.metadata()
+      const width = metadata.width
+      const height = metadata.pageHeight ?? metadata.height
+      if (width === undefined || height === undefined) return data
+      const maxPixels = this.ctx.attachments.imageLimits.maxImagePixels
+      const scale = Math.min(
+        1,
+        this.config.maxImageSidePixels / width,
+        this.config.maxImageSidePixels / height,
+        Math.sqrt(maxPixels / (width * height)),
+      )
+      if (scale >= 1) return data
+      const resized = await image.resize({
+        width: Math.max(1, Math.floor(width * scale)),
+        height: Math.max(1, Math.floor(height * scale)),
+        fit: 'inside',
+        withoutEnlargement: true,
+      }).toBuffer()
+      return new Uint8Array(resized)
+    } catch (error) {
+      throw new ChatroomInputError(`图片无法发送：${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   private broadcastPresence(state: RoomState): void {
@@ -395,6 +500,11 @@ export class ChatroomRuntime {
     if (this.roomRecords === undefined) throw new Error('chatroom room storage is unavailable')
     return this.roomRecords
   }
+
+  private requireFiles(): KvTable<string, FileRecord> {
+    if (this.files === undefined) throw new Error('chatroom file storage is unavailable')
+    return this.files
+  }
 }
 
 function newRoomState(record: RoomRecord): RoomState {
@@ -416,7 +526,15 @@ function borrowAgent(agent: Agent): AgentBinding {
 }
 
 function publicIdentity(record: IdentityRecord): ChatroomIdentity {
-  return { participantId: record.participantId, displayName: record.displayName }
+  return {
+    participantId: record.participantId,
+    displayName: record.displayName,
+    avatarId: record.avatarId ?? fallbackAvatarId(record.participantId),
+  }
+}
+
+function publicFile(record: FileRecord): ChatroomFileReference {
+  return { id: record.id, name: record.name, mediaType: record.mediaType, bytes: record.bytes }
 }
 
 function publicRoom(record: RoomRecord): ChatroomInfo {
@@ -444,12 +562,29 @@ function normalizeRoomTitle(value: string, maxChars: number): string {
   return normalized
 }
 
-function decodeBase64(data: string): Uint8Array {
+function decodeBase64(data: string, label: string): Uint8Array {
   const decoded = Buffer.from(data, 'base64')
   if (data.length === 0 || decoded.toString('base64') !== data) {
-    throw new ChatroomInputError('图片数据不是有效的 base64。')
+    throw new ChatroomInputError(`${label}数据不是有效的 base64。`)
   }
   return new Uint8Array(decoded)
+}
+
+function normalizeFileName(value: string): string {
+  const normalized = value.trim().replace(/[\\/]/gu, '_').replace(/[\p{Cc}\p{Cf}]/gu, '')
+  if (normalized === '') throw new ChatroomInputError('文件名不能为空。')
+  return [...normalized].slice(0, 255).join('')
+}
+
+function normalizeMediaType(value: string): string {
+  const normalized = value.trim().toLowerCase()
+  return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u.test(normalized)
+    ? normalized
+    : 'application/octet-stream'
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${Math.ceil(bytes / 1024 / 1024)} MB`
 }
 
 function tokenHash(token: string): string {

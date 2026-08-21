@@ -1,0 +1,102 @@
+import { useRef } from 'react'
+import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { ChatroomReplyReference } from '../types.js'
+import type { ChatroomClientStore, ChatroomView } from './store.js'
+
+interface ChatroomComposerInjected {
+  useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
+  addFiles(roomId: string, files: readonly File[]): void
+  removeFile(roomId: string, fileId: string): void
+  clearReply(roomId: string): void
+  sendFiles(roomId: string): Promise<void>
+}
+
+type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomComposerInjected
+type ComposerDockProps = PropsRuntime<'conversation.input.dock'> & ChatroomComposerInjected
+
+/** Small file chooser inside the native composer tool row. */
+export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
+  const room = props.useChatroom(snapshot => snapshot)
+  const active = room.rooms.find(candidate => candidate.sessionId === String(props.sessionId))
+  const input = useRef<HTMLInputElement>(null)
+  if (active === undefined) return null
+  return (
+    <>
+      <button
+        className="dsh-chatroom-file-button"
+        type="button"
+        title="发送文件"
+        aria-label="发送文件"
+        onClick={() => { input.current?.click() }}
+      >
+        <span aria-hidden>📎</span>
+        <span>文件</span>
+      </button>
+      <input
+        ref={input}
+        className="dsh-chatroom-file-input"
+        data-testid="chatroom-file-input"
+        type="file"
+        multiple
+        onChange={(event) => {
+          const files = event.currentTarget.files
+          if (files !== null) props.addFiles(active.id, [...files])
+          event.currentTarget.value = ''
+        }}
+      />
+    </>
+  )
+}
+
+/** Reply quote and pending file rail above the native composer. */
+export function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | null {
+  const room = props.useChatroom(snapshot => snapshot)
+  const active = room.rooms.find(candidate => candidate.sessionId === String(props.sessionId))
+  if (active === undefined || room.composerRoomId !== active.id) return null
+  const hasFiles = room.pendingFiles.length > 0
+  if (!hasFiles && room.reply === undefined && room.composerError === undefined) return null
+  const canSendFilesOnly = hasFiles && props.input.draft.trim() === '' && props.input.imageIds.length === 0
+  return (
+    <div className="dsh-chatroom-composer-dock" data-testid="chatroom-composer-dock">
+      {room.reply !== undefined && <ReplyPreview reply={room.reply} clear={() => { props.clearReply(active.id) }} />}
+      {hasFiles && (
+        <div className="dsh-chatroom-pending-files">
+          {room.pendingFiles.map(item => (
+            <span className="dsh-chatroom-pending-file" key={item.id}>
+              <span aria-hidden>📎</span>
+              <span title={item.file.name}>{item.file.name}</span>
+              <button type="button" aria-label={`移除 ${item.file.name}`} onClick={() => { props.removeFile(active.id, item.id) }}>×</button>
+            </span>
+          ))}
+          {canSendFilesOnly
+            ? (
+              <button
+                className="dsh-chatroom-send-files"
+                type="button"
+                disabled={room.composerBusy}
+                onClick={() => { void props.sendFiles(active.id) }}
+              >
+                {room.composerBusy ? '正在发送…' : '发送文件'}
+              </button>
+            )
+            : <small className="dsh-chatroom-file-hint">文件将随当前消息发送</small>}
+        </div>
+      )}
+      {room.composerError !== undefined && <div className="dsh-chatroom-composer-error" role="alert">{room.composerError}</div>}
+    </div>
+  )
+}
+
+function ReplyPreview({ reply, clear }: { reply: ChatroomReplyReference; clear(): void }): JSX.Element {
+  return (
+    <div className="dsh-chatroom-reply-preview">
+      <span>
+        <strong>回复 {reply.displayName}</strong>
+        <small>{reply.text}</small>
+      </span>
+      <button type="button" aria-label="取消回复" onClick={clear}>×</button>
+    </div>
+  )
+}
+
+export type { ChatroomClientStore }

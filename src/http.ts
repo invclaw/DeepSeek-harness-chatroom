@@ -58,6 +58,10 @@ export class ChatroomHttpController {
         await this.handlePrompt(request, response)
         return
       }
+      if (route.endpoint.startsWith('/files/')) {
+        this.handleFile(request, response, route.endpoint.slice('/files/'.length))
+        return
+      }
       if (route.endpoint === '/events' && request.method === 'GET') {
         await this.handleEvents(request, response, url.searchParams)
         return
@@ -91,7 +95,7 @@ export class ChatroomHttpController {
         return
       }
       const body = await readJson(request, smallRequestLimit(this.config))
-      const created = await this.runtime.createIdentity(fieldString(body, 'displayName'))
+      const created = await this.runtime.createIdentity(fieldString(body, 'displayName'), optionalFieldString(body, 'avatarId'))
       response.setHeader('Set-Cookie', sessionCookie(
         this.config.cookieName,
         created.token,
@@ -151,8 +155,26 @@ export class ChatroomHttpController {
     if (identity === undefined) return
     const body = await readJson(request, this.runtime.maxPromptRequestBytes)
     const prompt = promptRequest(body, this.config)
-    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode)
+    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode, prompt.reply)
     json(response, 200, result)
+  }
+
+  private handleFile(request: IncomingMessage, response: ServerResponse, fileId: string): void {
+    if (request.method !== 'GET') {
+      methodNotAllowed(response, 'GET')
+      return
+    }
+    if (this.requireIdentity(request, response) === undefined) return
+    if (fileId === '' || fileId.includes('/')) throw new ChatroomInputError('文件编号无效。')
+    const file = this.runtime.file(fileId)
+    response.writeHead(200, {
+      'Content-Type': file.ref.mediaType,
+      'Content-Length': file.data.byteLength,
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.ref.name)}`,
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    })
+    response.end(file.data)
   }
 
   private async handleEvents(
@@ -255,6 +277,13 @@ function fieldString(body: Record<string, unknown>, field: string): string {
   return value
 }
 
+function optionalFieldString(body: Record<string, unknown>, field: string): string | undefined {
+  const value = body[field]
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw new ChatroomInputError(`字段 ${field} 必须是字符串。`)
+  return value
+}
+
 function promptRequest(body: Record<string, unknown>, config: Config): ChatroomPromptRequest {
   const roomId = fieldString(body, 'roomId')
   const mode = body.mode
@@ -290,15 +319,38 @@ function promptRequest(body: Record<string, unknown>, config: Config): ChatroomP
       })
       continue
     }
+    if (part.type === 'file') {
+      if (typeof part.mediaType !== 'string' || typeof part.data !== 'string' || typeof part.name !== 'string') {
+        throw new ChatroomInputError('文件消息无效。')
+      }
+      content.push({ type: 'file', mediaType: part.mediaType, data: part.data, name: part.name })
+      continue
+    }
     throw new ChatroomInputError('消息内容类型无效。')
   }
   if (textChars > config.maxMessageTextChars) {
     throw new ChatroomInputError(`消息文本不能超过 ${config.maxMessageTextChars} 个字符。`)
   }
-  if (!content.some(part => part.type === 'image' || part.text.trim() !== '')) {
+  if (!content.some(part => part.type !== 'text' || part.text.trim() !== '')) {
     throw new ChatroomInputError('消息内容不能为空。')
   }
-  return { roomId, mode, content }
+  const reply = replyRequest(body.reply)
+  return { roomId, mode, content, ...(reply === undefined ? {} : { reply }) }
+}
+
+function replyRequest(value: unknown): ChatroomPromptRequest['reply'] {
+  if (value === undefined) return undefined
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ChatroomInputError('回复引用无效。')
+  }
+  const reply = value as Record<string, unknown>
+  const messageId = fieldString(reply, 'messageId')
+  const displayName = fieldString(reply, 'displayName').trim()
+  const text = fieldString(reply, 'text').trim().replace(/\s+/gu, ' ')
+  if (messageId === '' || displayName === '' || text === '') throw new ChatroomInputError('回复引用不完整。')
+  if ([...displayName].length > 80 || [...text].length > 240) throw new ChatroomInputError('回复引用过长。')
+  if (/\p{Cc}/u.test(`${displayName}${text}`)) throw new ChatroomInputError('回复引用包含无效字符。')
+  return { messageId, displayName, text }
 }
 
 function isImageMediaType(value: unknown): value is Extract<ChatroomPromptContentPart, { type: 'image' }>['mediaType'] {

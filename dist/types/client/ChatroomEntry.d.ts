@@ -4,7 +4,7 @@ interface ChatroomEntryInjected {
     useChatroom<T>(selector: (snapshot: ChatroomView) => T): T;
     openRoom(): void;
     closeRoom(): void;
-    join(displayName: string): Promise<void>;
+    join(displayName: string, avatarId: string): Promise<void>;
     selectRoom(roomId: string): Promise<void>;
     createRoom(title: string): Promise<void>;
     resetIdentity(): Promise<void>;

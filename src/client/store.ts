@@ -3,8 +3,10 @@ import type {
   ChatroomErrorResponse,
   ChatroomIdentity,
   ChatroomInfo,
+  ChatroomPromptContentPart,
   ChatroomPromptRequest,
   ChatroomPromptResponse,
+  ChatroomReplyReference,
   ChatroomRoomResponse,
   ChatroomServerEvent,
   ChatroomSessionResponse,
@@ -13,6 +15,20 @@ import { CHATROOM_API_PREFIX } from '../routes.js'
 
 export type ChatroomPhase = 'loading' | 'identity-required' | 'ready' | 'error'
 export type ChatroomConnection = 'offline' | 'connecting' | 'online'
+
+/** Browser-owned file waiting to be merged into the next room submission. */
+export interface PendingChatroomFile {
+  readonly id: string
+  readonly file: File
+}
+
+/** CAS snapshot used by the native prompt interceptor. */
+export interface ChatroomComposition {
+  readonly roomId: string
+  readonly revision: number
+  readonly files: readonly PendingChatroomFile[]
+  readonly reply: ChatroomReplyReference | undefined
+}
 
 /** Browser identity, room directory, selection, and presence around native Harness Sessions. */
 export interface ChatroomView {
@@ -24,6 +40,11 @@ export interface ChatroomView {
   readonly identity: ChatroomIdentity | undefined
   readonly online: number
   readonly error: string | undefined
+  readonly composerRoomId: string | undefined
+  readonly pendingFiles: readonly PendingChatroomFile[]
+  readonly reply: ChatroomReplyReference | undefined
+  readonly composerBusy: boolean
+  readonly composerError: string | undefined
 }
 
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
@@ -37,11 +58,18 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     identity: undefined,
     online: 0,
     error: undefined,
+    composerRoomId: undefined,
+    pendingFiles: [],
+    reply: undefined,
+    composerBusy: false,
+    composerError: undefined,
   }
   private readonly listeners = new Set<() => void>()
   private eventSource: EventSource | undefined
   private pendingOpenRoomId: string | undefined
   private stopped = false
+  private compositionRevision = 0
+  private pendingFileSequence = 0
 
   constructor(private readonly openSession: (sessionId: string) => boolean = () => false) {}
 
@@ -106,13 +134,13 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   }
 
   /** Create the persistent browser identity, then show the room directory. */
-  join = async (displayName: string): Promise<void> => {
+  join = async (displayName: string, avatarId: string): Promise<void> => {
     this.set({ phase: 'loading', error: undefined })
     try {
       const session = await requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ displayName }),
+        body: JSON.stringify({ displayName, avatarId }),
       })
       if (session.identity === null) throw new Error('服务端没有返回聊天室身份。')
       this.set({
@@ -126,6 +154,90 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       })
     } catch (error) {
       this.set({ phase: 'identity-required', error: errorMessage(error) })
+    }
+  }
+
+  /** Add browser files to the next submission in one shared room. */
+  addFiles = (roomId: string, files: readonly File[]): void => {
+    if (files.length === 0) return
+    const current = this.compositionFor(roomId)
+    const pending = files.map(file => ({ id: `file-${++this.pendingFileSequence}`, file }))
+    this.compositionRevision += 1
+    this.set({
+      composerRoomId: roomId,
+      pendingFiles: [...current.files, ...pending],
+      reply: current.reply,
+      composerError: undefined,
+    })
+  }
+
+  /** Remove one browser-owned pending file. */
+  removeFile = (roomId: string, fileId: string): void => {
+    if (this.snapshot.composerRoomId !== roomId) return
+    const files = this.snapshot.pendingFiles.filter(file => file.id !== fileId)
+    if (files.length === this.snapshot.pendingFiles.length) return
+    this.compositionRevision += 1
+    this.set({ pendingFiles: files, composerError: undefined })
+  }
+
+  /** Address the next room message as a reply to one durable participant message. */
+  setReply = (roomId: string, reply: ChatroomReplyReference): void => {
+    const current = this.compositionFor(roomId)
+    this.compositionRevision += 1
+    this.set({
+      composerRoomId: roomId,
+      pendingFiles: current.files,
+      reply,
+      composerError: undefined,
+    })
+  }
+
+  /** Cancel the next-message reply without changing pending files. */
+  clearReply = (roomId: string): void => {
+    if (this.snapshot.composerRoomId !== roomId || this.snapshot.reply === undefined) return
+    this.compositionRevision += 1
+    this.set({ reply: undefined, composerError: undefined })
+  }
+
+  /** Capture files and reply metadata for one native prompt submission. */
+  composition = (roomId: string): ChatroomComposition => {
+    const current = this.compositionFor(roomId)
+    return { roomId, revision: this.compositionRevision, files: current.files, reply: current.reply }
+  }
+
+  /** Clear only the composition that was successfully admitted. */
+  completeComposition = (composition: ChatroomComposition): void => {
+    if (this.snapshot.composerRoomId !== composition.roomId
+      || this.compositionRevision !== composition.revision) {
+      if (this.snapshot.composerBusy) this.set({ composerBusy: false })
+      return
+    }
+    this.compositionRevision += 1
+    this.set({
+      composerRoomId: undefined,
+      pendingFiles: [],
+      reply: undefined,
+      composerBusy: false,
+      composerError: undefined,
+    })
+  }
+
+  /** Send selected files without requiring placeholder text in the native composer. */
+  sendFiles = async (roomId: string): Promise<void> => {
+    const composition = this.composition(roomId)
+    if (composition.files.length === 0 || this.snapshot.composerBusy) return
+    this.set({ composerBusy: true, composerError: undefined })
+    try {
+      const content = await serializePendingFiles(composition.files)
+      await submitRoomPrompt({
+        roomId,
+        mode: 'queue',
+        content,
+        ...(composition.reply === undefined ? {} : { reply: composition.reply }),
+      })
+      this.completeComposition(composition)
+    } catch (error) {
+      this.set({ composerBusy: false, composerError: errorMessage(error) })
     }
   }
 
@@ -192,6 +304,15 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.set({ phase: 'ready', rooms, room, connection: 'connecting', online: 0, error: undefined })
     this.openEvents(room)
     this.resumeOpen()
+  }
+
+  private compositionFor(roomId: string): {
+    files: readonly PendingChatroomFile[]
+    reply: ChatroomReplyReference | undefined
+  } {
+    return this.snapshot.composerRoomId === roomId
+      ? { files: this.snapshot.pendingFiles, reply: this.snapshot.reply }
+      : { files: [], reply: undefined }
   }
 
   private async loadSession(): Promise<void> {
@@ -287,6 +408,18 @@ export async function submitRoomPrompt(
   })
 }
 
+/** Serialize browser Files only at submission time, keeping bytes out of observable state. */
+export async function serializePendingFiles(
+  files: readonly PendingChatroomFile[],
+): Promise<Extract<ChatroomPromptContentPart, { type: 'file' }>[]> {
+  return await Promise.all(files.map(async ({ file }) => ({
+    type: 'file' as const,
+    name: file.name,
+    mediaType: file.type === '' ? 'application/octet-stream' : file.type,
+    data: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
+  })))
+}
+
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
     super(message)
@@ -317,4 +450,12 @@ async function responseError(response: Response): Promise<HttpError> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 32_768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768))
+  }
+  return btoa(binary)
 }

@@ -1,7 +1,7 @@
 import type { IApiClient } from '@deepseek-ai/dsh-client-connection/client'
 import { identifyPrompt, isSlashCommand } from '../message.js'
 import type { ChatroomPromptContentPart } from '../types.js'
-import { submitRoomPrompt, type ChatroomClientStore } from './store.js'
+import { serializePendingFiles, submitRoomPrompt, type ChatroomClientStore } from './store.js'
 
 export { identifyPrompt }
 
@@ -20,11 +20,15 @@ export function installNativePromptIdentity(
     if (store.getSnapshot().identity === undefined) {
       throw new Error('请先选择聊天室身份。')
     }
+    const composition = store.composition(room.id)
+    const files = await serializePendingFiles(composition.files)
     await submitRoomPrompt({
       roomId: room.id,
       mode: payload.mode,
-      content: payload.content,
+      content: [...payload.content as readonly ChatroomPromptContentPart[], ...files],
+      ...(composition.reply === undefined ? {} : { reply: composition.reply }),
     }, signal)
+    store.completeComposition(composition)
     return {
       rpcId: 'chatroom-human-first' as never,
       result: { ok: true, value: { accepted: true } },

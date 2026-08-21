@@ -2,15 +2,17 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
+import sharp from 'sharp'
 import type { Config } from '../src/config.js'
 import { ChatroomRuntime } from '../src/room.js'
+import { projectFileText } from '../src/message.js'
 
 describe('ChatroomRuntime', () => {
   it('appends human chat without waking AI and wakes only on explicit mention', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
     await runtime.start()
-    const identity = { participantId: 'alice-id', displayName: 'Alice' }
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
 
     await runtime.submit('lobby', identity, [{ type: 'text', text: '大家先讨论' }], 'queue')
     expect(harness.agents[0]?.session.append).toHaveBeenCalledOnce()
@@ -25,7 +27,7 @@ describe('ChatroomRuntime', () => {
     const followup = harness.agents[0]?.followup.mock.calls[0]?.[0]
     expect(followup?.content[0]).toMatchObject({
       type: 'text',
-      text: '\u2063dsh-chatroom:alice-id\u2063Alice：@AI 请总结',
+      text: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：@AI 请总结',
     })
 
     await runtime.stop()
@@ -36,13 +38,51 @@ describe('ChatroomRuntime', () => {
     const runtime = new ChatroomRuntime(harness.ctx, config())
     await runtime.start()
 
-    const room = await runtime.createRoom('项目二', { participantId: 'alice-id', displayName: 'Alice' })
+    const room = await runtime.createRoom('项目二', { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' })
 
     expect(room.title).toBe('项目二')
     expect(room.sessionId).toBe(`chatroom-v1-${room.id}`)
     expect(runtime.rooms).toHaveLength(2)
     expect(harness.agents).toHaveLength(2)
     expect(harness.attached).toEqual(['chatroom-v1-lobby', room.sessionId])
+    await runtime.stop()
+  })
+
+  it('stores downloadable files and keeps a model-readable reply line', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+
+    await runtime.submit('lobby', identity, [{
+      type: 'file', name: 'note.txt', mediaType: 'text/plain', data: Buffer.from('hello').toString('base64'),
+    }], 'queue', { messageId: 'user:1', displayName: 'Bob', text: '前文' })
+
+    const message = harness.agents[0]?.session.append.mock.calls[0]?.[1]
+    const text = message?.content.filter((block: { type: string }) => block.type === 'text')
+      .map((block: { text?: string }) => block.text ?? '').join('') ?? ''
+    expect(text).toContain('回复 Bob「前文」')
+    const projected = projectFileText(text)
+    expect(projected.files).toMatchObject([{ name: 'note.txt', mediaType: 'text/plain', bytes: 5 }])
+    const stored = runtime.file(projected.files[0]!.id)
+    expect(new TextDecoder().decode(stored.data)).toBe('hello')
+    await runtime.stop()
+  })
+
+  it('downscales oversized images before native attachment admission', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, { ...config(), maxImageSidePixels: 1000 })
+    await runtime.start()
+    const image = await sharp({ create: { width: 2000, height: 10, channels: 3, background: '#336699' } }).png().toBuffer()
+
+    await runtime.submit('lobby', {
+      participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale',
+    }, [{ type: 'image', mediaType: 'image/png', data: image.toString('base64'), name: 'wide.png' }], 'queue')
+
+    const saved = harness.savedImages.mock.calls[0]?.[0]?.[0]
+    const metadata = await sharp(saved?.data).metadata()
+    expect(metadata.width).toBe(1000)
+    expect(metadata.height).toBe(5)
     await runtime.stop()
   })
 })
@@ -55,6 +95,7 @@ function fakeHarness(): {
     session: Agent['session'] & { append: ReturnType<typeof vi.fn> }
   }>
   attached: string[]
+  savedImages: ReturnType<typeof vi.fn>
 } {
   const tables = new Map<string, MemoryTable<string, unknown>>()
   const agents: Array<Agent & {
@@ -63,6 +104,15 @@ function fakeHarness(): {
     session: Agent['session'] & { append: ReturnType<typeof vi.fn> }
   }> = []
   const attached: string[] = []
+  const savedImages = vi.fn(async (inputs: Array<{ data: Uint8Array; mediaType: string; name?: string }>) =>
+    inputs.map((input, index) => ({
+      attachmentId: `attachment-${index}`,
+      mediaType: input.mediaType,
+      bytes: input.data.byteLength,
+      width: 1,
+      height: 1,
+      ...(input.name === undefined ? {} : { name: input.name }),
+    })))
   const ctx = {
     storageDomain: {
       open: vi.fn(async () => ({
@@ -108,11 +158,11 @@ function fakeHarness(): {
         maxImagePixels: 10_000_000,
         mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
       },
-      saveImages: vi.fn(async () => []),
+      saveImages: savedImages,
     },
     llm: { resolveModelInfo: vi.fn(async () => ({ inputModalities: ['text', 'image'] })) },
   } as unknown as Context
-  return { ctx, agents, attached }
+  return { ctx, agents, attached, savedImages }
 }
 
 class MemoryTable<K extends string, V> implements KvTable<K, V> {
@@ -146,6 +196,10 @@ function config(): Config {
     maxDisplayNameChars: 24,
     maxRoomTitleChars: 80,
     maxMessageTextChars: 20_000,
+    maxFileBytes: 20 * 1024 * 1024,
+    maxFilesPerMessage: 5,
+    maxMessageFileBytes: 50 * 1024 * 1024,
+    maxImageSidePixels: 4_096,
     sseHeartbeatMs: 15_000,
   }
 }

@@ -41,6 +41,8 @@ function validConfig(): Config {
     roomId: 'lobby', roomTitle: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-lobby',
     cwd: '/tmp', agentPreset: 'standard', cookieName: 'room_session', cookieMaxAgeSeconds: 600,
     maxDisplayNameChars: 24, maxRoomTitleChars: 80, maxMessageTextChars: 20_000,
+    maxFileBytes: 20 * 1024 * 1024, maxFilesPerMessage: 5, maxMessageFileBytes: 50 * 1024 * 1024,
+    maxImageSidePixels: 4_096,
     sseHeartbeatMs: 15_000,
   }
 }

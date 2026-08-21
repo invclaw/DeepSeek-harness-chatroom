@@ -12,6 +12,10 @@ export interface Config {
     maxDisplayNameChars: number;
     maxRoomTitleChars: number;
     maxMessageTextChars: number;
+    maxFileBytes: number;
+    maxFilesPerMessage: number;
+    maxMessageFileBytes: number;
+    maxImageSidePixels: number;
     sseHeartbeatMs: number;
 }
 export declare const Config: z<Config>;

@@ -6,18 +6,20 @@
 
 ## 功能
 
-- 首次访问选择显示身份；后续通过不透明浏览器会话 Cookie 自动恢复
+- 首次访问选择显示名称和头像；后续通过不透明浏览器会话 Cookie 自动恢复
 - 共享会话目录支持创建和切换多个相互独立的持久 Harness Session
 - 普通消息只用于人类聊天；明确输入 `@AI` 或 `@DeepSeek`（可配置名称）时才触发 Agent 回复
+- RC7 原生 `@` 候选菜单优先提供 `@AI` 和配置的 AI 名称
 - 消息、AI 回复和运行状态由 Harness 原生实时通道同步
 - 保留原生侧栏、对话/轨迹页签、思考与工具过程、Session log、模型选择和输入框
-- 图片先写入 Harness 原生附件存储；停止/排队/转向、斜杠命令、批准授权和问答交互继续使用原生能力
+- 支持回复引用、聊天室文件上传/下载；超大图片自动缩放后写入 Harness 原生附件存储
+- 停止/排队/转向、斜杠命令、批准授权和问答交互继续使用原生能力
 - 真人消息在服务端写入 Session 前附加显示名称，其他房间成员和模型看到同一身份
 - 会话头显示当前身份与在线人数，可随时打开共享会话目录
 - 房间异步初始化：模型、存储或 Session 初始化失败只会让聊天室离线，不会阻碍 Harness Web 启动
 - 不修改 DeepSeek Harness 主仓库
 
-0.4.0 在原生会话界面上增加共享会话目录。原有 `roomId`/`sessionId` 会作为第一个大厅保留，用户可以新建更多独立共享 Session。普通消息立即显示并进入同一 Session 历史，但不唤醒模型；只有 `@AI` 或 `@aiDisplayName` 才触发 DSH Agent。每个浏览器只把自己的消息放在右侧，其他参与者和 AI 在左侧；昵称位于气泡上方，气泡内部只显示消息正文。
+0.5.0 在 0.4.0 的多会话、人类优先模式上增加头像身份、原生 `@AI` 候选、回复引用和文件卡片。每个浏览器只把自己的消息放在右侧，其他参与者和 AI 在左侧；真人消息显示头像和气泡上方的昵称。图片会按 `maxImageSidePixels` 和 Harness 的总像素限制自动缩小。
 
 ## 环境要求
 
@@ -43,7 +45,7 @@ pnpm dsh plugin --profile web add /absolute/path/to/DeepSeek-harness-chatroom
 pnpm dsh --profile web
 ```
 
-浏览器包通过插件的 `dsh.client` manifest 自动发现。插件只向 `shell.overlay` 添加入口，并向原生会话头添加身份状态；不会替换 Harness 的主对话、侧栏、详情或输入组件。
+浏览器包通过插件的 `dsh.client` manifest 自动发现。插件只添加共享会话入口、身份状态、输入候选和文件/回复控件；不会替换 Harness 的主对话、侧栏、详情或原生输入框。
 
 ## 配置
 
@@ -78,10 +80,14 @@ pnpm dsh --profile web
     maxDisplayNameChars: 24
     maxRoomTitleChars: 80
     maxMessageTextChars: 20000
+    maxFileBytes: 20971520
+    maxFilesPerMessage: 5
+    maxMessageFileBytes: 52428800
+    maxImageSidePixels: 4096
     sseHeartbeatMs: 15000
 ```
 
-`sessionId` 是升级前大厅继续使用的持久 Session。通过界面新建的共享会话会获得独立 Session 和上下文，并保存在同一个 `chatroom` storage domain 中。新增 `rooms` 表不改变 domain 版本，已有身份和大厅数据可直接读取。
+`sessionId` 是升级前大厅继续使用的持久 Session。通过界面新建的共享会话会获得独立 Session 和上下文。聊天室文件及元数据保存在同一个 `chatroom` storage domain 的 `files` 表中，下载端点需要有效聊天室 Cookie。新增表不改变 domain 版本，已有身份和大厅数据可直接读取。
 
 API 路由会立即注册，在存储和 Session 就绪前返回 `503`。初始化始终在后台运行，失败被限制在插件内部，Harness Web 仍可正常运行。
 
@@ -93,14 +99,15 @@ API 路由会立即注册，在存储和 Session 就绪前返回 `503`。初始�
 
 ## 验收
 
-1. 打开 Harness Web，点击“共享会话”并填写 `Alice`，选择已有大厅。
+1. 打开 Harness Web，点击“共享会话”，填写 `Alice` 并选择头像，再进入已有大厅。
 2. 页面应切换到原生 Session，保留侧栏、对话/轨迹、原生输入框和 Session log；不应出现自绘聊天页。
 3. 再打开共享会话目录，创建“项目二”；页面应进入新的原生 Session，侧栏能在它和大厅之间切换，历史互不混合。
 4. 用无痕窗口或另一个浏览器填写 `Bob`，进入同一共享会话。
-5. Alice 发送普通文字，两个页面应立即同步，且 AI 不回复；Alice 再发送 `@AI 请总结`，AI 应在原生会话中回复。
-6. 发送普通图片时只同步图片；发送带 `@AI` 的图片请求时，图片与 AI 回复都使用原生消息节点显示。
-7. 执行 `/new` 等内置斜杠命令，并完成批准授权、问答交互、停止/排队/转向等原生流程。
-8. 刷新和重启 Harness；身份、共享会话目录和各 Session 上下文应继续恢复。
+5. Alice 发送普通文字，两个页面应立即同步，且 AI 不回复；输入 `@` 时应先看到 AI 候选，选择后发送，AI 应回复。
+6. 点击真人消息下方“回复”，输入区应显示引用；发送后两端显示同一引用卡片。
+7. 通过原生图片入口发送超大图片，应自动缩放并同步；通过“文件”入口发送文件，另一端应能下载完整原文件。
+8. 执行 `/new` 等内置斜杠命令，并完成批准授权、问答交互、停止/排队/转向等原生流程。
+9. 刷新和重启 Harness；身份、共享会话目录和各 Session 上下文应继续恢复。
 
 健康检查位于 `/plugins/deepseek-harness-chatroom/api/health`。直接部署 Harness Web 时也可使用 `/chatroom/api/health`。房间就绪时返回：
 

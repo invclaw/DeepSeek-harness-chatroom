@@ -9,14 +9,14 @@ afterEach(() => {
 
 describe('native prompt admission', () => {
   it('prefixes text while preserving native image blocks', () => {
-    const identity = { participantId: 'alice-id', displayName: 'Alice' }
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const image = { type: 'image' as const, mediaType: 'image/png' as const, data: 'AA==', name: 'test.png' }
     expect(identifyPrompt([{ type: 'text', text: '你好' }, image], identity)).toEqual([
-      { type: 'text', text: '\u2063dsh-chatroom:alice-id\u2063Alice：你好' },
+      { type: 'text', text: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：你好' },
       image,
     ])
     expect(identifyPrompt([image], identity)).toEqual([
-      { type: 'text', text: '\u2063dsh-chatroom:alice-id\u2063Alice：发送了一张图片。' },
+      { type: 'text', text: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：发送了一张图片。' },
       image,
     ])
   })
@@ -35,7 +35,9 @@ describe('native prompt admission', () => {
     const room = { id: 'room', sessionId: 'room-session' }
     const store = {
       roomForSession: (sessionId: string) => sessionId === room.sessionId ? room : undefined,
-      getSnapshot: () => ({ identity: { participantId: 'alice-id', displayName: 'Alice' } }),
+      getSnapshot: () => ({ identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' } }),
+      composition: () => ({ roomId: 'room', revision: 0, files: [], reply: undefined }),
+      completeComposition: vi.fn(),
     } as unknown as ChatroomClientStore
     const restore = installNativePromptIdentity(api, store)
 
@@ -52,6 +54,7 @@ describe('native prompt admission', () => {
       }),
     }))
     expect(original).not.toHaveBeenCalled()
+    expect(store.completeComposition).toHaveBeenCalledOnce()
 
     await api.sessions.prompt({
       sessionId: 'room-session' as never,

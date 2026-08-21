@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import { CHATROOM_AVATARS, chatroomAvatar, type ChatroomAvatarId } from '../avatars.js'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
 
 interface ChatroomEntryInjected {
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
   openRoom(): void
   closeRoom(): void
-  join(displayName: string): Promise<void>
+  join(displayName: string, avatarId: string): Promise<void>
   selectRoom(roomId: string): Promise<void>
   createRoom(title: string): Promise<void>
   resetIdentity(): Promise<void>
@@ -59,15 +60,16 @@ function IdentityStep({
   close,
 }: {
   room: ChatroomView
-  join(displayName: string): Promise<void>
+  join(displayName: string, avatarId: string): Promise<void>
   close(): void
 }): JSX.Element {
   const [name, setName] = useState('')
+  const [avatarId, setAvatarId] = useState<ChatroomAvatarId>(CHATROOM_AVATARS[0].id)
   return (
-    <form className="dsh-chatroom-card" onSubmit={(event) => { event.preventDefault(); void join(name) }}>
+    <form className="dsh-chatroom-card" onSubmit={(event) => { event.preventDefault(); void join(name, avatarId) }}>
       <button className="dsh-chatroom-close" aria-label="关闭" type="button" onClick={close}>×</button>
       <h2>共享会话</h2>
-      <p>选择你在共享会话中显示的名字。进入后继续使用 Harness 原生对话界面。</p>
+      <p>选择你在共享会话中显示的名字和头像。进入后继续使用 Harness 原生对话界面。</p>
       <input
         className="dsh-chatroom-name"
         data-testid="chatroom-identity-input"
@@ -77,6 +79,26 @@ function IdentityStep({
         value={name}
         onChange={event => { setName(event.target.value) }}
       />
+      <fieldset className="dsh-chatroom-avatar-fieldset">
+        <legend>选择头像</legend>
+        <div className="dsh-chatroom-avatar-grid" role="radiogroup" aria-label="选择头像">
+          {CHATROOM_AVATARS.map(avatar => (
+            <button
+              className="dsh-chatroom-avatar-choice"
+              data-avatar={avatar.id}
+              data-selected={avatar.id === avatarId}
+              key={avatar.id}
+              type="button"
+              role="radio"
+              aria-checked={avatar.id === avatarId}
+              aria-label={avatar.label}
+              onClick={() => { setAvatarId(avatar.id) }}
+            >
+              {avatar.emoji}
+            </button>
+          ))}
+        </div>
+      </fieldset>
       <button className="dsh-chatroom-button" data-testid="chatroom-join" type="submit" disabled={name.trim() === ''}>继续</button>
       {room.error !== undefined && <div className="dsh-chatroom-error" role="alert">{room.error}</div>}
     </form>
@@ -132,7 +154,7 @@ function RoomStep({
         <button className="dsh-chatroom-create-button" data-testid="chatroom-create" type="submit" disabled={title.trim() === ''}>新建</button>
       </form>
       <div className="dsh-chatroom-card-footer">
-        <span>当前身份：{room.identity?.displayName}</span>
+        <span>当前身份：{room.identity === undefined ? '' : `${chatroomAvatar(room.identity.avatarId, room.identity.participantId).emoji} ${room.identity.displayName}`}</span>
         <button type="button" onClick={() => { void resetIdentity() }}>更换身份</button>
       </div>
       {room.error !== undefined && <div className="dsh-chatroom-error" role="alert">{room.error}</div>}
