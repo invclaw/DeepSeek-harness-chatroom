@@ -97,6 +97,14 @@ export function projectChatroomMessage(
     if (visibleText.trim() !== '') texts.push(visibleText.trim())
     if (visibleText.trim() !== '') content.push(visibleText === block.text ? block : { ...block, text: visibleText })
   }
+  const hasVisualAttachment = files.length > 0 || content.some(block => block.type === 'image')
+  if (hasVisualAttachment && texts.length === 1 && isLegacyAttachmentPlaceholder(texts[0]!)) {
+    texts.length = 0
+    for (let index = content.length - 1; index >= 0; index -= 1) {
+      const block = content[index]
+      if (block?.type === 'text' && isLegacyAttachmentPlaceholder(block.text.trim())) content.splice(index, 1)
+    }
+  }
   return {
     node: identityProjected
       ? { ...node, data: { ...node.data, content } } as ParticipantNode
@@ -109,6 +117,10 @@ export function projectChatroomMessage(
     ...(reply === undefined ? {} : { reply }),
     ...(forward === undefined ? {} : { forward }),
   }
+}
+
+function isLegacyAttachmentPlaceholder(text: string): boolean {
+  return text === '发送了文件。' || text === '发送了一张图片。'
 }
 
 /** Reuse Harness' native user renderer and move only peer user messages to the left. */

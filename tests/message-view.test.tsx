@@ -122,6 +122,20 @@ describe('participant-specific native message projection', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: /多选/u }))
     expect(toggleMessageSelection).toHaveBeenCalledWith('lobby', expect.objectContaining({ messageId: 'user:1' }))
   })
+
+  it('removes legacy attachment placeholders from existing room history', () => {
+    const file = { id: 'file-id', name: 'brief.pdf', mediaType: 'application/pdf', bytes: 2048 }
+    const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>
+    render(<ChatroomUserMessageNodeView {...messageProps(
+      userNode(identifyChatroomText(`发送了文件。${identifyFileText(file)}`, bob)),
+      alice,
+      Native,
+    )} />)
+
+    expect(screen.getByText('brief.pdf')).toBeTruthy()
+    expect(screen.queryByText('发送了文件。')).toBeNull()
+    expect(screen.queryByTestId('native')).toBeNull()
+  })
 })
 
 function userNode(text: string): ChatNode<'user'> {

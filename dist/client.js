@@ -1095,6 +1095,13 @@ window.__ModuleLoader__.load({
 					text: visibleText
 				});
 			}
+			if ((files.length > 0 || content.some((block) => block.type === "image")) && texts.length === 1 && isLegacyAttachmentPlaceholder(texts[0])) {
+				texts.length = 0;
+				for (let index = content.length - 1; index >= 0; index -= 1) {
+					const block = content[index];
+					if (block?.type === "text" && isLegacyAttachmentPlaceholder(block.text.trim())) content.splice(index, 1);
+				}
+			}
 			return {
 				node: identityProjected ? {
 					...node,
@@ -1111,6 +1118,9 @@ window.__ModuleLoader__.load({
 				...reply === void 0 ? {} : { reply },
 				...forward === void 0 ? {} : { forward }
 			};
+		}
+		function isLegacyAttachmentPlaceholder(text) {
+			return text === "发送了文件。" || text === "发送了一张图片。";
 		}
 		/** Reuse Harness' native user renderer and move only peer user messages to the left. */
 		const ChatroomUserMessageNodeView = (0, react.memo)(function ChatroomUserMessageNodeView(props) {
