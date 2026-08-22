@@ -6,11 +6,16 @@ export interface ChatroomMessageToolsProps {
     readonly message: ChatroomForwardItem;
     readonly reactions: readonly ChatroomReaction[];
     readonly identity: ChatroomIdentity | undefined;
+    readonly selecting: boolean;
     readonly selected: boolean;
     toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>;
     openForward(roomId: string, message: ChatroomForwardItem): void;
     toggleSelection(roomId: string, message: ChatroomForwardItem): void;
 }
+/** Checkbox shown on every message while the room is in multi-select mode. */
+export declare function ChatroomSelectionCheckbox({ tools }: {
+    tools: ChatroomMessageToolsProps;
+}): JSX.Element | null;
 /** Local context-menu state for one native message row. */
 export declare function useChatroomMessageMenu(): {
     readonly position: {

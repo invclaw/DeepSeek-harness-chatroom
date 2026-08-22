@@ -566,7 +566,8 @@ var ChatroomRuntime = class {
       identity,
       online: onlineCount(state),
       members: this.roomMembers(state),
-      reactions: this.reactionsForRoom(roomId)
+      reactions: this.reactionsForRoom(roomId),
+      threadPreviews: this.threadPreviewsForRoom(roomId)
     };
     writeSse(response, snapshot);
     this.broadcastPresence(state);
@@ -636,7 +637,11 @@ var ChatroomRuntime = class {
       else binding.agent.session.append("user/message", message, { surfaceOp: "append" });
       await this.touchMember(state.record.roomId, identity);
       const publicMessage = publicThreadMessage(record);
-      this.broadcast(this.requireState(state.record.roomId), { type: "thread-message", message: publicMessage });
+      this.broadcast(this.requireState(state.record.roomId), {
+        type: "thread-message",
+        message: publicMessage,
+        preview: this.threadPreview(state.record)
+      });
       this.notify({
         id: record.id,
         roomId: state.record.roomId,
@@ -741,7 +746,7 @@ var ChatroomRuntime = class {
     };
     await this.requireThreadMessages().put(record.id, record);
     const message = publicThreadMessage(record);
-    this.broadcast(room, { type: "thread-message", message });
+    this.broadcast(room, { type: "thread-message", message, preview: this.threadPreview(state.record) });
     this.notify({
       id: record.id,
       roomId: room.record.id,
@@ -756,6 +761,21 @@ var ChatroomRuntime = class {
   }
   messagesForThread(threadId) {
     return [...this.requireThreadMessages().entries()].map(([, record]) => record).filter((record) => record.threadId === threadId).sort((left, right) => left.sequence - right.sequence).map(publicThreadMessage);
+  }
+  threadPreview(record) {
+    const messages = this.messagesForThread(record.id);
+    return {
+      thread: publicThread(record),
+      totalMessages: messages.length,
+      recentMessages: messages.slice(-3)
+    };
+  }
+  threadPreviewsForRoom(roomId) {
+    return [...this.requireThreads().entries()].map(([, record]) => record).filter((record) => record.roomId === roomId).map((record) => this.threadPreview(record)).filter((preview) => preview.totalMessages > 0).sort((left, right) => {
+      const leftTime = left.recentMessages.at(-1)?.createdAt ?? left.thread.createdAt;
+      const rightTime = right.recentMessages.at(-1)?.createdAt ?? right.thread.createdAt;
+      return rightTime - leftTime;
+    });
   }
   nextThreadSequence(threadId) {
     return this.messagesForThread(threadId).reduce((maximum, message) => Math.max(maximum, message.sequence), -1) + 1;

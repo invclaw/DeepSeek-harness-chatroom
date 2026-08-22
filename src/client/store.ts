@@ -17,6 +17,7 @@ import type {
   ChatroomSessionResponse,
   ChatroomThread,
   ChatroomThreadMessage,
+  ChatroomThreadPreview,
   ChatroomThreadResponse,
   ChatroomThreadRoot,
 } from '../types.js'
@@ -51,6 +52,7 @@ export interface ChatroomView {
   readonly online: number
   readonly members: readonly ChatroomMember[]
   readonly reactions: readonly ChatroomReaction[]
+  readonly threadPreviews: readonly ChatroomThreadPreview[]
   readonly membersOpen: boolean
   readonly error: string | undefined
   readonly composerRoomId: string | undefined
@@ -84,6 +86,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     online: 0,
     members: [],
     reactions: [],
+    threadPreviews: [],
     membersOpen: false,
     error: undefined,
     composerRoomId: undefined,
@@ -197,6 +200,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         online: 0,
         members: [],
         reactions: [],
+        threadPreviews: [],
         membersOpen: false,
         thread: undefined,
         threadMessages: [],
@@ -218,6 +222,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       online: 0,
       members: [],
       reactions: [],
+      threadPreviews: [],
       membersOpen: false,
       thread: undefined,
       threadMessages: [],
@@ -323,7 +328,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       ? current.filter(item => item.messageId !== message.messageId)
       : [...current, message]
     this.set({
-      selectionRoomId: selected.length === 0 ? undefined : roomId,
+      selectionRoomId: roomId,
       selectedMessages: selected,
       forwardOpen: false,
       forwardError: undefined,
@@ -464,6 +469,13 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       this.set({
         thread: response.thread,
         threadMessages: response.messages,
+        ...(response.messages.length === 0 ? {} : {
+          threadPreviews: replaceThreadPreview(this.snapshot.threadPreviews, {
+            thread: response.thread,
+            totalMessages: response.messages.length,
+            recentMessages: response.messages.slice(-3),
+          }),
+        }),
         threadBusy: false,
         threadError: undefined,
       })
@@ -525,7 +537,20 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       ? this.snapshot.rooms.map(candidate => candidate.id === room.id ? room : candidate)
       : [...this.snapshot.rooms, room]
     this.pendingOpenRoomId = room.id
-    this.set({ phase: 'ready', rooms, room, connection: 'connecting', online: 0, error: undefined })
+    this.set({
+      phase: 'ready',
+      rooms,
+      room,
+      connection: 'connecting',
+      online: 0,
+      members: [],
+      reactions: [],
+      threadPreviews: [],
+      selectionRoomId: undefined,
+      selectedMessages: [],
+      forwardOpen: false,
+      error: undefined,
+    })
     this.openEvents(room)
     this.resumeOpen()
   }
@@ -627,6 +652,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           online: event.online,
           members: event.members,
           reactions: event.reactions,
+          threadPreviews: event.threadPreviews,
           error: undefined,
         })
         return
@@ -634,9 +660,13 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         this.set({ online: event.online, members: event.members })
         return
       case 'thread-message':
-        if (this.snapshot.thread?.id !== event.message.threadId
-          || this.snapshot.threadMessages.some(message => message.id === event.message.id)) return
-        this.set({ threadMessages: [...this.snapshot.threadMessages, event.message] })
+        this.set({
+          threadPreviews: replaceThreadPreview(this.snapshot.threadPreviews, event.preview),
+          ...(this.snapshot.thread?.id !== event.message.threadId
+            || this.snapshot.threadMessages.some(message => message.id === event.message.id)
+            ? {}
+            : { threadMessages: [...this.snapshot.threadMessages, event.message] }),
+        })
         return
       case 'reaction':
         this.replaceReaction(event.reaction)
@@ -689,6 +719,13 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     if (patch.unreadCount !== undefined) this.updateDocumentTitle(this.snapshot.unreadCount)
     for (const listener of this.listeners) listener()
   }
+}
+
+function replaceThreadPreview(
+  previews: readonly ChatroomThreadPreview[],
+  preview: ChatroomThreadPreview,
+): readonly ChatroomThreadPreview[] {
+  return [...previews.filter(item => item.thread.id !== preview.thread.id), preview]
 }
 
 function notificationPermission(): NotificationPermission | 'unsupported' {

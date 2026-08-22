@@ -155,6 +155,31 @@ describe('ChatroomRuntime', () => {
         ['ai', '分支结论'],
       ])
     })
+    const branchEvents = writes.filter(value => value.startsWith('data: '))
+      .map(value => JSON.parse(value.slice('data: '.length)) as {
+        type: string
+        preview?: { totalMessages: number; recentMessages: Array<{ text: string }> }
+      })
+      .filter(event => event.type === 'thread-message')
+    expect(branchEvents.at(-1)?.preview).toMatchObject({
+      totalMessages: 3,
+      recentMessages: [{ text: '先讨论，不叫 AI' }, { text: '@AI 给出结论' }, { text: '分支结论' }],
+    })
+    const reconnectWrites: string[] = []
+    const reconnect = runtime.subscribe('lobby', bob, {
+      destroyed: false,
+      writableEnded: false,
+      write: vi.fn((value: string) => { reconnectWrites.push(value); return true }),
+      end: vi.fn(),
+    } as never)
+    const reconnectSnapshot = JSON.parse(reconnectWrites[0]!.slice('data: '.length)) as {
+      threadPreviews: Array<{ totalMessages: number; recentMessages: Array<{ text: string }> }>
+    }
+    expect(reconnectSnapshot.threadPreviews).toMatchObject([{
+      totalMessages: 3,
+      recentMessages: [{ text: '先讨论，不叫 AI' }, { text: '@AI 给出结论' }, { text: '分支结论' }],
+    }])
+    reconnect()
     await runtime.stop()
     expect(() => { unsubscribe() }).not.toThrow()
   })

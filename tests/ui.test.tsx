@@ -134,6 +134,12 @@ describe('native chatroom integration', () => {
     fireEvent.click(screen.getByText('项目二'))
     expect(forwardSelected).toHaveBeenCalledWith('second')
   })
+
+  it('keeps multi-select mode visible with zero selected messages', () => {
+    renderEntry(view({ selectionRoomId: 'lobby', selectedMessages: [] }))
+    expect(screen.getByText('已选择 0 条消息')).toBeTruthy()
+    expect((screen.getByRole('button', { name: '合并转发' }) as HTMLButtonElement).disabled).toBe(true)
+  })
 })
 
 function view(patch: Partial<ChatroomView> = {}): ChatroomView {
@@ -148,6 +154,7 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     online: 1,
     members: [],
     reactions: [],
+    threadPreviews: [],
     membersOpen: false,
     error: undefined,
     composerRoomId: undefined,

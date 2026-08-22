@@ -5,9 +5,11 @@ import type { ChatroomReactionEmoji } from '../reactions.js'
 import {
   ChatroomMessageContextMenu,
   ChatroomReactionBar,
+  ChatroomSelectionCheckbox,
   useChatroomMessageMenu,
   type ChatroomMessageToolsProps,
 } from './ChatroomMessageTools.js'
+import { ChatroomThreadActivity } from './ChatroomThreadActivity.js'
 import type { ChatroomView } from './store.js'
 
 interface AssistantReplyInjected {
@@ -31,17 +33,20 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
   const menu = useChatroomMessageMenu()
   const selected = view.selectionRoomId === room?.id
     && view.selectedMessages.some(item => item.messageId === String(props.messageId))
+  const selecting = view.selectionRoomId === room?.id
   useEffect(() => {
     const root = rootRef.current?.closest<HTMLElement>('[data-time-hover-root]')
     if (root === null || root === undefined || room === undefined) return
     const onContextMenu = (event: MouseEvent) => { menu.open(event) }
     root.addEventListener('contextmenu', onContextMenu)
     root.toggleAttribute('data-dsh-chatroom-selected', selected)
+    root.toggleAttribute('data-dsh-chatroom-selection-mode', selecting)
     return () => {
       root.removeEventListener('contextmenu', onContextMenu)
       root.removeAttribute('data-dsh-chatroom-selected')
+      root.removeAttribute('data-dsh-chatroom-selection-mode')
     }
-  }, [menu.open, room, selected])
+  }, [menu.open, room, selected, selecting])
   if (room === undefined || assistant?.kind !== 'assistant') return null
   const text = assistant.blocks.flatMap(block => block.kind === 'text' ? [block.text] : []).join('')
     .trim().replace(/\s+/gu, ' ')
@@ -60,28 +65,38 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
     message,
     reactions: view.reactions,
     identity: view.identity,
+    selecting,
     selected,
     toggleReaction: props.toggleReaction,
     openForward: props.openForward,
     toggleSelection: props.toggleMessageSelection,
   }
+  const threadPreview = view.threadPreviews.find(preview =>
+    preview.thread.root.messageId === message.messageId && preview.thread.root.role === 'ai')
   return (
-    <div className="dsh-chatroom-assistant-actions" ref={rootRef}>
-      <ChatroomReactionBar {...tools} />
-      <button
-        className="dsh-chatroom-assistant-reply"
-        type="button"
-        title={`回复 ${room.aiDisplayName}`}
-        aria-label={`回复 ${room.aiDisplayName}`}
-        onClick={() => { props.setReply(room.id, reply) }}
-      >↩</button>
-      <button
-        className="dsh-chatroom-assistant-reply"
-        type="button"
-        title="发起分支"
-        aria-label="发起分支"
-        onClick={() => { void props.openThread(room.id, { ...reply, role: 'ai' }) }}
-      >⑂</button>
+    <div className="dsh-chatroom-assistant-tools" ref={rootRef}>
+      <ChatroomSelectionCheckbox tools={tools} />
+      <div className="dsh-chatroom-assistant-actions">
+        <ChatroomReactionBar {...tools} />
+        <button
+          className="dsh-chatroom-assistant-reply"
+          type="button"
+          title={`回复 ${room.aiDisplayName}`}
+          aria-label={`回复 ${room.aiDisplayName}`}
+          onClick={() => { props.setReply(room.id, reply) }}
+        >↩</button>
+        <button
+          className="dsh-chatroom-assistant-reply"
+          type="button"
+          title="发起分支"
+          aria-label="发起分支"
+          onClick={() => { void props.openThread(room.id, { ...reply, role: 'ai' }) }}
+        >⑂</button>
+      </div>
+      <ChatroomThreadActivity
+        preview={threadPreview}
+        open={() => { void props.openThread(room.id, { ...reply, role: 'ai' }) }}
+      />
       <ChatroomMessageContextMenu tools={tools} position={menu.position} close={menu.close} />
     </div>
   )

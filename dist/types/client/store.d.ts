@@ -1,5 +1,5 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomThread, ChatroomThreadMessage, ChatroomThreadRoot } from '../types.js';
+import type { ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadRoot } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 export type ChatroomPhase = 'loading' | 'identity-required' | 'ready' | 'error';
 export type ChatroomConnection = 'offline' | 'connecting' | 'online';
@@ -26,6 +26,7 @@ export interface ChatroomView {
     readonly online: number;
     readonly members: readonly ChatroomMember[];
     readonly reactions: readonly ChatroomReaction[];
+    readonly threadPreviews: readonly ChatroomThreadPreview[];
     readonly membersOpen: boolean;
     readonly error: string | undefined;
     readonly composerRoomId: string | undefined;

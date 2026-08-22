@@ -121,7 +121,7 @@ describe('ChatroomClientStore', () => {
     const store = new ChatroomClientStore()
     await store.start()
     store.activateSession(room.sessionId)
-    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room, identity, online: 2, members: [], reactions: [] })
+    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room, identity, online: 2, members: [], reactions: [], threadPreviews: [] })
 
     await store.resetIdentity()
     expect(store.getSnapshot()).toMatchObject({ open: true, phase: 'identity-required', identity, room })
@@ -153,7 +153,7 @@ describe('ChatroomClientStore', () => {
     await store.start()
 
     store.activateSession(room.sessionId)
-    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room, identity, online: 2, members: [], reactions: [] })
+    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room, identity, online: 2, members: [], reactions: [], threadPreviews: [] })
     expect(store.getSnapshot()).toMatchObject({ connection: 'online', online: 2 })
 
     store.activateSession('ordinary-session')
@@ -205,11 +205,14 @@ describe('ChatroomClientStore', () => {
       file: { name: 'photo.png', type: 'image/png', arrayBuffer: async () => imageBytes } as File,
     }])).resolves.toEqual([{ type: 'image', name: 'photo.png', mediaType: 'image/png', data: 'AQID' }])
     store.activateSession(lobby.sessionId)
-    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room: lobby, identity, online: 1, members: [], reactions: [] })
+    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room: lobby, identity, online: 1, members: [], reactions: [], threadPreviews: [] })
 
     await store.toggleReaction('lobby', 'user:1', '🎉')
     expect(store.getSnapshot().reactions).toEqual([reaction])
     const item = { messageId: 'user:1', role: 'human' as const, displayName: 'Alice', text: '你好', createdAt: 1 }
+    store.toggleMessageSelection('lobby', item)
+    store.toggleMessageSelection('lobby', item)
+    expect(store.getSnapshot()).toMatchObject({ selectionRoomId: 'lobby', selectedMessages: [] })
     store.toggleMessageSelection('lobby', item)
     store.openForward('lobby')
     await expect(store.forwardSelected('second')).resolves.toBe(true)
@@ -241,6 +244,7 @@ describe('ChatroomClientStore', () => {
       type: 'snapshot', room, identity, online: 2,
       members: [{ ...identity, joinedAt: 1, lastSeenAt: 2, online: true }],
       reactions: [],
+      threadPreviews: [],
     })
     expect(store.getSnapshot()).toMatchObject({ online: 2, members: [{ displayName: 'Alice', online: true }] })
 
@@ -251,8 +255,19 @@ describe('ChatroomClientStore', () => {
         id: 'branch-1', threadId: thread.id, sequence: 0, role: 'human', participantId: 'bob-id',
         displayName: 'Bob', avatarId: 'panda', text: '分支消息', createdAt: 3,
       },
+      preview: {
+        thread,
+        totalMessages: 1,
+        recentMessages: [{
+          id: 'branch-1', threadId: thread.id, sequence: 0, role: 'human', participantId: 'bob-id',
+          displayName: 'Bob', avatarId: 'panda', text: '分支消息', createdAt: 3,
+        }],
+      },
     })
     expect(store.getSnapshot().threadMessages).toMatchObject([{ text: '分支消息' }])
+    expect(store.getSnapshot().threadPreviews).toMatchObject([{
+      totalMessages: 1, recentMessages: [{ text: '分支消息' }],
+    }])
     await store.sendThreadMessage('@AI 总结')
     expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
       threadId: 'thread-id', text: '@AI 总结',

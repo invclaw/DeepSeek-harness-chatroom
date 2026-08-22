@@ -19,11 +19,12 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Durable room membership with a group-management panel, member avatars, online state, and recent activity
 - In-page message toasts, unread title badges, and opt-in browser system notifications across rooms
 - Persistent branch replies in a right-side panel; every branch owns a separate Harness Session, and `@AI` answers stay inside that branch
-- Durable message reactions plus a right-click menu for reactions, forwarding, and multi-select merged forwarding to another room
+- Quiet root-message branch activity with the total reply count and latest three replies, updated live without opening the branch panel
+- Durable message reactions plus a right-click menu for reactions, forwarding, and multi-select; selection mode adds checkboxes to every human and AI message before merged forwarding
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.7.0 completes high-frequency group-chat operations. One global browser identity now covers every room, the native `@` menu combines members and AI, and pure image or file messages no longer generate placeholder copy. Participants can attach durable reactions, forward one message, or multi-select up to 50 messages and send them to another shared room as an expandable merged-history card.
+Version 0.7.1 makes branch activity and batch selection visible in the main conversation. Every active branch projects its total reply count and latest three replies beside the root message. Entering multi-select adds a left-side checkbox to every forwardable human and AI message; deselecting everything keeps the mode active until the user explicitly cancels it.
 
 ## Requirements
 
@@ -112,8 +113,8 @@ A display name is presentation, not authentication. Every participant who can re
 7. Insert an emoji through **Emoji**, then send a pure image and a pure file. Only the media or download card must render, without a "sent a..." text bubble; the other browser must download the original file bytes.
 8. Run `/new`, approval and question interactions, and stop/queue/steer flows through their native Harness paths.
 9. Open **Group management** in the Session header. Both participants must appear with the correct avatar and online state. Enable system notifications from this explicit user action, hide the tab, and verify that a new peer message creates a system alert and unread title badge.
-10. Select **Branch** below a human or AI message. A right-side branch panel must open. Send ordinary branch text and confirm that the AI stays silent; send `@AI summarize` and confirm that the reply appears in the branch rather than the main room.
-11. Right-click human and AI messages to test reactions, single-message forwarding, and multi-select. Merge several messages into **Project two** and verify one expandable history card in the target room.
+10. Select **Branch** below a human or AI message and send four replies. Close the panel and verify that the root message shows the total count and latest three replies. Send `@AI summarize`; its answer must stay in that branch and update the compact activity summary.
+11. Right-click any human or AI message and choose **Multi-select**. Every human and AI message must receive a left-side checkbox. Select several directly and merge them into **Project two**, then verify one expandable history card in the target room.
 12. Enter another shared room and confirm that display-name and avatar setup is not requested again.
 13. Reload and restart Harness. Identity, room directory, membership, reactions, branches, and every Session context must recover.
 

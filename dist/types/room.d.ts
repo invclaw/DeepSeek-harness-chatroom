@@ -78,6 +78,8 @@ export declare class ChatroomRuntime {
     private ensureThread;
     private recordThreadAssistant;
     private messagesForThread;
+    private threadPreview;
+    private threadPreviewsForRoom;
     private nextThreadSequence;
     private touchMember;
     private roomMembers;

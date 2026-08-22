@@ -7,10 +7,27 @@ export interface ChatroomMessageToolsProps {
   readonly message: ChatroomForwardItem
   readonly reactions: readonly ChatroomReaction[]
   readonly identity: ChatroomIdentity | undefined
+  readonly selecting: boolean
   readonly selected: boolean
   toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>
   openForward(roomId: string, message: ChatroomForwardItem): void
   toggleSelection(roomId: string, message: ChatroomForwardItem): void
+}
+
+/** Checkbox shown on every message while the room is in multi-select mode. */
+export function ChatroomSelectionCheckbox({ tools }: { tools: ChatroomMessageToolsProps }): JSX.Element | null {
+  if (!tools.selecting) return null
+  return (
+    <label className="dsh-chatroom-selection-checkbox" title={tools.selected ? '取消选择' : '选择消息'}>
+      <input
+        type="checkbox"
+        aria-label={`${tools.selected ? '取消选择' : '选择'} ${tools.message.displayName} 的消息`}
+        checked={tools.selected}
+        onChange={() => { tools.toggleSelection(tools.roomId, tools.message) }}
+      />
+      <span aria-hidden>{tools.selected ? '✓' : ''}</span>
+    </label>
+  )
 }
 
 /** Local context-menu state for one native message row. */

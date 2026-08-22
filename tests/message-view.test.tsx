@@ -9,6 +9,7 @@ import {
   projectChatroomMessage,
   type ChatroomUserMessageNodeViewProps,
 } from '../src/client/ChatroomMessageNodeView.js'
+import { ChatroomAssistantReplyAction } from '../src/client/ChatroomAssistantReplyAction.js'
 import type { ChatroomIdentity } from '../src/types.js'
 import { identifyFileText, identifyReplyText } from '../src/message.js'
 
@@ -136,6 +137,80 @@ describe('participant-specific native message projection', () => {
     expect(screen.queryByText('发送了文件。')).toBeNull()
     expect(screen.queryByTestId('native')).toBeNull()
   })
+
+  it('shows every message checkbox in selection mode and the latest three branch replies', () => {
+    const toggleMessageSelection = vi.fn()
+    const openThread = vi.fn(async () => undefined)
+    const root = { messageId: 'user:1', displayName: 'Bob', text: '主题', role: 'human' as const }
+    const thread = { id: 'thread', roomId: 'lobby', sessionId: 'thread-session', root, createdAt: 1 }
+    const recentMessages = [1, 2, 3].map(sequence => ({
+      id: `reply-${sequence}`,
+      threadId: 'thread',
+      sequence,
+      role: 'human' as const,
+      participantId: 'bob-id',
+      displayName: 'Bob',
+      avatarId: 'fox' as const,
+      text: `分支回复 ${sequence}`,
+      createdAt: sequence,
+    }))
+    const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>
+    render(<ChatroomUserMessageNodeView {...{
+      ...messageProps(userNode(identifyChatroomText('主题', bob)), alice, Native, {
+        selectionRoomId: 'lobby',
+        threadPreviews: [{ thread, totalMessages: 5, recentMessages }],
+      }),
+      toggleMessageSelection,
+      openThread,
+    }} />)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 Bob 的消息' }))
+    expect(toggleMessageSelection).toHaveBeenCalledWith('lobby', expect.objectContaining({ messageId: 'user:1' }))
+    expect(screen.getByText('分支 · 5 条回复')).toBeTruthy()
+    expect(screen.getByText('分支回复 1')).toBeTruthy()
+    expect(screen.getByText('分支回复 3')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '打开分支，5 条回复' }))
+    expect(openThread).toHaveBeenCalledWith('lobby', root)
+  })
+
+  it('adds the same selection checkbox and branch activity to AI messages', () => {
+    const toggleMessageSelection = vi.fn()
+    const openThread = vi.fn(async () => undefined)
+    const root = { messageId: 'assistant:2', displayName: 'DeepSeek', text: 'AI 结论', role: 'ai' as const }
+    const thread = { id: 'ai-thread', roomId: 'lobby', sessionId: 'ai-thread-session', root, createdAt: 1 }
+    const useChatroom = messageProps(userNode(identifyChatroomText('参考', bob)), alice, () => null, {
+      selectionRoomId: 'lobby',
+      threadPreviews: [{
+        thread,
+        totalMessages: 1,
+        recentMessages: [{
+          id: 'ai-reply', threadId: thread.id, sequence: 0, role: 'human', participantId: 'alice-id',
+          displayName: 'Alice', avatarId: 'whale', text: '追问', createdAt: 2,
+        }],
+      }],
+    }).useChatroom
+    const props = {
+      sessionId: 'chatroom-v1-lobby' as never,
+      messageId: 'assistant:2',
+      useChatroom,
+      useSession: (selector: (snapshot: unknown) => unknown) => selector({
+        nodes: [{ kind: 'assistant', messageId: 'assistant:2', blocks: [{ kind: 'text', text: 'AI 结论' }], time: 2 }],
+      }),
+      setReply: vi.fn(),
+      openThread,
+      toggleReaction: vi.fn(async () => undefined),
+      openForward: vi.fn(),
+      toggleMessageSelection,
+    } as unknown as Parameters<typeof ChatroomAssistantReplyAction>[0]
+    render(<ChatroomAssistantReplyAction {...props} />)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 DeepSeek 的消息' }))
+    expect(toggleMessageSelection).toHaveBeenCalledWith('lobby', expect.objectContaining({
+      messageId: 'assistant:2', role: 'ai',
+    }))
+    fireEvent.click(screen.getByRole('button', { name: '打开分支，1 条回复' }))
+    expect(openThread).toHaveBeenCalledWith('lobby', root)
+  })
 })
 
 function userNode(text: string): ChatNode<'user'> {
@@ -163,6 +238,7 @@ function messageProps(
   node: ChatNode<'user'>,
   identity: ChatroomIdentity | undefined,
   nativeMessageView: ChatroomUserMessageNodeViewProps['nativeMessageView'],
+  viewPatch: Partial<import('../src/client/store.js').ChatroomView> = {},
 ): ChatroomUserMessageNodeViewProps {
   return {
     node,
@@ -177,6 +253,7 @@ function messageProps(
       online: 2,
       members: [],
       reactions: [],
+      threadPreviews: [],
       membersOpen: false,
       error: undefined,
       composerRoomId: undefined,
@@ -196,6 +273,7 @@ function messageProps(
       forwardOpen: false,
       forwardBusy: false,
       forwardError: undefined,
+      ...viewPatch,
     }),
     nativeMessageView,
     setReply: () => undefined,

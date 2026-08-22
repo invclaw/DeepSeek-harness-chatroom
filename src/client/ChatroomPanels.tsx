@@ -23,7 +23,7 @@ export function ChatroomPanels(props: ChatroomPanelsProps): JSX.Element {
       <ToastStack toasts={props.room.toasts} dismiss={props.dismissToast} />
       {props.room.membersOpen && <MemberPanel {...props} />}
       {props.room.thread !== undefined && <ThreadPanel {...props} />}
-      {props.room.selectedMessages.length > 0 && <SelectionBar {...props} />}
+      {props.room.selectionRoomId !== undefined && <SelectionBar {...props} />}
       {props.room.forwardOpen && <ForwardPanel {...props} />}
     </>
   )
@@ -34,7 +34,11 @@ function SelectionBar(props: ChatroomPanelsProps): JSX.Element {
   return (
     <div className="dsh-chatroom-selection-bar" role="toolbar" aria-label="消息多选">
       <strong>已选择 {props.room.selectedMessages.length} 条消息</strong>
-      <button type="button" onClick={() => { if (sourceRoomId !== undefined) props.openForward(sourceRoomId) }}>合并转发</button>
+      <button
+        type="button"
+        disabled={props.room.selectedMessages.length === 0}
+        onClick={() => { if (sourceRoomId !== undefined) props.openForward(sourceRoomId) }}
+      >合并转发</button>
       <button type="button" onClick={props.clearMessageSelection}>取消</button>
     </div>
   )

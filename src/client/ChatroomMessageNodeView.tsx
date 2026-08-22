@@ -7,6 +7,7 @@ import type {
   ChatroomForwardItem,
   ChatroomIdentity,
   ChatroomReplyReference,
+  ChatroomThreadPreview,
   ChatroomThreadRoot,
 } from '../types.js'
 import { participantMarker, projectFileText, projectForwardText, projectReplyText } from '../message.js'
@@ -15,9 +16,11 @@ import { CHATROOM_API_PREFIX } from '../routes.js'
 import {
   ChatroomMessageContextMenu,
   ChatroomReactionBar,
+  ChatroomSelectionCheckbox,
   useChatroomMessageMenu,
   type ChatroomMessageToolsProps,
 } from './ChatroomMessageTools.js'
+import { ChatroomThreadActivity } from './ChatroomThreadActivity.js'
 import type { ChatroomView } from './store.js'
 
 type ParticipantNode = ChatNode<'user' | 'steering'>
@@ -138,10 +141,12 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
   const message = messageTarget(props.node, projection)
   const target = replyTarget(message)
   const tools = messageTools(props, room, activeRoom.id, message)
+  const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, 'human')
   return <ParticipantMessage
     native={native}
     projection={projection}
     tools={tools}
+    threadPreview={threadPreview}
     onReply={room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, target) }}
     onThread={room.identity === undefined ? undefined : () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) }}
   />
@@ -162,10 +167,12 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
   const message = messageTarget(props.node, projection)
   const target = replyTarget(message)
   const tools = messageTools(props, room, activeRoom.id, message)
+  const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, 'human')
   return <ParticipantMessage
     native={native}
     projection={projection}
     tools={tools}
+    threadPreview={threadPreview}
     onReply={room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, target) }}
     onThread={room.identity === undefined ? undefined : () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) }}
   />
@@ -175,12 +182,14 @@ function ParticipantMessage({
   native,
   projection,
   tools,
+  threadPreview,
   onReply,
   onThread,
 }: {
   native: ReactNode
   projection: ReturnType<typeof projectChatroomMessage>
   tools: ChatroomMessageToolsProps
+  threadPreview: ChatroomThreadPreview | undefined
   onReply: (() => void) | undefined
   onThread: (() => void) | undefined
 }): ReactNode {
@@ -190,9 +199,11 @@ function ParticipantMessage({
     <div
       className="dsh-chatroom-participant-message"
       data-dsh-chatroom-own={projection.own}
+      data-dsh-chatroom-selection-mode={tools.selecting || undefined}
       data-dsh-chatroom-selected={tools.selected || undefined}
       onContextMenu={menu.open}
     >
+      <ChatroomSelectionCheckbox tools={tools} />
       <div className="dsh-chatroom-avatar" data-avatar={avatar.id} title={avatar.label} aria-hidden>{avatar.emoji}</div>
       <div className="dsh-chatroom-message-column">
         {projection.displayName !== undefined
@@ -207,6 +218,7 @@ function ParticipantMessage({
         {projection.files.map(file => <FileCard file={file} key={file.id} />)}
         {projection.forward !== undefined && <ForwardCard forward={projection.forward} />}
         <ChatroomReactionBar {...tools} />
+        <ChatroomThreadActivity preview={threadPreview} open={onThread} />
         {onReply !== undefined && onThread !== undefined && (
           <div className="dsh-chatroom-message-actions">
             <button className="dsh-chatroom-reply-button" type="button" onClick={onReply}>↩ 回复</button>
@@ -280,11 +292,20 @@ function messageTools(
     message,
     reactions: room.reactions,
     identity: room.identity,
+    selecting: room.selectionRoomId === roomId,
     selected: room.selectionRoomId === roomId && room.selectedMessages.some(item => item.messageId === message.messageId),
     toggleReaction: props.toggleReaction,
     openForward: props.openForward,
     toggleSelection: props.toggleMessageSelection,
   }
+}
+
+function findThreadPreview(
+  previews: readonly ChatroomThreadPreview[],
+  messageId: string,
+  role: 'human' | 'ai',
+): ChatroomThreadPreview | undefined {
+  return previews.find(preview => preview.thread.root.messageId === messageId && preview.thread.root.role === role)
 }
 
 function formatTime(time: number): string {

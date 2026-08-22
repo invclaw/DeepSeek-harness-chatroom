@@ -148,6 +148,12 @@ export interface ChatroomThreadResponse {
     readonly thread: ChatroomThread;
     readonly messages: readonly ChatroomThreadMessage[];
 }
+/** Compact branch activity projected beside its root room message. */
+export interface ChatroomThreadPreview {
+    readonly thread: ChatroomThread;
+    readonly totalMessages: number;
+    readonly recentMessages: readonly ChatroomThreadMessage[];
+}
 /** Branch text admission request. */
 export interface ChatroomThreadPromptRequest {
     readonly threadId: string;
@@ -173,6 +179,7 @@ export interface ChatroomSnapshotEvent {
     readonly online: number;
     readonly members: readonly ChatroomMember[];
     readonly reactions: readonly ChatroomReaction[];
+    readonly threadPreviews: readonly ChatroomThreadPreview[];
 }
 /** Online connection count event. */
 export interface ChatroomPresenceEvent {
@@ -184,6 +191,7 @@ export interface ChatroomPresenceEvent {
 export interface ChatroomThreadMessageEvent {
     readonly type: 'thread-message';
     readonly message: ChatroomThreadMessage;
+    readonly preview: ChatroomThreadPreview;
 }
 /** One reaction replacement delivered to every participant in a room. */
 export interface ChatroomReactionEvent {

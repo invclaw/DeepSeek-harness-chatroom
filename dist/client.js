@@ -79,7 +79,7 @@ window.__ModuleLoader__.load({
 				}),
 				props.room.membersOpen && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(MemberPanel, { ...props }),
 				props.room.thread !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ThreadPanel, { ...props }),
-				props.room.selectedMessages.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SelectionBar, { ...props }),
+				props.room.selectionRoomId !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SelectionBar, { ...props }),
 				props.room.forwardOpen && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ForwardPanel, { ...props })
 			] });
 		}
@@ -97,6 +97,7 @@ window.__ModuleLoader__.load({
 					] }),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 						type: "button",
+						disabled: props.room.selectedMessages.length === 0,
 						onClick: () => {
 							if (sourceRoomId !== void 0) props.openForward(sourceRoomId);
 						},
@@ -571,6 +572,25 @@ window.__ModuleLoader__.load({
 		];
 		//#endregion
 		//#region src/client/ChatroomMessageTools.tsx
+		/** Checkbox shown on every message while the room is in multi-select mode. */
+		function ChatroomSelectionCheckbox({ tools }) {
+			if (!tools.selecting) return null;
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+				className: "dsh-chatroom-selection-checkbox",
+				title: tools.selected ? "取消选择" : "选择消息",
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					"aria-label": `${tools.selected ? "取消选择" : "选择"} ${tools.message.displayName} 的消息`,
+					checked: tools.selected,
+					onChange: () => {
+						tools.toggleSelection(tools.roomId, tools.message);
+					}
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					"aria-hidden": true,
+					children: tools.selected ? "✓" : ""
+				})]
+			});
+		}
 		/** Local context-menu state for one native message row. */
 		function useChatroomMessageMenu() {
 			const [position, setPosition] = (0, react.useState)();
@@ -681,6 +701,34 @@ window.__ModuleLoader__.load({
 			});
 		}
 		//#endregion
+		//#region src/client/ChatroomThreadActivity.tsx
+		/** Quiet, three-message branch activity summary placed beside its root message. */
+		function ChatroomThreadActivity({ preview, open }) {
+			if (preview === void 0) return null;
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+				className: "dsh-chatroom-thread-activity",
+				type: "button",
+				"aria-label": `打开分支，${preview.totalMessages} 条回复`,
+				disabled: open === void 0,
+				onClick: open,
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+					className: "dsh-chatroom-thread-activity-heading",
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							"aria-hidden": true,
+							children: "⑂"
+						}),
+						" 分支 · ",
+						preview.totalMessages,
+						" 条回复"
+					]
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					className: "dsh-chatroom-thread-activity-list",
+					children: preview.recentMessages.map((message) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: message.displayName }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: message.text })] }, message.id))
+				})]
+			});
+		}
+		//#endregion
 		//#region src/client/ChatroomAssistantReplyAction.tsx
 		/** Reply action contributed to finalized AI messages in shared rooms. */
 		function ChatroomAssistantReplyAction(props) {
@@ -690,6 +738,7 @@ window.__ModuleLoader__.load({
 			const rootRef = (0, react.useRef)(null);
 			const menu = useChatroomMessageMenu();
 			const selected = view.selectionRoomId === room?.id && view.selectedMessages.some((item) => item.messageId === String(props.messageId));
+			const selecting = view.selectionRoomId === room?.id;
 			(0, react.useEffect)(() => {
 				const root = rootRef.current?.closest("[data-time-hover-root]");
 				if (root === null || root === void 0 || room === void 0) return;
@@ -698,14 +747,17 @@ window.__ModuleLoader__.load({
 				};
 				root.addEventListener("contextmenu", onContextMenu);
 				root.toggleAttribute("data-dsh-chatroom-selected", selected);
+				root.toggleAttribute("data-dsh-chatroom-selection-mode", selecting);
 				return () => {
 					root.removeEventListener("contextmenu", onContextMenu);
 					root.removeAttribute("data-dsh-chatroom-selected");
+					root.removeAttribute("data-dsh-chatroom-selection-mode");
 				};
 			}, [
 				menu.open,
 				room,
-				selected
+				selected,
+				selecting
 			]);
 			if (room === void 0 || assistant?.kind !== "assistant") return null;
 			const text = assistant.blocks.flatMap((block) => block.kind === "text" ? [block.text] : []).join("").trim().replace(/\s+/gu, " ");
@@ -724,38 +776,55 @@ window.__ModuleLoader__.load({
 				message,
 				reactions: view.reactions,
 				identity: view.identity,
+				selecting,
 				selected,
 				toggleReaction: props.toggleReaction,
 				openForward: props.openForward,
 				toggleSelection: props.toggleMessageSelection
 			};
+			const threadPreview = view.threadPreviews.find((preview) => preview.thread.root.messageId === message.messageId && preview.thread.root.role === "ai");
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				className: "dsh-chatroom-assistant-actions",
+				className: "dsh-chatroom-assistant-tools",
 				ref: rootRef,
 				children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomReactionBar, { ...tools }),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-						className: "dsh-chatroom-assistant-reply",
-						type: "button",
-						title: `回复 ${room.aiDisplayName}`,
-						"aria-label": `回复 ${room.aiDisplayName}`,
-						onClick: () => {
-							props.setReply(room.id, reply);
-						},
-						children: "↩"
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomSelectionCheckbox, { tools }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "dsh-chatroom-assistant-actions",
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomReactionBar, { ...tools }),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								className: "dsh-chatroom-assistant-reply",
+								type: "button",
+								title: `回复 ${room.aiDisplayName}`,
+								"aria-label": `回复 ${room.aiDisplayName}`,
+								onClick: () => {
+									props.setReply(room.id, reply);
+								},
+								children: "↩"
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								className: "dsh-chatroom-assistant-reply",
+								type: "button",
+								title: "发起分支",
+								"aria-label": "发起分支",
+								onClick: () => {
+									props.openThread(room.id, {
+										...reply,
+										role: "ai"
+									});
+								},
+								children: "⑂"
+							})
+						]
 					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-						className: "dsh-chatroom-assistant-reply",
-						type: "button",
-						title: "发起分支",
-						"aria-label": "发起分支",
-						onClick: () => {
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomThreadActivity, {
+						preview: threadPreview,
+						open: () => {
 							props.openThread(room.id, {
 								...reply,
 								role: "ai"
 							});
-						},
-						children: "⑂"
+						}
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomMessageContextMenu, {
 						tools,
@@ -1136,10 +1205,12 @@ window.__ModuleLoader__.load({
 			const message = messageTarget(props.node, projection);
 			const target = replyTarget(message);
 			const tools = messageTools(props, room, activeRoom.id, message);
+			const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, "human");
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ParticipantMessage, {
 				native,
 				projection,
 				tools,
+				threadPreview,
 				onReply: room.identity === void 0 ? void 0 : () => {
 					props.setReply(activeRoom.id, target);
 				},
@@ -1165,10 +1236,12 @@ window.__ModuleLoader__.load({
 			const message = messageTarget(props.node, projection);
 			const target = replyTarget(message);
 			const tools = messageTools(props, room, activeRoom.id, message);
+			const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, "human");
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ParticipantMessage, {
 				native,
 				projection,
 				tools,
+				threadPreview,
 				onReply: room.identity === void 0 ? void 0 : () => {
 					props.setReply(activeRoom.id, target);
 				},
@@ -1180,15 +1253,17 @@ window.__ModuleLoader__.load({
 				}
 			});
 		});
-		function ParticipantMessage({ native, projection, tools, onReply, onThread }) {
+		function ParticipantMessage({ native, projection, tools, threadPreview, onReply, onThread }) {
 			const avatar = chatroomAvatar(projection.avatarId, projection.displayName ?? "");
 			const menu = useChatroomMessageMenu();
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: "dsh-chatroom-participant-message",
 				"data-dsh-chatroom-own": projection.own,
+				"data-dsh-chatroom-selection-mode": tools.selecting || void 0,
 				"data-dsh-chatroom-selected": tools.selected || void 0,
 				onContextMenu: menu.open,
 				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomSelectionCheckbox, { tools }),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: "dsh-chatroom-avatar",
 						"data-avatar": avatar.id,
@@ -1214,6 +1289,10 @@ window.__ModuleLoader__.load({
 							projection.files.map((file) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FileCard, { file }, file.id)),
 							projection.forward !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ForwardCard, { forward: projection.forward }),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomReactionBar, { ...tools }),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomThreadActivity, {
+								preview: threadPreview,
+								open: onThread
+							}),
 							onReply !== void 0 && onThread !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								className: "dsh-chatroom-message-actions",
 								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
@@ -1295,11 +1374,15 @@ window.__ModuleLoader__.load({
 				message,
 				reactions: room.reactions,
 				identity: room.identity,
+				selecting: room.selectionRoomId === roomId,
 				selected: room.selectionRoomId === roomId && room.selectedMessages.some((item) => item.messageId === message.messageId),
 				toggleReaction: props.toggleReaction,
 				openForward: props.openForward,
 				toggleSelection: props.toggleMessageSelection
 			};
+		}
+		function findThreadPreview(previews, messageId, role) {
+			return previews.find((preview) => preview.thread.root.messageId === messageId && preview.thread.root.role === role);
 		}
 		function formatTime(time) {
 			return new Date(time).toLocaleTimeString([], {
@@ -1327,6 +1410,7 @@ window.__ModuleLoader__.load({
 				online: 0,
 				members: [],
 				reactions: [],
+				threadPreviews: [],
 				membersOpen: false,
 				error: void 0,
 				composerRoomId: void 0,
@@ -1440,6 +1524,7 @@ window.__ModuleLoader__.load({
 						online: 0,
 						members: [],
 						reactions: [],
+						threadPreviews: [],
 						membersOpen: false,
 						thread: void 0,
 						threadMessages: [],
@@ -1461,6 +1546,7 @@ window.__ModuleLoader__.load({
 					online: 0,
 					members: [],
 					reactions: [],
+					threadPreviews: [],
 					membersOpen: false,
 					thread: void 0,
 					threadMessages: [],
@@ -1577,7 +1663,7 @@ window.__ModuleLoader__.load({
 				const current = this.snapshot.selectionRoomId === roomId ? this.snapshot.selectedMessages : [];
 				const selected = current.some((item) => item.messageId === message.messageId) ? current.filter((item) => item.messageId !== message.messageId) : [...current, message];
 				this.set({
-					selectionRoomId: selected.length === 0 ? void 0 : roomId,
+					selectionRoomId: roomId,
 					selectedMessages: selected,
 					forwardOpen: false,
 					forwardError: void 0
@@ -1741,6 +1827,11 @@ window.__ModuleLoader__.load({
 					this.set({
 						thread: response.thread,
 						threadMessages: response.messages,
+						...response.messages.length === 0 ? {} : { threadPreviews: replaceThreadPreview(this.snapshot.threadPreviews, {
+							thread: response.thread,
+							totalMessages: response.messages.length,
+							recentMessages: response.messages.slice(-3)
+						}) },
 						threadBusy: false,
 						threadError: void 0
 					});
@@ -1826,6 +1917,12 @@ window.__ModuleLoader__.load({
 					room,
 					connection: "connecting",
 					online: 0,
+					members: [],
+					reactions: [],
+					threadPreviews: [],
+					selectionRoomId: void 0,
+					selectedMessages: [],
+					forwardOpen: false,
 					error: void 0
 				});
 				this.openEvents(room);
@@ -1930,6 +2027,7 @@ window.__ModuleLoader__.load({
 							online: event.online,
 							members: event.members,
 							reactions: event.reactions,
+							threadPreviews: event.threadPreviews,
 							error: void 0
 						});
 						return;
@@ -1940,8 +2038,10 @@ window.__ModuleLoader__.load({
 						});
 						return;
 					case "thread-message":
-						if (this.snapshot.thread?.id !== event.message.threadId || this.snapshot.threadMessages.some((message) => message.id === event.message.id)) return;
-						this.set({ threadMessages: [...this.snapshot.threadMessages, event.message] });
+						this.set({
+							threadPreviews: replaceThreadPreview(this.snapshot.threadPreviews, event.preview),
+							...this.snapshot.thread?.id !== event.message.threadId || this.snapshot.threadMessages.some((message) => message.id === event.message.id) ? {} : { threadMessages: [...this.snapshot.threadMessages, event.message] }
+						});
 						return;
 					case "reaction":
 						this.replaceReaction(event.reaction);
@@ -1996,6 +2096,9 @@ window.__ModuleLoader__.load({
 				for (const listener of this.listeners) listener();
 			}
 		};
+		function replaceThreadPreview(previews, preview) {
+			return [...previews.filter((item) => item.thread.id !== preview.thread.id), preview];
+		}
 		function notificationPermission() {
 			return typeof Notification === "undefined" ? "unsupported" : Notification.permission;
 		}
@@ -2370,11 +2473,48 @@ window.__ModuleLoader__.load({
 .dsh-chatroom-presence-dot[data-online="true"] { background: #20b26b; }
 
 .dsh-chatroom-participant-message {
+  position: relative;
   width: 100%;
   display: flex;
   align-items: flex-start;
   gap: 10px;
 }
+
+.dsh-chatroom-participant-message[data-dsh-chatroom-selection-mode="true"],
+[data-time-hover-root][data-dsh-chatroom-selection-mode] {
+  box-sizing: border-box;
+  position: relative;
+  padding-left: 36px !important;
+}
+
+.dsh-chatroom-selection-checkbox {
+  position: absolute;
+  z-index: 3;
+  top: 28px;
+  left: 5px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+}
+
+.dsh-chatroom-selection-checkbox input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.dsh-chatroom-selection-checkbox > span {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 19px;
+  height: 19px;
+  border: 1.5px solid var(--border-strong, #aeb5c0);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.dsh-chatroom-selection-checkbox input:checked + span { border-color: var(--brand-primary, #4f7cff); background: var(--brand-primary, #4f7cff); }
+.dsh-chatroom-selection-checkbox input:focus-visible + span { outline: 2px solid color-mix(in srgb, var(--brand-primary, #4f7cff) 35%, transparent); outline-offset: 2px; }
 
 .dsh-chatroom-participant-message[data-dsh-chatroom-own="true"] {
   flex-direction: row-reverse;
@@ -2492,6 +2632,7 @@ window.__ModuleLoader__.load({
 
 .dsh-chatroom-reply-button:hover { color: var(--brand-primary, #4f7cff); opacity: 1; }
 .dsh-chatroom-message-actions, .dsh-chatroom-assistant-actions { display: inline-flex; align-items: center; gap: 2px; }
+.dsh-chatroom-assistant-tools { display: flex; flex-direction: column; align-items: flex-start; }
 
 .dsh-chatroom-assistant-reply {
   display: inline-grid;
@@ -2509,6 +2650,31 @@ window.__ModuleLoader__.load({
 }
 
 .dsh-chatroom-assistant-reply:hover { background: var(--bg-secondary, #f3f4f6); color: var(--brand-primary, #4f7cff); }
+
+.dsh-chatroom-thread-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: min(440px, 76vw);
+  margin-top: 5px;
+  border: 0;
+  border-left: 2px solid color-mix(in srgb, var(--brand-primary, #4f7cff) 30%, transparent);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--bg-secondary, #f3f4f6) 58%, transparent);
+  padding: 7px 9px;
+  color: var(--text-secondary, #6b7280);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  opacity: .82;
+}
+.dsh-chatroom-thread-activity:hover { background: var(--bg-secondary, #f3f4f6); opacity: 1; }
+.dsh-chatroom-thread-activity:disabled { cursor: default; }
+.dsh-chatroom-thread-activity-heading { font-size: 11px; font-weight: 600; }
+.dsh-chatroom-thread-activity-list { display: grid; gap: 3px; }
+.dsh-chatroom-thread-activity-list > span { display: grid; grid-template-columns: minmax(44px, 72px) minmax(0, 1fr); gap: 7px; font-size: 11px; line-height: 16px; }
+.dsh-chatroom-thread-activity-list strong,
+.dsh-chatroom-thread-activity-list > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .dsh-chatroom-toast-stack {
   pointer-events: auto;
@@ -2774,6 +2940,7 @@ window.__ModuleLoader__.load({
 .dsh-chatroom-selection-bar strong { margin-right: 8px; font-size: 13px; }
 .dsh-chatroom-selection-bar button { border: 0; border-radius: 8px; background: var(--bg-secondary, #f3f4f6); padding: 7px 10px; font: inherit; cursor: pointer; }
 .dsh-chatroom-selection-bar button:first-of-type { background: var(--brand-primary, #4f7cff); color: #fff; }
+.dsh-chatroom-selection-bar button:disabled { cursor: not-allowed; opacity: .45; }
 
 .dsh-chatroom-forward-layer { z-index: 190; }
 .dsh-chatroom-forward-dialog { width: min(440px, calc(100vw - 48px)); }
