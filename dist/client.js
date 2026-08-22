@@ -949,6 +949,7 @@ window.__ModuleLoader__.load({
 				this.stopped = true;
 				this.closeEvents();
 				this.closeNotifications();
+				this.updateActiveDocumentRoom(false);
 				this.updateDocumentTitle(0);
 				this.listeners.clear();
 			}
@@ -998,6 +999,7 @@ window.__ModuleLoader__.load({
 				if (room === void 0) {
 					this.closeEvents();
 					this.identityPromptedRoomId = void 0;
+					this.updateActiveDocumentRoom(false);
 					this.set({
 						room: void 0,
 						connection: "offline",
@@ -1009,6 +1011,7 @@ window.__ModuleLoader__.load({
 					});
 					return;
 				}
+				this.updateActiveDocumentRoom(true);
 				if (this.snapshot.identity === void 0 && this.identityPromptedRoomId !== room.id) {
 					this.identityPromptedRoomId = room.id;
 					this.set({ open: true });
@@ -1441,6 +1444,10 @@ window.__ModuleLoader__.load({
 			updateDocumentTitle(unreadCount) {
 				if (typeof document === "undefined" || this.originalTitle === void 0) return;
 				document.title = unreadCount === 0 ? this.originalTitle : `(${unreadCount}) ${this.originalTitle}`;
+			}
+			updateActiveDocumentRoom(active) {
+				if (typeof document === "undefined") return;
+				document.documentElement.toggleAttribute("data-dsh-chatroom-active", active);
 			}
 			set(patch) {
 				if (this.stopped) return;
@@ -1899,6 +1906,10 @@ window.__ModuleLoader__.load({
 
 .dsh-chatroom-participant-message[data-dsh-chatroom-own="true"] .dsh-chatroom-native-message [data-time-hover-root] {
   align-items: flex-end !important;
+}
+
+[data-dsh-chatroom-active] [data-time-hover-root] :is([class*="timeStart"], [class*="timeEnd"]) {
+  opacity: 1 !important;
 }
 
 .dsh-chatroom-reply-quote {

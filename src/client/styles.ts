@@ -327,6 +327,10 @@ export const CHATROOM_STYLES = `
   align-items: flex-end !important;
 }
 
+[data-dsh-chatroom-active] [data-time-hover-root] :is([class*="timeStart"], [class*="timeEnd"]) {
+  opacity: 1 !important;
+}
+
 .dsh-chatroom-reply-quote {
   display: flex;
   flex-direction: column;

@@ -22,7 +22,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.6.1 establishes the collaboration-platform foundation: durable membership, live member management, room-wide unread notifications, and persistent branch conversations. A branch opens beside the native Harness conversation and uses its own Agent Session, so ordinary branch messages remain human chat and `@AI` produces an answer only in that branch. The main room continues to use Harness's complete native conversation interface, and direct visitors see clean participant bubbles while choosing their identity and avatar.
+Version 0.6.2 establishes the collaboration-platform foundation: durable membership, live member management, room-wide unread notifications, and persistent branch conversations. A branch opens beside the native Harness conversation and uses its own Agent Session, so ordinary branch messages remain human chat and `@AI` produces an answer only in that branch. The main room continues to use Harness's complete native conversation interface, direct visitors see clean participant bubbles while choosing their identity and avatar, and message timestamps remain visible without hovering.
 
 ## Requirements
 

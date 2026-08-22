@@ -120,6 +120,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private receiveNotification;
     private clearUnread;
     private updateDocumentTitle;
+    private updateActiveDocumentRoom;
     private set;
 }
 /** Submit one native composer payload through human-first room admission. */

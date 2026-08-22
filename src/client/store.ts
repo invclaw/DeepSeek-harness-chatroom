@@ -127,6 +127,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.stopped = true
     this.closeEvents()
     this.closeNotifications()
+    this.updateActiveDocumentRoom(false)
     this.updateDocumentTitle(0)
     this.listeners.clear()
   }
@@ -174,9 +175,11 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     if (room === undefined) {
       this.closeEvents()
       this.identityPromptedRoomId = undefined
+      this.updateActiveDocumentRoom(false)
       this.set({ room: undefined, connection: 'offline', online: 0, members: [], membersOpen: false, thread: undefined, threadMessages: [] })
       return
     }
+    this.updateActiveDocumentRoom(true)
     if (this.snapshot.identity === undefined && this.identityPromptedRoomId !== room.id) {
       this.identityPromptedRoomId = room.id
       this.set({ open: true })
@@ -544,6 +547,11 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private updateDocumentTitle(unreadCount: number): void {
     if (typeof document === 'undefined' || this.originalTitle === undefined) return
     document.title = unreadCount === 0 ? this.originalTitle : `(${unreadCount}) ${this.originalTitle}`
+  }
+
+  private updateActiveDocumentRoom(active: boolean): void {
+    if (typeof document === 'undefined') return
+    document.documentElement.toggleAttribute('data-dsh-chatroom-active', active)
   }
 
   private set(patch: Partial<ChatroomView>): void {
