@@ -113,8 +113,8 @@ window.__ModuleLoader__.load({
 			});
 		}
 		function IdentityStep({ room, join, close }) {
-			const [name, setName] = (0, react.useState)("");
-			const [avatarId, setAvatarId] = (0, react.useState)(CHATROOM_AVATARS[0].id);
+			const [name, setName] = (0, react.useState)(room.identity?.displayName ?? "");
+			const [avatarId, setAvatarId] = (0, react.useState)(room.identity?.avatarId ?? CHATROOM_AVATARS[0].id);
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("form", {
 				className: "dsh-chatroom-card",
 				onSubmit: (event) => {
@@ -709,7 +709,11 @@ window.__ModuleLoader__.load({
 			};
 			/** Close only the additive room dialog. */
 			closeRoom = () => {
-				this.set({ open: false });
+				this.set(this.snapshot.phase === "identity-required" && this.snapshot.identity !== void 0 ? {
+					open: false,
+					phase: "ready",
+					error: void 0
+				} : { open: false });
 			};
 			/** Retry pending native navigation when the Host Session list changes. */
 			resumeOpen = () => {
@@ -745,6 +749,9 @@ window.__ModuleLoader__.load({
 			};
 			/** Create the persistent browser identity, then show the room directory. */
 			join = async (displayName, avatarId) => {
+				const activeRoom = this.snapshot.room;
+				const activeConnection = this.snapshot.connection;
+				const activeOnline = this.snapshot.online;
 				this.set({
 					phase: "loading",
 					error: void 0
@@ -759,13 +766,14 @@ window.__ModuleLoader__.load({
 						})
 					});
 					if (session.identity === null) throw new Error("服务端没有返回聊天室身份。");
+					const resolvedRoom = activeRoom === void 0 ? void 0 : session.rooms.find((room) => room.id === activeRoom.id);
 					this.set({
 						phase: "ready",
 						rooms: session.rooms,
-						room: void 0,
+						room: resolvedRoom,
 						identity: session.identity,
-						connection: "offline",
-						online: 0,
+						connection: resolvedRoom === void 0 ? "offline" : activeConnection,
+						online: resolvedRoom === void 0 ? 0 : activeOnline,
 						error: void 0
 					});
 				} catch (error) {
@@ -904,27 +912,13 @@ window.__ModuleLoader__.load({
 					});
 				}
 			};
-			/** Revoke the current identity and reopen identity setup. */
+			/** Open identity editing without revoking the current identity. */
 			resetIdentity = async () => {
-				this.closeEvents();
-				try {
-					await requestEmpty(`${CHATROOM_API_PREFIX}/session`, { method: "DELETE" });
-					this.set({
-						open: true,
-						phase: "identity-required",
-						connection: "offline",
-						room: void 0,
-						identity: void 0,
-						online: 0,
-						error: void 0
-					});
-				} catch (error) {
-					this.set({
-						open: true,
-						phase: "error",
-						error: errorMessage(error)
-					});
-				}
+				this.set({
+					open: true,
+					phase: "identity-required",
+					error: void 0
+				});
 			};
 			/** Retry identity and directory recovery. */
 			retry = async () => {
@@ -1073,13 +1067,6 @@ window.__ModuleLoader__.load({
 			});
 			if (!response.ok) throw await responseError(response);
 			return await response.json();
-		}
-		async function requestEmpty(url, init) {
-			const response = await fetch(url, {
-				...init,
-				credentials: "same-origin"
-			});
-			if (!response.ok) throw await responseError(response);
 		}
 		async function responseError(response) {
 			let message = `聊天室请求失败（HTTP ${response.status}）。`;

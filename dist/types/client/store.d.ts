@@ -79,7 +79,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     selectRoom: (roomId: string) => Promise<void>;
     /** Create, activate, and navigate to a new independent shared room. */
     createRoom: (title: string) => Promise<void>;
-    /** Revoke the current identity and reopen identity setup. */
+    /** Open identity editing without revoking the current identity. */
     resetIdentity: () => Promise<void>;
     /** Retry identity and directory recovery. */
     retry: () => Promise<void>;

@@ -155,6 +155,24 @@ export class ChatroomRuntime {
     return { token, identity: publicIdentity(record) }
   }
 
+  /** Update the display fields for one existing browser identity. */
+  async updateIdentity(token: string, displayName: string, avatarId?: string): Promise<ChatroomIdentity> {
+    this.assertReady()
+    const key = tokenHash(token)
+    const existing = this.requireIdentities().get(key)
+    if (existing === undefined) throw new ChatroomInputError('聊天室身份已失效，请重新进入。')
+    const normalized = normalizeDisplayName(displayName, this.config.maxDisplayNameChars)
+    if (avatarId !== undefined && !isChatroomAvatarId(avatarId)) throw new ChatroomInputError('请选择有效的头像。')
+    const record: IdentityRecord = {
+      ...existing,
+      displayName: normalized,
+      avatarId: avatarId ?? existing.avatarId ?? fallbackAvatarId(existing.participantId),
+      lastSeenAt: Date.now(),
+    }
+    await this.requireIdentities().put(key, record)
+    return publicIdentity(record)
+  }
+
   /** Revoke one browser identity token. */
   async deleteIdentity(token: string | undefined): Promise<void> {
     this.assertReady()

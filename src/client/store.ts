@@ -107,7 +107,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   /** Close only the additive room dialog. */
   closeRoom = (): void => {
-    this.set({ open: false })
+    this.set(this.snapshot.phase === 'identity-required' && this.snapshot.identity !== undefined
+      ? { open: false, phase: 'ready', error: undefined }
+      : { open: false })
   }
 
   /** Retry pending native navigation when the Host Session list changes. */
@@ -135,6 +137,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   /** Create the persistent browser identity, then show the room directory. */
   join = async (displayName: string, avatarId: string): Promise<void> => {
+    const activeRoom = this.snapshot.room
+    const activeConnection = this.snapshot.connection
+    const activeOnline = this.snapshot.online
     this.set({ phase: 'loading', error: undefined })
     try {
       const session = await requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/session`, {
@@ -143,13 +148,16 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         body: JSON.stringify({ displayName, avatarId }),
       })
       if (session.identity === null) throw new Error('服务端没有返回聊天室身份。')
+      const resolvedRoom = activeRoom === undefined
+        ? undefined
+        : session.rooms.find(room => room.id === activeRoom.id)
       this.set({
         phase: 'ready',
         rooms: session.rooms,
-        room: undefined,
+        room: resolvedRoom,
         identity: session.identity,
-        connection: 'offline',
-        online: 0,
+        connection: resolvedRoom === undefined ? 'offline' : activeConnection,
+        online: resolvedRoom === undefined ? 0 : activeOnline,
         error: undefined,
       })
     } catch (error) {
@@ -271,23 +279,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     }
   }
 
-  /** Revoke the current identity and reopen identity setup. */
+  /** Open identity editing without revoking the current identity. */
   resetIdentity = async (): Promise<void> => {
-    this.closeEvents()
-    try {
-      await requestEmpty(`${CHATROOM_API_PREFIX}/session`, { method: 'DELETE' })
-      this.set({
-        open: true,
-        phase: 'identity-required',
-        connection: 'offline',
-        room: undefined,
-        identity: undefined,
-        online: 0,
-        error: undefined,
-      })
-    } catch (error) {
-      this.set({ open: true, phase: 'error', error: errorMessage(error) })
-    }
+    this.set({ open: true, phase: 'identity-required', error: undefined })
   }
 
   /** Retry identity and directory recovery. */
@@ -430,11 +424,6 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, credentials: 'same-origin' })
   if (!response.ok) throw await responseError(response)
   return await response.json() as T
-}
-
-async function requestEmpty(url: string, init?: RequestInit): Promise<void> {
-  const response = await fetch(url, { ...init, credentials: 'same-origin' })
-  if (!response.ok) throw await responseError(response)
 }
 
 async function responseError(response: Response): Promise<HttpError> {

@@ -29,6 +29,12 @@ describe('native chatroom integration', () => {
     expect(closeRoom).toHaveBeenCalledOnce()
   })
 
+  it('prefills the current name and avatar when editing identity', () => {
+    renderEntry(view({ open: true, phase: 'identity-required' }))
+    expect((screen.getByTestId('chatroom-identity-input') as HTMLInputElement).value).toBe('Alice')
+    expect(screen.getByLabelText('鲸鱼').getAttribute('aria-checked')).toBe('true')
+  })
+
   it('lists existing rooms and creates a new independent shared Session', () => {
     const selectRoom = vi.fn(async () => undefined)
     const createRoom = vi.fn(async () => undefined)

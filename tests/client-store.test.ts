@@ -90,6 +90,41 @@ describe('ChatroomClientStore', () => {
     expect(openSession).toHaveBeenCalledWith('chatroom-v1-second')
   })
 
+  it('preserves the active identity and room while identity editing is cancelled or submitted', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const updated = { ...identity, displayName: 'Alice 2', avatarId: 'panda' as const }
+    const room = roomInfo()
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(updated, [room])))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    store.activateSession(room.sessionId)
+    FakeEventSource.instances[0]?.emit({ type: 'snapshot', room, identity, online: 2 })
+
+    await store.resetIdentity()
+    expect(store.getSnapshot()).toMatchObject({ open: true, phase: 'identity-required', identity, room })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    store.closeRoom()
+    expect(store.getSnapshot()).toMatchObject({ open: false, phase: 'ready', identity, room })
+
+    store.openRoom()
+    await store.resetIdentity()
+    await store.join('Alice 2', 'panda')
+    expect(store.getSnapshot()).toMatchObject({
+      open: true,
+      phase: 'ready',
+      connection: 'online',
+      identity: updated,
+      online: 2,
+      room,
+    })
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/plugins/deepseek-harness-chatroom/api/session')
+  })
+
   it('synchronizes presence only for the native room currently on screen', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()

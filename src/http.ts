@@ -89,12 +89,17 @@ export class ChatroomHttpController {
     }
     if (request.method === 'POST') {
       assertSameOrigin(request)
+      const body = await readJson(request, smallRequestLimit(this.config))
       const existing = this.runtime.identity(token)
-      if (existing !== undefined) {
-        json(response, 200, this.sessionPayload(existing))
+      if (existing !== undefined && token !== undefined) {
+        const updated = await this.runtime.updateIdentity(
+          token,
+          fieldString(body, 'displayName'),
+          optionalFieldString(body, 'avatarId'),
+        )
+        json(response, 200, this.sessionPayload(updated))
         return
       }
-      const body = await readJson(request, smallRequestLimit(this.config))
       const created = await this.runtime.createIdentity(fieldString(body, 'displayName'), optionalFieldString(body, 'avatarId'))
       response.setHeader('Set-Cookie', sessionCookie(
         this.config.cookieName,

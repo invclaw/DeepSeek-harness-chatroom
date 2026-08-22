@@ -19,7 +19,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.5.0 adds avatar identities, the native `@AI` candidate, reply quotes, and downloadable file cards to the multi-room, human-first foundation. Each browser keeps its own messages on the right, while peer and AI messages render on the left. Human messages show an avatar and the participant name above the bubble. Images are resized against `maxImageSidePixels` and Harness's decoded-pixel limit before attachment admission.
+Version 0.5.1 adds avatar identities, the native `@AI` candidate, reply quotes, and downloadable file cards to the multi-room, human-first foundation. Each browser keeps its own messages on the right, while peer and AI messages render on the left. Human messages show an avatar and the participant name above the bubble. Images are resized against `maxImageSidePixels` and Harness's decoded-pixel limit before attachment admission. Identity changes are applied only when submitted, so closing the picker preserves the current participant and room.
 
 ## Requirements
 

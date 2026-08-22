@@ -36,6 +36,8 @@ export declare class ChatroomRuntime {
         token: string;
         identity: ChatroomIdentity;
     }>;
+    /** Update the display fields for one existing browser identity. */
+    updateIdentity(token: string, displayName: string, avatarId?: string): Promise<ChatroomIdentity>;
     /** Revoke one browser identity token. */
     deleteIdentity(token: string | undefined): Promise<void>;
     /** Create and activate one independent shared Harness Session. */

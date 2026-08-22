@@ -63,8 +63,8 @@ function IdentityStep({
   join(displayName: string, avatarId: string): Promise<void>
   close(): void
 }): JSX.Element {
-  const [name, setName] = useState('')
-  const [avatarId, setAvatarId] = useState<ChatroomAvatarId>(CHATROOM_AVATARS[0].id)
+  const [name, setName] = useState(room.identity?.displayName ?? '')
+  const [avatarId, setAvatarId] = useState<ChatroomAvatarId>(room.identity?.avatarId ?? CHATROOM_AVATARS[0].id)
   return (
     <form className="dsh-chatroom-card" onSubmit={(event) => { event.preventDefault(); void join(name, avatarId) }}>
       <button className="dsh-chatroom-close" aria-label="关闭" type="button" onClick={close}>×</button>

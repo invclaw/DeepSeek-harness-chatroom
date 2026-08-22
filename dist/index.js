@@ -286,6 +286,23 @@ var ChatroomRuntime = class {
     await this.requireIdentities().put(tokenHash(token), record);
     return { token, identity: publicIdentity(record) };
   }
+  /** Update the display fields for one existing browser identity. */
+  async updateIdentity(token, displayName, avatarId) {
+    this.assertReady();
+    const key = tokenHash(token);
+    const existing = this.requireIdentities().get(key);
+    if (existing === void 0) throw new ChatroomInputError("\u804A\u5929\u5BA4\u8EAB\u4EFD\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u8FDB\u5165\u3002");
+    const normalized = normalizeDisplayName(displayName, this.config.maxDisplayNameChars);
+    if (avatarId !== void 0 && !isChatroomAvatarId(avatarId)) throw new ChatroomInputError("\u8BF7\u9009\u62E9\u6709\u6548\u7684\u5934\u50CF\u3002");
+    const record = {
+      ...existing,
+      displayName: normalized,
+      avatarId: avatarId ?? existing.avatarId ?? fallbackAvatarId(existing.participantId),
+      lastSeenAt: Date.now()
+    };
+    await this.requireIdentities().put(key, record);
+    return publicIdentity(record);
+  }
   /** Revoke one browser identity token. */
   async deleteIdentity(token) {
     this.assertReady();
@@ -752,12 +769,17 @@ var ChatroomHttpController = class {
     }
     if (request.method === "POST") {
       assertSameOrigin(request);
+      const body = await readJson(request, smallRequestLimit(this.config));
       const existing = this.runtime.identity(token);
-      if (existing !== void 0) {
-        json(response, 200, this.sessionPayload(existing));
+      if (existing !== void 0 && token !== void 0) {
+        const updated = await this.runtime.updateIdentity(
+          token,
+          fieldString(body, "displayName"),
+          optionalFieldString(body, "avatarId")
+        );
+        json(response, 200, this.sessionPayload(updated));
         return;
       }
-      const body = await readJson(request, smallRequestLimit(this.config));
       const created = await this.runtime.createIdentity(fieldString(body, "displayName"), optionalFieldString(body, "avatarId"));
       response.setHeader("Set-Cookie", sessionCookie(
         this.config.cookieName,

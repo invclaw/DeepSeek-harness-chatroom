@@ -48,6 +48,23 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
+  it('updates an identity without replacing its participant id or token', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const created = await runtime.createIdentity('Alice', 'whale')
+
+    const updated = await runtime.updateIdentity(created.token, 'Alice 2', 'panda')
+
+    expect(updated).toEqual({
+      participantId: created.identity.participantId,
+      displayName: 'Alice 2',
+      avatarId: 'panda',
+    })
+    expect(runtime.identity(created.token)).toEqual(updated)
+    await runtime.stop()
+  })
+
   it('stores downloadable files and keeps a model-readable reply line', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
