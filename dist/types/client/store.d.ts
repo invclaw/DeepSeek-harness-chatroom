@@ -47,6 +47,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private eventSource;
     private notificationSource;
     private pendingOpenRoomId;
+    private identityPromptedRoomId;
     private stopped;
     private compositionRevision;
     private pendingFileSequence;

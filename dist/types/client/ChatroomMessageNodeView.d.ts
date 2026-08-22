@@ -16,7 +16,7 @@ export type ChatroomUserMessageNodeViewProps = ChatNodeViewProps<'user'> & Chatr
 /** Props for the native steering-message wrapper. */
 export type ChatroomSteeringMessageNodeViewProps = ChatNodeViewProps<'steering'> & ChatroomMessageNodeInjected<'steering'>;
 /** Participant-specific display projection of one durable native user node. */
-export declare function projectChatroomMessage(node: ParticipantNode, identity: ChatroomIdentity): {
+export declare function projectChatroomMessage(node: ParticipantNode, identity: ChatroomIdentity | undefined): {
     readonly node: ParticipantNode;
     readonly own: boolean;
     readonly displayName?: string;

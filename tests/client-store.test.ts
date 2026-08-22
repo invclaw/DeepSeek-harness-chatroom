@@ -52,6 +52,25 @@ describe('ChatroomClientStore', () => {
     expect(FakeEventSource.instances[1]?.url).toBe('/plugins/deepseek-harness-chatroom/api/events?roomId=lobby')
   })
 
+  it('prompts once when an unjoined browser enters a shared Session directly', async () => {
+    const room = roomInfo()
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(null, [room]))))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+
+    await store.start()
+    store.activateSession(room.sessionId)
+    expect(store.getSnapshot()).toMatchObject({ open: true, phase: 'identity-required', room })
+
+    store.closeRoom()
+    store.activateSession(room.sessionId)
+    expect(store.getSnapshot().open).toBe(false)
+
+    store.activateSession('ordinary-session')
+    store.activateSession(room.sessionId)
+    expect(store.getSnapshot().open).toBe(true)
+  })
+
   it('waits for the Host list when a newly activated Session is still arriving', async () => {
     const identity = { participantId: 'returning-id', displayName: '回访者', avatarId: 'panda' as const }
     const room = roomInfo()

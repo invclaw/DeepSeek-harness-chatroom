@@ -729,8 +729,8 @@ window.__ModuleLoader__.load({
 					visibleText = marker === void 0 ? visibleText : visibleText.slice(marker.length);
 					const namePrefix = /^([^：]{1,80})：/.exec(visibleText);
 					displayName = namePrefix?.[1];
-					own = marker === void 0 ? displayName === identity.displayName : marker.participantId === identity.participantId;
-					avatarId = marker?.avatarId ?? fallbackAvatarId(displayName ?? identity.participantId);
+					own = identity !== void 0 && (marker === void 0 ? displayName === identity.displayName : marker.participantId === identity.participantId);
+					avatarId = marker?.avatarId ?? fallbackAvatarId(displayName ?? marker?.participantId ?? "participant");
 					if (namePrefix !== null) visibleText = visibleText.slice(namePrefix[0].length);
 					const replyProjection = projectReplyText(visibleText);
 					visibleText = replyProjection.text;
@@ -754,7 +754,7 @@ window.__ModuleLoader__.load({
 					}
 				} : node,
 				own,
-				avatarId: avatarId ?? fallbackAvatarId(identity.participantId),
+				avatarId: avatarId ?? fallbackAvatarId(identity?.participantId ?? "participant"),
 				files,
 				text: texts.join("\n"),
 				...displayName === void 0 ? {} : { displayName },
@@ -765,7 +765,7 @@ window.__ModuleLoader__.load({
 		const ChatroomUserMessageNodeView = (0, react.memo)(function ChatroomUserMessageNodeView(props) {
 			const room = props.useChatroom((snapshot) => snapshot);
 			const NativeView = props.nativeMessageView;
-			if (!room.rooms.some((candidate) => String(props.sessionId) === candidate.sessionId) || room.identity === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, { ...props });
+			if (!room.rooms.some((candidate) => String(props.sessionId) === candidate.sessionId)) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, { ...props });
 			const projection = projectChatroomMessage(props.node, room.identity);
 			const native = /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, {
 				...props,
@@ -773,9 +773,9 @@ window.__ModuleLoader__.load({
 			});
 			const activeRoom = room.rooms.find((candidate) => String(props.sessionId) === candidate.sessionId);
 			const target = replyTarget(props.node, projection);
-			return participantMessage(native, projection, () => {
+			return participantMessage(native, projection, room.identity === void 0 ? void 0 : () => {
 				props.setReply(activeRoom.id, target);
-			}, () => {
+			}, room.identity === void 0 ? void 0 : () => {
 				props.openThread(activeRoom.id, {
 					...target,
 					role: "human"
@@ -786,7 +786,7 @@ window.__ModuleLoader__.load({
 		const ChatroomSteeringMessageNodeView = (0, react.memo)(function ChatroomSteeringMessageNodeView(props) {
 			const room = props.useChatroom((snapshot) => snapshot);
 			const NativeView = props.nativeMessageView;
-			if (!room.rooms.some((candidate) => String(props.sessionId) === candidate.sessionId) || room.identity === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, { ...props });
+			if (!room.rooms.some((candidate) => String(props.sessionId) === candidate.sessionId)) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, { ...props });
 			const projection = projectChatroomMessage(props.node, room.identity);
 			const native = /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NativeView, {
 				...props,
@@ -794,9 +794,9 @@ window.__ModuleLoader__.load({
 			});
 			const activeRoom = room.rooms.find((candidate) => String(props.sessionId) === candidate.sessionId);
 			const target = replyTarget(props.node, projection);
-			return participantMessage(native, projection, () => {
+			return participantMessage(native, projection, room.identity === void 0 ? void 0 : () => {
 				props.setReply(activeRoom.id, target);
-			}, () => {
+			}, room.identity === void 0 ? void 0 : () => {
 				props.openThread(activeRoom.id, {
 					...target,
 					role: "human"
@@ -830,7 +830,7 @@ window.__ModuleLoader__.load({
 							children: native
 						}),
 						projection.files.map((file) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FileCard, { file }, file.id)),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						onReply !== void 0 && onThread !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							className: "dsh-chatroom-message-actions",
 							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								className: "dsh-chatroom-reply-button",
@@ -917,6 +917,7 @@ window.__ModuleLoader__.load({
 			eventSource;
 			notificationSource;
 			pendingOpenRoomId;
+			identityPromptedRoomId;
 			stopped = false;
 			compositionRevision = 0;
 			pendingFileSequence = 0;
@@ -996,6 +997,7 @@ window.__ModuleLoader__.load({
 				const room = sessionId === void 0 ? void 0 : this.roomForSession(sessionId);
 				if (room === void 0) {
 					this.closeEvents();
+					this.identityPromptedRoomId = void 0;
 					this.set({
 						room: void 0,
 						connection: "offline",
@@ -1006,6 +1008,10 @@ window.__ModuleLoader__.load({
 						threadMessages: []
 					});
 					return;
+				}
+				if (this.snapshot.identity === void 0 && this.identityPromptedRoomId !== room.id) {
+					this.identityPromptedRoomId = room.id;
+					this.set({ open: true });
 				}
 				if (this.snapshot.room?.id === room.id && this.eventSource !== void 0) return;
 				this.set({

@@ -30,7 +30,7 @@ export type ChatroomSteeringMessageNodeViewProps =
 /** Participant-specific display projection of one durable native user node. */
 export function projectChatroomMessage(
   node: ParticipantNode,
-  identity: ChatroomIdentity,
+  identity: ChatroomIdentity | undefined,
 ): {
   readonly node: ParticipantNode
   readonly own: boolean
@@ -56,10 +56,10 @@ export function projectChatroomMessage(
       visibleText = marker === undefined ? visibleText : visibleText.slice(marker.length)
       const namePrefix = /^([^：]{1,80})：/.exec(visibleText)
       displayName = namePrefix?.[1]
-      own = marker === undefined
+      own = identity !== undefined && (marker === undefined
         ? displayName === identity.displayName
-        : marker.participantId === identity.participantId
-      avatarId = marker?.avatarId ?? fallbackAvatarId(displayName ?? identity.participantId)
+        : marker.participantId === identity.participantId)
+      avatarId = marker?.avatarId ?? fallbackAvatarId(displayName ?? marker?.participantId ?? 'participant')
       if (namePrefix !== null) visibleText = visibleText.slice(namePrefix[0].length)
       const replyProjection = projectReplyText(visibleText)
       visibleText = replyProjection.text
@@ -76,7 +76,7 @@ export function projectChatroomMessage(
       ? { ...node, data: { ...node.data, content } } as ParticipantNode
       : node,
     own,
-    avatarId: avatarId ?? fallbackAvatarId(identity.participantId),
+    avatarId: avatarId ?? fallbackAvatarId(identity?.participantId ?? 'participant'),
     files,
     text: texts.join('\n'),
     ...(displayName === undefined ? {} : { displayName }),
@@ -90,8 +90,7 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
 ) {
   const room = props.useChatroom(snapshot => snapshot)
   const NativeView = props.nativeMessageView
-  if (!room.rooms.some(candidate => String(props.sessionId) === candidate.sessionId)
-    || room.identity === undefined) {
+  if (!room.rooms.some(candidate => String(props.sessionId) === candidate.sessionId)) {
     return <NativeView {...props} />
   }
   const projection = projectChatroomMessage(props.node, room.identity)
@@ -99,8 +98,8 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
   const activeRoom = room.rooms.find(candidate => String(props.sessionId) === candidate.sessionId)!
   const target = replyTarget(props.node, projection)
   return participantMessage(native, projection,
-    () => { props.setReply(activeRoom.id, target) },
-    () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) })
+    room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, target) },
+    room.identity === undefined ? undefined : () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) })
 })
 
 /** Reuse Harness' native steering renderer and move only peer steering messages to the left. */
@@ -109,8 +108,7 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
 ) {
   const room = props.useChatroom(snapshot => snapshot)
   const NativeView = props.nativeMessageView
-  if (!room.rooms.some(candidate => String(props.sessionId) === candidate.sessionId)
-    || room.identity === undefined) {
+  if (!room.rooms.some(candidate => String(props.sessionId) === candidate.sessionId)) {
     return <NativeView {...props} />
   }
   const projection = projectChatroomMessage(props.node, room.identity)
@@ -118,15 +116,15 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
   const activeRoom = room.rooms.find(candidate => String(props.sessionId) === candidate.sessionId)!
   const target = replyTarget(props.node, projection)
   return participantMessage(native, projection,
-    () => { props.setReply(activeRoom.id, target) },
-    () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) })
+    room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, target) },
+    room.identity === undefined ? undefined : () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) })
 })
 
 function participantMessage(
   native: ReactNode,
   projection: ReturnType<typeof projectChatroomMessage>,
-  onReply: () => void,
-  onThread: () => void,
+  onReply: (() => void) | undefined,
+  onThread: (() => void) | undefined,
 ): ReactNode {
   const avatar = chatroomAvatar(projection.avatarId, projection.displayName ?? '')
   return (
@@ -143,10 +141,12 @@ function participantMessage(
         )}
         <div className="dsh-chatroom-native-message">{native}</div>
         {projection.files.map(file => <FileCard file={file} key={file.id} />)}
-        <div className="dsh-chatroom-message-actions">
-          <button className="dsh-chatroom-reply-button" type="button" onClick={onReply}>↩ 回复</button>
-          <button className="dsh-chatroom-reply-button" type="button" onClick={onThread}>⑂ 分支</button>
-        </div>
+        {onReply !== undefined && onThread !== undefined && (
+          <div className="dsh-chatroom-message-actions">
+            <button className="dsh-chatroom-reply-button" type="button" onClick={onReply}>↩ 回复</button>
+            <button className="dsh-chatroom-reply-button" type="button" onClick={onThread}>⑂ 分支</button>
+          </div>
+        )}
       </div>
     </div>
   )

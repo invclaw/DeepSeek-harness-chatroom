@@ -93,6 +93,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private eventSource: EventSource | undefined
   private notificationSource: EventSource | undefined
   private pendingOpenRoomId: string | undefined
+  private identityPromptedRoomId: string | undefined
   private stopped = false
   private compositionRevision = 0
   private pendingFileSequence = 0
@@ -172,8 +173,13 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     const room = sessionId === undefined ? undefined : this.roomForSession(sessionId)
     if (room === undefined) {
       this.closeEvents()
+      this.identityPromptedRoomId = undefined
       this.set({ room: undefined, connection: 'offline', online: 0, members: [], membersOpen: false, thread: undefined, threadMessages: [] })
       return
+    }
+    if (this.snapshot.identity === undefined && this.identityPromptedRoomId !== room.id) {
+      this.identityPromptedRoomId = room.id
+      this.set({ open: true })
     }
     if (this.snapshot.room?.id === room.id && this.eventSource !== undefined) return
     this.set({ room, connection: 'connecting', online: 0, members: [], membersOpen: false, thread: undefined, threadMessages: [] })

@@ -39,6 +39,20 @@ describe('participant-specific native message projection', () => {
     expect(firstText(peer.node)).toBe('旧消息')
   })
 
+  it('hides transport markers before this browser chooses an identity', () => {
+    const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>
+    render(<ChatroomUserMessageNodeView {...messageProps(
+      userNode(identifyChatroomText('加入前可读', bob)),
+      undefined,
+      Native,
+    )} />)
+
+    expect(screen.getByText('Bob').className).toBe('dsh-chatroom-display-name')
+    expect(screen.getByTestId('native').textContent).toBe('加入前可读')
+    expect(screen.queryByRole('button', { name: '↩ 回复' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '⑂ 分支' })).toBeNull()
+  })
+
   it('puts the participant name above a native bubble that contains only the message', () => {
     const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>
     const { rerender } = render(<ChatroomUserMessageNodeView {...messageProps(
@@ -103,7 +117,7 @@ function firstText(node: ChatNode<'user' | 'steering'>): string {
 
 function messageProps(
   node: ChatNode<'user'>,
-  identity: ChatroomIdentity,
+  identity: ChatroomIdentity | undefined,
   nativeMessageView: ChatroomUserMessageNodeViewProps['nativeMessageView'],
 ): ChatroomUserMessageNodeViewProps {
   return {
