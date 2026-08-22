@@ -9,6 +9,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
+import type {} from '@deepseek-ai/dsh-session-title'
 import type {} from '@deepseek-ai/dsh-storage-domain'
 import { Config, type Config as ChatroomConfig, validateConfig } from './config.js'
 import { ChatroomHttpController } from './http.js'
@@ -24,6 +25,7 @@ export const inject = [
   'llm',
   'sessionPersistence',
   'sessions',
+  'sessionTitle',
   'storageDomain',
   'webServer',
   'workspaceRegistry',
@@ -57,6 +59,9 @@ export function apply(ctx: Context, config: ChatroomConfig): void {
       await runtime.stop()
     }
   }, 'deepseek-harness-chatroom.runtime')
+  ctx.effect(() => ctx.on('session/event', (session, event) => {
+    runtime.handleSessionEvent(session, event)
+  }), 'deepseek-harness-chatroom.session-events')
 }
 
 export default { name, inject, Config, apply }

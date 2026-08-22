@@ -11,6 +11,8 @@ import type {
   ChatroomRoomResponse,
   ChatroomRoomsResponse,
   ChatroomSessionResponse,
+  ChatroomThreadPromptRequest,
+  ChatroomThreadRoot,
 } from './types.js'
 
 /** HTTP/SSE adapter for the browser client. */
@@ -58,12 +60,24 @@ export class ChatroomHttpController {
         await this.handlePrompt(request, response)
         return
       }
+      if (route.endpoint === '/threads/open') {
+        await this.handleThreadOpen(request, response)
+        return
+      }
+      if (route.endpoint === '/threads/prompt') {
+        await this.handleThreadPrompt(request, response)
+        return
+      }
       if (route.endpoint.startsWith('/files/')) {
         this.handleFile(request, response, route.endpoint.slice('/files/'.length))
         return
       }
       if (route.endpoint === '/events' && request.method === 'GET') {
         await this.handleEvents(request, response, url.searchParams)
+        return
+      }
+      if (route.endpoint === '/notifications' && request.method === 'GET') {
+        this.handleNotifications(request, response)
         return
       }
       json(response, 404, { error: '接口不存在。' } satisfies ChatroomErrorResponse)
@@ -144,10 +158,42 @@ export class ChatroomHttpController {
       return
     }
     assertSameOrigin(request)
-    if (this.requireIdentity(request, response) === undefined) return
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
     const body = await readJson(request, smallRequestLimit(this.config))
-    const room = await this.runtime.selectRoom(fieldString(body, 'roomId'))
+    const room = await this.runtime.selectRoom(fieldString(body, 'roomId'), identity)
     json(response, 200, { room } satisfies ChatroomRoomResponse)
+  }
+
+  private async handleThreadOpen(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, smallRequestLimit(this.config) + 2_048)
+    const root = threadRootRequest(body.root)
+    const result = await this.runtime.openThread(fieldString(body, 'roomId'), identity, root)
+    json(response, 200, result)
+  }
+
+  private async handleThreadPrompt(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, this.config.maxMessageTextChars * 4 + 2_048)
+    const prompt: ChatroomThreadPromptRequest = {
+      threadId: fieldString(body, 'threadId'),
+      text: fieldString(body, 'text'),
+    }
+    const result = await this.runtime.submitThread(prompt.threadId, identity, prompt.text)
+    json(response, 200, result)
   }
 
   private async handlePrompt(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -191,7 +237,7 @@ export class ChatroomHttpController {
     if (identity === undefined) return
     const roomId = search.get('roomId')
     if (roomId === null || roomId === '') throw new ChatroomInputError('缺少共享会话编号。')
-    await this.runtime.selectRoom(roomId)
+    await this.runtime.selectRoom(roomId, identity)
     response.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
@@ -199,6 +245,25 @@ export class ChatroomHttpController {
       'X-Accel-Buffering': 'no',
     })
     const unsubscribe = this.runtime.subscribe(roomId, identity, response)
+    const heartbeat = setInterval(() => {
+      if (!response.destroyed && !response.writableEnded) response.write(': heartbeat\n\n')
+    }, this.config.sseHeartbeatMs)
+    request.once('close', () => {
+      clearInterval(heartbeat)
+      unsubscribe()
+    })
+  }
+
+  private handleNotifications(request: IncomingMessage, response: ServerResponse): void {
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    })
+    const unsubscribe = this.runtime.subscribeNotifications(identity, response)
     const heartbeat = setInterval(() => {
       if (!response.destroyed && !response.writableEnded) response.write(': heartbeat\n\n')
     }, this.config.sseHeartbeatMs)
@@ -356,6 +421,16 @@ function replyRequest(value: unknown): ChatroomPromptRequest['reply'] {
   if ([...displayName].length > 80 || [...text].length > 240) throw new ChatroomInputError('回复引用过长。')
   if (/\p{Cc}/u.test(`${displayName}${text}`)) throw new ChatroomInputError('回复引用包含无效字符。')
   return { messageId, displayName, text }
+}
+
+function threadRootRequest(value: unknown): ChatroomThreadRoot {
+  const reply = replyRequest(value)
+  if (reply === undefined || value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ChatroomInputError('分支主题消息无效。')
+  }
+  const role = (value as Record<string, unknown>).role
+  if (role !== 'human' && role !== 'ai') throw new ChatroomInputError('分支主题角色无效。')
+  return { ...reply, role }
 }
 
 function isImageMediaType(value: unknown): value is Extract<ChatroomPromptContentPart, { type: 'image' }>['mediaType'] {

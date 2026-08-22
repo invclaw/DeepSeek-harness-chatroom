@@ -58,6 +58,7 @@ describe('native chatroom integration', () => {
       sessionId={'chatroom-v1-lobby' as never}
       useChatroom={selector => selector(room)}
       openRoom={vi.fn()}
+      openMembers={vi.fn()}
     />)
     expect(screen.getByText('Alice · 2 人在线')).toBeTruthy()
 
@@ -65,6 +66,7 @@ describe('native chatroom integration', () => {
       sessionId={'another-session' as never}
       useChatroom={selector => selector(room)}
       openRoom={vi.fn()}
+      openMembers={vi.fn()}
     />)
     expect(screen.queryByText('Alice · 2 人在线')).toBeNull()
   })
@@ -76,9 +78,41 @@ describe('native chatroom integration', () => {
       sessionId={'chatroom-v1-lobby' as never}
       useChatroom={selector => selector(room)}
       openRoom={openRoom}
+      openMembers={vi.fn()}
     />)
     fireEvent.click(screen.getByTitle('切换共享会话'))
     expect(openRoom).toHaveBeenCalledOnce()
+  })
+
+  it('renders member management, unread alerts, and branch replies as additive panels', () => {
+    const sendThreadMessage = vi.fn(async () => true)
+    const room = view({
+      membersOpen: true,
+      members: [{
+        participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale', joinedAt: 1, lastSeenAt: Date.now(), online: true,
+      }],
+      unreadCount: 3,
+      toasts: [{
+        id: 'notice', roomId: 'lobby', roomTitle: 'AI 聊天室', participantId: 'bob-id', displayName: 'Bob',
+        role: 'human', text: '新消息', createdAt: Date.now(),
+      }],
+      thread: {
+        id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
+        root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
+      },
+      threadMessages: [{
+        id: 'thread-message', threadId: 'thread', sequence: 0, role: 'human', participantId: 'bob-id',
+        displayName: 'Bob', avatarId: 'panda', text: '分支内容', createdAt: Date.now(),
+      }],
+    })
+    renderEntry(room, { sendThreadMessage })
+    expect(screen.getByTestId('chatroom-members')).toBeTruthy()
+    expect(screen.getByTestId('chatroom-thread-panel')).toBeTruthy()
+    expect(screen.getByText('分支内容')).toBeTruthy()
+    expect(screen.getByText('新消息')).toBeTruthy()
+    fireEvent.change(screen.getByPlaceholderText('回复分支；输入 @AI 让 AI 在本分支回答'), { target: { value: '@AI 总结' } })
+    fireEvent.click(screen.getByText('发送'))
+    expect(sendThreadMessage).toHaveBeenCalledWith('@AI 总结')
   })
 })
 
@@ -92,12 +126,21 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     room,
     identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' },
     online: 1,
+    members: [],
+    membersOpen: false,
     error: undefined,
     composerRoomId: undefined,
     pendingFiles: [],
     reply: undefined,
     composerBusy: false,
     composerError: undefined,
+    thread: undefined,
+    threadMessages: [],
+    threadBusy: false,
+    threadError: undefined,
+    unreadCount: 0,
+    toasts: [],
+    notificationsEnabled: false,
     ...patch,
   }
 }
@@ -117,6 +160,11 @@ function renderEntry(
     createRoom={vi.fn(async () => undefined)}
     resetIdentity={vi.fn(async () => undefined)}
     retry={vi.fn(async () => undefined)}
+    closeMembers={vi.fn()}
+    closeThread={vi.fn()}
+    sendThreadMessage={vi.fn(async () => true)}
+    enableSystemNotifications={vi.fn(async () => undefined)}
+    dismissToast={vi.fn()}
     {...overrides}
   />)
 }

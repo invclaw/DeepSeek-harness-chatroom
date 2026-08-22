@@ -1,7 +1,7 @@
 import { memo, type ComponentType, type ReactNode } from 'react'
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { chatroomAvatar, fallbackAvatarId, type ChatroomAvatarId } from '../avatars.js'
-import type { ChatroomFileReference, ChatroomIdentity, ChatroomReplyReference } from '../types.js'
+import type { ChatroomFileReference, ChatroomIdentity, ChatroomReplyReference, ChatroomThreadRoot } from '../types.js'
 import { participantMarker, projectFileText, projectReplyText } from '../message.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
 import type { ChatroomView } from './store.js'
@@ -14,6 +14,7 @@ interface ChatroomMessageNodeInjected<Kind extends 'user' | 'steering'> {
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
   nativeMessageView: ComponentType<ChatNodeViewProps<Kind>>
   setReply(roomId: string, reply: ChatroomReplyReference): void
+  openThread(roomId: string, root: ChatroomThreadRoot): Promise<void>
 }
 
 /** Props for the native user-message wrapper. */
@@ -96,9 +97,10 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
   const projection = projectChatroomMessage(props.node, room.identity)
   const native = <NativeView {...props} node={projection.node as ChatNode<'user'>} />
   const activeRoom = room.rooms.find(candidate => String(props.sessionId) === candidate.sessionId)!
-  return participantMessage(native, projection, () => {
-    props.setReply(activeRoom.id, replyTarget(props.node, projection))
-  })
+  const target = replyTarget(props.node, projection)
+  return participantMessage(native, projection,
+    () => { props.setReply(activeRoom.id, target) },
+    () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) })
 })
 
 /** Reuse Harness' native steering renderer and move only peer steering messages to the left. */
@@ -114,15 +116,17 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
   const projection = projectChatroomMessage(props.node, room.identity)
   const native = <NativeView {...props} node={projection.node as ChatNode<'steering'>} />
   const activeRoom = room.rooms.find(candidate => String(props.sessionId) === candidate.sessionId)!
-  return participantMessage(native, projection, () => {
-    props.setReply(activeRoom.id, replyTarget(props.node, projection))
-  })
+  const target = replyTarget(props.node, projection)
+  return participantMessage(native, projection,
+    () => { props.setReply(activeRoom.id, target) },
+    () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) })
 })
 
 function participantMessage(
   native: ReactNode,
   projection: ReturnType<typeof projectChatroomMessage>,
   onReply: () => void,
+  onThread: () => void,
 ): ReactNode {
   const avatar = chatroomAvatar(projection.avatarId, projection.displayName ?? '')
   return (
@@ -139,7 +143,10 @@ function participantMessage(
         )}
         <div className="dsh-chatroom-native-message">{native}</div>
         {projection.files.map(file => <FileCard file={file} key={file.id} />)}
-        <button className="dsh-chatroom-reply-button" type="button" onClick={onReply}>↩ 回复</button>
+        <div className="dsh-chatroom-message-actions">
+          <button className="dsh-chatroom-reply-button" type="button" onClick={onReply}>↩ 回复</button>
+          <button className="dsh-chatroom-reply-button" type="button" onClick={onThread}>⑂ 分支</button>
+        </div>
       </div>
     </div>
   )

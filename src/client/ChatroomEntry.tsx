@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { CHATROOM_AVATARS, chatroomAvatar, type ChatroomAvatarId } from '../avatars.js'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
+import { ChatroomPanels } from './ChatroomPanels.js'
 
 interface ChatroomEntryInjected {
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
@@ -12,6 +13,11 @@ interface ChatroomEntryInjected {
   createRoom(title: string): Promise<void>
   resetIdentity(): Promise<void>
   retry(): Promise<void>
+  closeMembers(): void
+  closeThread(): void
+  sendThreadMessage(text: string): Promise<boolean>
+  enableSystemNotifications(): Promise<void>
+  dismissToast(id: string): void
 }
 
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected
@@ -19,38 +25,46 @@ type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected
 /** Additive shared-session launcher, identity setup, and room directory. */
 export function ChatroomEntry(props: ChatroomEntryProps): JSX.Element | null {
   const room = props.useChatroom(snapshot => snapshot)
+  const panels = <ChatroomPanels room={room} {...props} />
 
   if (!room.open) {
     return (
-      <button className="dsh-chatroom-launcher" data-dsh-chatroom-entry type="button" onClick={props.openRoom}>
-        ◉ 共享会话
-      </button>
+      <>
+        <button className="dsh-chatroom-launcher" data-dsh-chatroom-entry type="button" onClick={props.openRoom}>
+          ◉ 共享会话
+          {room.unreadCount > 0 && <span className="dsh-chatroom-unread">{Math.min(room.unreadCount, 99)}</span>}
+        </button>
+        {panels}
+      </>
     )
   }
 
   return (
-    <div className="dsh-chatroom-dialog-layer" data-dsh-chatroom-entry data-testid="chatroom-dialog">
-      {room.phase === 'identity-required' && <IdentityStep room={room} join={props.join} close={props.closeRoom} />}
-      {room.phase === 'loading' && <StatusCard title="正在载入共享会话" detail="正在恢复此浏览器的身份与会话目录…" close={props.closeRoom} />}
-      {room.phase === 'ready' && room.identity !== undefined && (
-        <RoomStep
-          room={room}
-          selectRoom={props.selectRoom}
-          createRoom={props.createRoom}
-          resetIdentity={props.resetIdentity}
-          close={props.closeRoom}
-        />
-      )}
-      {room.phase === 'error' && (
-        <StatusCard
-          title="共享会话暂时不可用"
-          detail={room.error ?? '请稍后重试。'}
-          action="重试"
-          onAction={props.retry}
-          close={props.closeRoom}
-        />
-      )}
-    </div>
+    <>
+      <div className="dsh-chatroom-dialog-layer" data-dsh-chatroom-entry data-testid="chatroom-dialog">
+        {room.phase === 'identity-required' && <IdentityStep room={room} join={props.join} close={props.closeRoom} />}
+        {room.phase === 'loading' && <StatusCard title="正在载入共享会话" detail="正在恢复此浏览器的身份与会话目录…" close={props.closeRoom} />}
+        {room.phase === 'ready' && room.identity !== undefined && (
+          <RoomStep
+            room={room}
+            selectRoom={props.selectRoom}
+            createRoom={props.createRoom}
+            resetIdentity={props.resetIdentity}
+            close={props.closeRoom}
+          />
+        )}
+        {room.phase === 'error' && (
+          <StatusCard
+            title="共享会话暂时不可用"
+            detail={room.error ?? '请稍后重试。'}
+            action="重试"
+            onAction={props.retry}
+            close={props.closeRoom}
+          />
+        )}
+      </div>
+      {panels}
+    </>
   )
 }
 

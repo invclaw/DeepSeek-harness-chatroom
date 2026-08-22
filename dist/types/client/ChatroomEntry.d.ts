@@ -9,6 +9,11 @@ interface ChatroomEntryInjected {
     createRoom(title: string): Promise<void>;
     resetIdentity(): Promise<void>;
     retry(): Promise<void>;
+    closeMembers(): void;
+    closeThread(): void;
+    sendThreadMessage(text: string): Promise<boolean>;
+    enableSystemNotifications(): Promise<void>;
+    dismissToast(id: string): void;
 }
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected;
 /** Additive shared-session launcher, identity setup, and room directory. */

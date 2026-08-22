@@ -1,7 +1,7 @@
 import { type ComponentType, type ReactNode } from 'react';
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import { type ChatroomAvatarId } from '../avatars.js';
-import type { ChatroomFileReference, ChatroomIdentity, ChatroomReplyReference } from '../types.js';
+import type { ChatroomFileReference, ChatroomIdentity, ChatroomReplyReference, ChatroomThreadRoot } from '../types.js';
 import type { ChatroomView } from './store.js';
 type ParticipantNode = ChatNode<'user' | 'steering'>;
 export { identifyChatroomText } from '../message.js';
@@ -9,6 +9,7 @@ interface ChatroomMessageNodeInjected<Kind extends 'user' | 'steering'> {
     useChatroom<T>(selector: (snapshot: ChatroomView) => T): T;
     nativeMessageView: ComponentType<ChatNodeViewProps<Kind>>;
     setReply(roomId: string, reply: ChatroomReplyReference): void;
+    openThread(roomId: string, root: ChatroomThreadRoot): Promise<void>;
 }
 /** Props for the native user-message wrapper. */
 export type ChatroomUserMessageNodeViewProps = ChatNodeViewProps<'user'> & ChatroomMessageNodeInjected<'user'>;

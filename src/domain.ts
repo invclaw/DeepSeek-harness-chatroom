@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
-import type { ChatroomMessageRole } from './types.js'
+import type { ChatroomMessageRole, ChatroomThreadRoot } from './types.js'
 import type { ChatroomAvatarId } from './avatars.js'
 import { isChatroomAvatarId } from './avatars.js'
 
@@ -47,6 +47,36 @@ export interface RoomRecord {
   readonly createdBy: string
 }
 
+export interface MemberRecord {
+  readonly roomId: string
+  readonly participantId: string
+  readonly displayName: string
+  readonly avatarId: ChatroomAvatarId
+  readonly joinedAt: number
+  readonly lastSeenAt: number
+}
+
+export interface ThreadRecord {
+  readonly id: string
+  readonly roomId: string
+  readonly root: ChatroomThreadRoot
+  readonly sessionId: string
+  readonly createdAt: number
+  readonly createdBy: string
+}
+
+export interface ThreadMessageRecord {
+  readonly id: string
+  readonly threadId: string
+  readonly sequence: number
+  readonly role: ChatroomMessageRole
+  readonly participantId: string
+  readonly displayName: string
+  readonly avatarId?: ChatroomAvatarId
+  readonly text: string
+  readonly createdAt: number
+}
+
 const identitySchema = z.object({
   participantId: z.uuid(),
   displayName: z.string().min(1),
@@ -91,6 +121,46 @@ const roomSchema = z.object({
   createdBy: z.string().min(1),
 }) as z.ZodType<RoomRecord>
 
+const memberSchema = z.object({
+  roomId: z.string().min(1),
+  participantId: z.string().min(1),
+  displayName: z.string().min(1),
+  avatarId: z.string().refine(isChatroomAvatarId),
+  joinedAt: nonNegativeSafeInteger,
+  lastSeenAt: nonNegativeSafeInteger,
+}).refine(record => record.lastSeenAt >= record.joinedAt, {
+  path: ['lastSeenAt'],
+  message: 'lastSeenAt must not precede joinedAt',
+}) as z.ZodType<MemberRecord>
+
+const threadRootSchema = z.object({
+  messageId: z.string().min(1),
+  displayName: z.string().min(1),
+  text: z.string().min(1),
+  role: z.union([z.literal('human'), z.literal('ai')]),
+})
+
+const threadSchema = z.object({
+  id: z.uuid(),
+  roomId: z.string().min(1),
+  root: threadRootSchema,
+  sessionId: z.string().min(1),
+  createdAt: nonNegativeSafeInteger,
+  createdBy: z.string().min(1),
+}) as z.ZodType<ThreadRecord>
+
+const threadMessageSchema = z.object({
+  id: z.uuid(),
+  threadId: z.uuid(),
+  sequence: nonNegativeSafeInteger,
+  role: z.union([z.literal('human'), z.literal('ai')]),
+  participantId: z.string().min(1),
+  displayName: z.string().min(1),
+  avatarId: z.string().refine(isChatroomAvatarId).optional(),
+  text: z.string().min(1),
+  createdAt: nonNegativeSafeInteger,
+}) as z.ZodType<ThreadMessageRecord>
+
 /** Durable identities, rooms, and the version-zero message table retained for on-disk compatibility. */
 export const chatroomDomainSpec = defineDomain({
   name: 'chatroom',
@@ -100,5 +170,8 @@ export const chatroomDomainSpec = defineDomain({
     messages: domainTable<string, MessageRecord>(messageSchema),
     rooms: domainTable<string, RoomRecord>(roomSchema),
     files: domainTable<string, FileRecord>(fileSchema),
+    members: domainTable<string, MemberRecord>(memberSchema),
+    threads: domainTable<string, ThreadRecord>(threadSchema),
+    thread_messages: domainTable<string, ThreadMessageRecord>(threadMessageSchema),
   },
 })

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import sharp from 'sharp'
 import type { Config } from '../src/config.js'
@@ -102,6 +103,60 @@ describe('ChatroomRuntime', () => {
     expect(metadata.height).toBe(5)
     await runtime.stop()
   })
+
+  it('keeps durable members and routes AI replies through an independent branch Session', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const bob = { participantId: 'bob-id', displayName: 'Bob', avatarId: 'panda' as const }
+    await runtime.selectRoom('lobby', alice)
+    await runtime.selectRoom('lobby', bob)
+    const writes: string[] = []
+    const response = {
+      destroyed: false,
+      writableEnded: false,
+      write: vi.fn((value: string) => { writes.push(value); return true }),
+      end: vi.fn(),
+    }
+    const unsubscribe = runtime.subscribe('lobby', alice, response as never)
+    const snapshot = JSON.parse(writes[0]!.slice('data: '.length)) as { members: Array<{ displayName: string }> }
+    expect(snapshot.members.map(member => member.displayName)).toEqual(['Alice', 'Bob'])
+
+    const opened = await runtime.openThread('lobby', alice, {
+      messageId: 'user:1', displayName: 'Bob', text: '这个方案怎么做？', role: 'human',
+    })
+    expect(opened.messages).toEqual([])
+    expect(harness.agents[1]?.session.append).toHaveBeenCalledOnce()
+
+    await runtime.submitThread(opened.thread.id, bob, '先讨论，不叫 AI')
+    expect(harness.agents[1]?.session.append).toHaveBeenCalledTimes(2)
+    expect(harness.agents[1]?.followup).not.toHaveBeenCalled()
+    await runtime.submitThread(opened.thread.id, alice, '@AI 给出结论')
+    expect(harness.agents[1]?.followup).toHaveBeenCalledOnce()
+
+    runtime.handleSessionEvent(
+      { id: opened.thread.sessionId } as unknown as Session,
+      {
+        type: 'assistant/message', seq: 8, time: 1_000,
+        data: {
+          turn: 1,
+          step: 1,
+          message: { role: 'assistant', content: [{ type: 'text', text: '分支结论' }] },
+        },
+      } as SessionEvent,
+    )
+    await vi.waitFor(async () => {
+      const reopened = await runtime.openThread('lobby', alice, opened.thread.root)
+      expect(reopened.messages.map(message => [message.role, message.text])).toEqual([
+        ['human', '先讨论，不叫 AI'],
+        ['human', '@AI 给出结论'],
+        ['ai', '分支结论'],
+      ])
+    })
+    await runtime.stop()
+    expect(() => { unsubscribe() }).not.toThrow()
+  })
 })
 
 function fakeHarness(): {
@@ -131,6 +186,7 @@ function fakeHarness(): {
       ...(input.name === undefined ? {} : { name: input.name }),
     })))
   const ctx = {
+    logger: vi.fn(() => ({ warn: vi.fn(), info: vi.fn() })),
     storageDomain: {
       open: vi.fn(async () => ({
         table: (name: string) => {
@@ -150,7 +206,7 @@ function fakeHarness(): {
         const agent = {
           id: sessionId,
           options: { provider: 'deepseek', model: 'chat' },
-          session: { append: vi.fn() },
+          session: { events: [], append: vi.fn() },
           followup: vi.fn(),
           steer: vi.fn(),
         } as unknown as (typeof agents)[number]
@@ -159,6 +215,10 @@ function fakeHarness(): {
       }),
     },
     sessionPersistence: { list: vi.fn(async () => []) },
+    sessionTitle: {
+      get: vi.fn(() => undefined),
+      rename: vi.fn((_session: unknown, title: string) => ({ title, messageSeqs: [], source: { kind: 'user' } })),
+    },
     agentDefaultModel: { currentSelection: vi.fn(() => ({ provider: 'deepseek', model: 'chat' })) },
     agentPresets: { mount: vi.fn(async () => undefined) },
     workspaceRegistry: {

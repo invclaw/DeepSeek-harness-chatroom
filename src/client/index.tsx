@@ -73,6 +73,11 @@ export function apply(ctx: ClientContext): void {
       createRoom: store.createRoom,
       resetIdentity: store.resetIdentity,
       retry: store.retry,
+      closeMembers: store.closeMembers,
+      closeThread: store.closeThread,
+      sendThreadMessage: store.sendThreadMessage,
+      enableSystemNotifications: store.enableSystemNotifications,
+      dismissToast: store.dismissToast,
     }),
   }, ChatroomEntry))
 
@@ -83,6 +88,7 @@ export function apply(ctx: ClientContext): void {
     inject: () => ({
       hooks: { chatroom: store },
       openRoom: store.openRoom,
+      openMembers: store.openMembers,
     }),
   }, RoomIdentityAction))
 
@@ -116,7 +122,7 @@ export function apply(ctx: ClientContext): void {
     name: 'conversation.chat.assistant-actions',
     id: 'chatroom-reply',
     order: 5,
-    inject: () => ({ hooks: { chatroom: store }, setReply: store.setReply }),
+    inject: () => ({ hooks: { chatroom: store }, setReply: store.setReply, openThread: store.openThread }),
   }, ChatroomAssistantReplyAction))
 
   ctx.slots.inject('conversation.chat.node', () => {
@@ -129,7 +135,7 @@ export function apply(ctx: ClientContext): void {
       key: 'user',
       priority: -10,
       locale: 'conversation',
-      inject: () => ({ hooks: { chatroom: store }, nativeMessageView, setReply: store.setReply }),
+      inject: () => ({ hooks: { chatroom: store }, nativeMessageView, setReply: store.setReply, openThread: store.openThread }),
     }, ChatroomUserMessageNodeView)
   })
 
@@ -143,7 +149,7 @@ export function apply(ctx: ClientContext): void {
       key: 'steering',
       priority: -10,
       locale: 'conversation',
-      inject: () => ({ hooks: { chatroom: store }, nativeMessageView, setReply: store.setReply }),
+      inject: () => ({ hooks: { chatroom: store }, nativeMessageView, setReply: store.setReply, openThread: store.openThread }),
     }, ChatroomSteeringMessageNodeView)
   })
 }

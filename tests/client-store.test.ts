@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChatroomClientStore } from '../src/client/store.js'
-import type { ChatroomServerEvent } from '../src/types.js'
+import type { ChatroomNotificationEvent, ChatroomServerEvent } from '../src/types.js'
 
 class FakeEventSource {
   static instances: FakeEventSource[] = []
@@ -17,7 +17,7 @@ class FakeEventSource {
     this.closed = true
   }
 
-  emit(event: ChatroomServerEvent): void {
+  emit(event: ChatroomServerEvent | ChatroomNotificationEvent): void {
     this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent<string>)
   }
 }
@@ -49,7 +49,7 @@ describe('ChatroomClientStore', () => {
     await store.selectRoom('lobby')
     expect(openSession).toHaveBeenCalledWith('chatroom-v1-lobby')
     expect(store.getSnapshot()).toMatchObject({ open: false, room })
-    expect(FakeEventSource.instances[0]?.url).toBe('/plugins/deepseek-harness-chatroom/api/events?roomId=lobby')
+    expect(FakeEventSource.instances[1]?.url).toBe('/plugins/deepseek-harness-chatroom/api/events?roomId=lobby')
   })
 
   it('waits for the Host list when a newly activated Session is still arriving', async () => {
@@ -102,7 +102,7 @@ describe('ChatroomClientStore', () => {
     const store = new ChatroomClientStore()
     await store.start()
     store.activateSession(room.sessionId)
-    FakeEventSource.instances[0]?.emit({ type: 'snapshot', room, identity, online: 2 })
+    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room, identity, online: 2, members: [] })
 
     await store.resetIdentity()
     expect(store.getSnapshot()).toMatchObject({ open: true, phase: 'identity-required', identity, room })
@@ -134,12 +134,12 @@ describe('ChatroomClientStore', () => {
     await store.start()
 
     store.activateSession(room.sessionId)
-    FakeEventSource.instances[0]?.emit({ type: 'snapshot', room, identity, online: 2 })
+    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room, identity, online: 2, members: [] })
     expect(store.getSnapshot()).toMatchObject({ connection: 'online', online: 2 })
 
     store.activateSession('ordinary-session')
     expect(store.getSnapshot()).toMatchObject({ connection: 'offline', room: undefined, online: 0 })
-    expect(FakeEventSource.instances[0]?.closed).toBe(true)
+    expect(FakeEventSource.instances[1]?.closed).toBe(true)
   })
 
   it('sends selected files without placeholder composer text', async () => {
@@ -165,6 +165,53 @@ describe('ChatroomClientStore', () => {
       type: 'file', name: 'note.txt', mediaType: 'text/plain', data: 'aGVsbG8=',
     }])
     expect(store.getSnapshot()).toMatchObject({ pendingFiles: [], composerBusy: false, composerError: undefined })
+  })
+
+  it('shows member presence, unread alerts, and a live right-side branch', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const thread = {
+      id: 'thread-id', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread-id', createdAt: 1,
+      root: { messageId: 'user:1', displayName: 'Bob', text: '主题', role: 'human' as const },
+    }
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ thread, messages: [] }))
+      .mockResolvedValueOnce(jsonResponse({ accepted: true, aiTriggered: true }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    store.activateSession(room.sessionId)
+    FakeEventSource.instances[1]?.emit({
+      type: 'snapshot', room, identity, online: 2,
+      members: [{ ...identity, joinedAt: 1, lastSeenAt: 2, online: true }],
+    })
+    expect(store.getSnapshot()).toMatchObject({ online: 2, members: [{ displayName: 'Alice', online: true }] })
+
+    await store.openThread('lobby', thread.root)
+    FakeEventSource.instances[1]?.emit({
+      type: 'thread-message',
+      message: {
+        id: 'branch-1', threadId: thread.id, sequence: 0, role: 'human', participantId: 'bob-id',
+        displayName: 'Bob', avatarId: 'panda', text: '分支消息', createdAt: 3,
+      },
+    })
+    expect(store.getSnapshot().threadMessages).toMatchObject([{ text: '分支消息' }])
+    await store.sendThreadMessage('@AI 总结')
+    expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+      threadId: 'thread-id', text: '@AI 总结',
+    })
+
+    FakeEventSource.instances[0]?.emit({
+      type: 'notification',
+      notification: {
+        id: 'notice-1', roomId: 'other', roomTitle: '其他群', participantId: 'bob-id', displayName: 'Bob',
+        role: 'human', text: '有新消息', createdAt: 4,
+      },
+    })
+    expect(store.getSnapshot()).toMatchObject({ unreadCount: 1, toasts: [{ text: '有新消息' }] })
+    store.stop()
   })
 })
 

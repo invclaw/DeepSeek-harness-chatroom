@@ -69,18 +69,220 @@ window.__ModuleLoader__.load({
 			return CHATROOM_AVATARS.find((avatar) => avatar.id === id);
 		}
 		//#endregion
+		//#region src/client/ChatroomPanels.tsx
+		/** Persistent member management, branch conversation, and in-page alerts. */
+		function ChatroomPanels(props) {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ToastStack, {
+					toasts: props.room.toasts,
+					dismiss: props.dismissToast
+				}),
+				props.room.membersOpen && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(MemberPanel, { ...props }),
+				props.room.thread !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ThreadPanel, { ...props })
+			] });
+		}
+		function ToastStack({ toasts, dismiss }) {
+			if (toasts.length === 0) return null;
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: "dsh-chatroom-toast-stack",
+				role: "status",
+				"aria-live": "polite",
+				children: toasts.map((toast) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+					className: "dsh-chatroom-toast",
+					type: "button",
+					onClick: () => {
+						dismiss(toast.id);
+					},
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("strong", { children: [
+						toast.displayName,
+						" ",
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("small", { children: [
+							"· ",
+							toast.roomTitle,
+							toast.threadId === void 0 ? "" : " · 分支"
+						] })
+					] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: toast.text })]
+				}, toast.id))
+			});
+		}
+		function MemberPanel(props) {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: "dsh-chatroom-dialog-layer dsh-chatroom-member-layer",
+				"data-testid": "chatroom-members",
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
+					className: "dsh-chatroom-card dsh-chatroom-member-card",
+					"aria-label": "群管理",
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							className: "dsh-chatroom-close",
+							"aria-label": "关闭群管理",
+							type: "button",
+							onClick: props.closeMembers,
+							children: "×"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", { children: "群管理" }),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("p", { children: [
+							props.room.room?.title,
+							" · ",
+							props.room.members.length,
+							" 位成员 · ",
+							props.room.online,
+							" 人在线"
+						] }),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							className: "dsh-chatroom-member-list",
+							children: props.room.members.map((member) => {
+								const avatar = chatroomAvatar(member.avatarId, member.participantId);
+								return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									className: "dsh-chatroom-member",
+									children: [
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											className: "dsh-chatroom-member-avatar",
+											"data-avatar": avatar.id,
+											children: avatar.emoji
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: member.displayName }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("small", { children: member.online ? "在线" : `最近活跃 ${formatRelative(member.lastSeenAt)}` })] }),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("i", { "data-online": member.online })
+									]
+								}, member.participantId);
+							})
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							className: "dsh-chatroom-notification-button",
+							type: "button",
+							disabled: props.room.notificationsEnabled,
+							onClick: () => {
+								props.enableSystemNotifications();
+							},
+							children: props.room.notificationsEnabled ? "✓ 系统消息提醒已开启" : "开启系统消息提醒"
+						})
+					]
+				})
+			});
+		}
+		function ThreadPanel(props) {
+			const [text, setText] = (0, react.useState)("");
+			const endRef = (0, react.useRef)(null);
+			const thread = props.room.thread;
+			(0, react.useEffect)(() => {
+				if (typeof endRef.current?.scrollIntoView === "function") endRef.current.scrollIntoView({ block: "end" });
+			}, [props.room.threadMessages.length]);
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("aside", {
+				className: "dsh-chatroom-thread-panel",
+				"data-testid": "chatroom-thread-panel",
+				"aria-label": "分支回复",
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("header", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: "分支回复" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("small", { children: props.room.room?.title })] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						"aria-label": "关闭分支",
+						type: "button",
+						onClick: props.closeThread,
+						children: "×"
+					})] }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "dsh-chatroom-thread-root",
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: thread.root.displayName }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: thread.root.text })]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "dsh-chatroom-thread-messages",
+						children: [
+							props.room.threadMessages.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("p", {
+								className: "dsh-chatroom-thread-empty",
+								children: [
+									"从这里开始分支讨论。输入 ",
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("code", { children: "@AI" }),
+									" 只会在本分支触发 AI。"
+								]
+							}),
+							props.room.threadMessages.map((message) => {
+								const own = message.participantId === props.room.identity?.participantId;
+								const avatarId = message.avatarId ?? fallbackAvatarId(message.participantId);
+								const avatar = message.role === "ai" ? {
+									id: "ai",
+									emoji: "✦"
+								} : chatroomAvatar(avatarId, message.participantId);
+								return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("article", {
+									className: "dsh-chatroom-thread-message",
+									"data-own": own,
+									"data-role": message.role,
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										className: "dsh-chatroom-member-avatar",
+										"data-avatar": avatar.id,
+										children: avatar.emoji
+									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("strong", { children: [message.displayName, /* @__PURE__ */ (0, react_jsx_runtime.jsx)("time", { children: formatTime(message.createdAt) })] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: message.text })] })]
+								}, message.id);
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { ref: endRef })
+						]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("form", {
+						className: "dsh-chatroom-thread-composer",
+						onSubmit: (event) => {
+							event.preventDefault();
+							const submitted = text.trim();
+							if (submitted === "") return;
+							props.sendThreadMessage(submitted).then((sent) => {
+								if (sent) setText("");
+							});
+						},
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("textarea", {
+							rows: 3,
+							placeholder: "回复分支；输入 @AI 让 AI 在本分支回答",
+							value: text,
+							onChange: (event) => {
+								setText(event.target.value);
+							},
+							onKeyDown: (event) => {
+								if (event.key !== "Enter" || event.shiftKey) return;
+								event.preventDefault();
+								event.currentTarget.form?.requestSubmit();
+							}
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "submit",
+							disabled: props.room.threadBusy || text.trim() === "",
+							children: "发送"
+						})]
+					}),
+					props.room.threadError !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						className: "dsh-chatroom-error",
+						role: "alert",
+						children: props.room.threadError
+					})
+				]
+			});
+		}
+		function formatRelative(time) {
+			const minutes = Math.max(0, Math.floor((Date.now() - time) / 6e4));
+			if (minutes < 1) return "刚刚";
+			if (minutes < 60) return `${minutes} 分钟前`;
+			if (minutes < 1440) return `${Math.floor(minutes / 60)} 小时前`;
+			return `${Math.floor(minutes / 1440)} 天前`;
+		}
+		function formatTime(time) {
+			return new Date(time).toLocaleTimeString([], {
+				hour: "2-digit",
+				minute: "2-digit"
+			});
+		}
+		//#endregion
 		//#region src/client/ChatroomEntry.tsx
 		/** Additive shared-session launcher, identity setup, and room directory. */
 		function ChatroomEntry(props) {
 			const room = props.useChatroom((snapshot) => snapshot);
-			if (!room.open) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+			const panels = /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomPanels, {
+				room,
+				...props
+			});
+			if (!room.open) return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
 				className: "dsh-chatroom-launcher",
 				"data-dsh-chatroom-entry": true,
 				type: "button",
 				onClick: props.openRoom,
-				children: "◉ 共享会话"
-			});
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				children: ["◉ 共享会话", room.unreadCount > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					className: "dsh-chatroom-unread",
+					children: Math.min(room.unreadCount, 99)
+				})]
+			}), panels] });
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: "dsh-chatroom-dialog-layer",
 				"data-dsh-chatroom-entry": true,
 				"data-testid": "chatroom-dialog",
@@ -110,7 +312,7 @@ window.__ModuleLoader__.load({
 						close: props.closeRoom
 					})
 				]
-			});
+			}), panels] });
 		}
 		function IdentityStep({ room, join, close }) {
 			const [name, setName] = (0, react.useState)(room.identity?.displayName ?? "");
@@ -291,15 +493,30 @@ window.__ModuleLoader__.load({
 				displayName: room.aiDisplayName,
 				text: [...text || "AI 回复"].slice(0, 120).join("")
 			};
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-				className: "dsh-chatroom-assistant-reply",
-				type: "button",
-				title: `回复 ${room.aiDisplayName}`,
-				"aria-label": `回复 ${room.aiDisplayName}`,
-				onClick: () => {
-					props.setReply(room.id, reply);
-				},
-				children: "↩"
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				className: "dsh-chatroom-assistant-actions",
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					className: "dsh-chatroom-assistant-reply",
+					type: "button",
+					title: `回复 ${room.aiDisplayName}`,
+					"aria-label": `回复 ${room.aiDisplayName}`,
+					onClick: () => {
+						props.setReply(room.id, reply);
+					},
+					children: "↩"
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					className: "dsh-chatroom-assistant-reply",
+					type: "button",
+					title: "发起分支",
+					"aria-label": "发起分支",
+					onClick: () => {
+						props.openThread(room.id, {
+							...reply,
+							role: "ai"
+						});
+					},
+					children: "⑂"
+				})]
 			});
 		}
 		//#endregion
@@ -555,8 +772,14 @@ window.__ModuleLoader__.load({
 				node: projection.node
 			});
 			const activeRoom = room.rooms.find((candidate) => String(props.sessionId) === candidate.sessionId);
+			const target = replyTarget(props.node, projection);
 			return participantMessage(native, projection, () => {
-				props.setReply(activeRoom.id, replyTarget(props.node, projection));
+				props.setReply(activeRoom.id, target);
+			}, () => {
+				props.openThread(activeRoom.id, {
+					...target,
+					role: "human"
+				});
 			});
 		});
 		/** Reuse Harness' native steering renderer and move only peer steering messages to the left. */
@@ -570,11 +793,17 @@ window.__ModuleLoader__.load({
 				node: projection.node
 			});
 			const activeRoom = room.rooms.find((candidate) => String(props.sessionId) === candidate.sessionId);
+			const target = replyTarget(props.node, projection);
 			return participantMessage(native, projection, () => {
-				props.setReply(activeRoom.id, replyTarget(props.node, projection));
+				props.setReply(activeRoom.id, target);
+			}, () => {
+				props.openThread(activeRoom.id, {
+					...target,
+					role: "human"
+				});
 			});
 		});
-		function participantMessage(native, projection, onReply) {
+		function participantMessage(native, projection, onReply, onThread) {
 			const avatar = chatroomAvatar(projection.avatarId, projection.displayName ?? "");
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: "dsh-chatroom-participant-message",
@@ -601,11 +830,19 @@ window.__ModuleLoader__.load({
 							children: native
 						}),
 						projection.files.map((file) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FileCard, { file }, file.id)),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							className: "dsh-chatroom-reply-button",
-							type: "button",
-							onClick: onReply,
-							children: "↩ 回复"
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							className: "dsh-chatroom-message-actions",
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								className: "dsh-chatroom-reply-button",
+								type: "button",
+								onClick: onReply,
+								children: "↩ 回复"
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								className: "dsh-chatroom-reply-button",
+								type: "button",
+								onClick: onThread,
+								children: "⑂ 分支"
+							})]
 						})
 					]
 				})]
@@ -660,19 +897,30 @@ window.__ModuleLoader__.load({
 				room: void 0,
 				identity: void 0,
 				online: 0,
+				members: [],
+				membersOpen: false,
 				error: void 0,
 				composerRoomId: void 0,
 				pendingFiles: [],
 				reply: void 0,
 				composerBusy: false,
-				composerError: void 0
+				composerError: void 0,
+				thread: void 0,
+				threadMessages: [],
+				threadBusy: false,
+				threadError: void 0,
+				unreadCount: 0,
+				toasts: [],
+				notificationsEnabled: notificationPermission() === "granted"
 			};
 			listeners = /* @__PURE__ */ new Set();
 			eventSource;
+			notificationSource;
 			pendingOpenRoomId;
 			stopped = false;
 			compositionRevision = 0;
 			pendingFileSequence = 0;
+			originalTitle;
 			constructor(openSession = () => false) {
 				this.openSession = openSession;
 			}
@@ -692,12 +940,15 @@ window.__ModuleLoader__.load({
 			/** Resolve the persistent browser identity and shared room directory. */
 			async start() {
 				this.stopped = false;
+				if (typeof document !== "undefined") this.originalTitle = document.title;
 				await this.loadSession();
 			}
 			/** Stop network activity and notification delivery. */
 			stop() {
 				this.stopped = true;
 				this.closeEvents();
+				this.closeNotifications();
+				this.updateDocumentTitle(0);
 				this.listeners.clear();
 			}
 			/** Show identity setup or the shared room directory. */
@@ -706,6 +957,19 @@ window.__ModuleLoader__.load({
 					open: true,
 					error: void 0
 				});
+			};
+			/** Open group management for the active room. */
+			openMembers = () => {
+				if (this.snapshot.room !== void 0) this.set({
+					membersOpen: true,
+					thread: void 0,
+					threadMessages: [],
+					threadError: void 0
+				});
+			};
+			/** Close group management without changing the active room. */
+			closeMembers = () => {
+				this.set({ membersOpen: false });
 			};
 			/** Close only the additive room dialog. */
 			closeRoom = () => {
@@ -735,7 +999,11 @@ window.__ModuleLoader__.load({
 					this.set({
 						room: void 0,
 						connection: "offline",
-						online: 0
+						online: 0,
+						members: [],
+						membersOpen: false,
+						thread: void 0,
+						threadMessages: []
 					});
 					return;
 				}
@@ -743,8 +1011,13 @@ window.__ModuleLoader__.load({
 				this.set({
 					room,
 					connection: "connecting",
-					online: 0
+					online: 0,
+					members: [],
+					membersOpen: false,
+					thread: void 0,
+					threadMessages: []
 				});
+				this.clearUnread();
 				this.openEvents(room);
 			};
 			/** Create the persistent browser identity, then show the room directory. */
@@ -776,6 +1049,7 @@ window.__ModuleLoader__.load({
 						online: resolvedRoom === void 0 ? 0 : activeOnline,
 						error: void 0
 					});
+					this.openNotifications();
 				} catch (error) {
 					this.set({
 						phase: "identity-required",
@@ -912,6 +1186,85 @@ window.__ModuleLoader__.load({
 					});
 				}
 			};
+			/** Create or reopen a branch rooted at one main-room message. */
+			openThread = async (roomId, root) => {
+				this.set({
+					membersOpen: false,
+					threadBusy: true,
+					threadError: void 0
+				});
+				try {
+					const response = await requestJson(`${CHATROOM_API_PREFIX}/threads/open`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							roomId,
+							root
+						})
+					});
+					this.set({
+						thread: response.thread,
+						threadMessages: response.messages,
+						threadBusy: false,
+						threadError: void 0
+					});
+					this.clearUnread();
+				} catch (error) {
+					this.set({
+						threadBusy: false,
+						threadError: errorMessage(error)
+					});
+				}
+			};
+			/** Close the right-side branch panel. */
+			closeThread = () => {
+				this.set({
+					thread: void 0,
+					threadMessages: [],
+					threadBusy: false,
+					threadError: void 0
+				});
+			};
+			/** Send one human-first branch message. */
+			sendThreadMessage = async (text) => {
+				const thread = this.snapshot.thread;
+				if (thread === void 0 || this.snapshot.threadBusy || text.trim() === "") return false;
+				this.set({
+					threadBusy: true,
+					threadError: void 0
+				});
+				try {
+					await requestJson(`${CHATROOM_API_PREFIX}/threads/prompt`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							threadId: thread.id,
+							text
+						})
+					});
+					this.set({
+						threadBusy: false,
+						threadError: void 0
+					});
+					return true;
+				} catch (error) {
+					this.set({
+						threadBusy: false,
+						threadError: errorMessage(error)
+					});
+					return false;
+				}
+			};
+			/** Request browser notification permission from an explicit user gesture. */
+			enableSystemNotifications = async () => {
+				if (typeof Notification === "undefined") return;
+				const permission = await Notification.requestPermission();
+				this.set({ notificationsEnabled: permission === "granted" });
+			};
+			/** Remove one in-page message alert. */
+			dismissToast = (id) => {
+				this.set({ toasts: this.snapshot.toasts.filter((toast) => toast.id !== id) });
+			};
 			/** Open identity editing without revoking the current identity. */
 			resetIdentity = async () => {
 				this.set({
@@ -975,6 +1328,7 @@ window.__ModuleLoader__.load({
 						identity: session.identity,
 						error: void 0
 					});
+					this.openNotifications();
 				} catch (error) {
 					if (!this.stopped) this.set({
 						phase: "error",
@@ -1007,9 +1361,27 @@ window.__ModuleLoader__.load({
 					if (this.eventSource === source) this.set({ connection: "connecting" });
 				};
 			}
+			openNotifications() {
+				if (this.stopped || this.snapshot.identity === void 0 || this.notificationSource !== void 0) return;
+				const source = new EventSource(`${CHATROOM_API_PREFIX}/notifications`);
+				this.notificationSource = source;
+				source.onmessage = (event) => {
+					if (this.notificationSource !== source) return;
+					try {
+						const parsed = JSON.parse(event.data);
+						if (parsed.type === "notification") this.receiveNotification(parsed.notification);
+					} catch {
+						this.set({ error: "收到无法识别的消息提醒。" });
+					}
+				};
+			}
 			closeEvents() {
 				this.eventSource?.close();
 				this.eventSource = void 0;
+			}
+			closeNotifications() {
+				this.notificationSource?.close();
+				this.notificationSource = void 0;
 			}
 			receive(event) {
 				switch (event.type) {
@@ -1020,11 +1392,49 @@ window.__ModuleLoader__.load({
 							room: event.room,
 							identity: event.identity,
 							online: event.online,
+							members: event.members,
 							error: void 0
 						});
 						return;
-					case "presence": this.set({ online: event.online });
+					case "presence":
+						this.set({
+							online: event.online,
+							members: event.members
+						});
+						return;
+					case "thread-message":
+						if (this.snapshot.thread?.id !== event.message.threadId || this.snapshot.threadMessages.some((message) => message.id === event.message.id)) return;
+						this.set({ threadMessages: [...this.snapshot.threadMessages, event.message] });
 				}
+			}
+			receiveNotification(notification) {
+				if (notification.participantId === this.snapshot.identity?.participantId) return;
+				const toasts = [...this.snapshot.toasts.filter((item) => item.id !== notification.id), notification].slice(-4);
+				const isVisible = typeof document !== "undefined" && document.visibilityState === "visible";
+				const isCurrent = this.snapshot.room?.id === notification.roomId && (notification.threadId === void 0 || notification.threadId === this.snapshot.thread?.id);
+				const unreadCount = isVisible && isCurrent ? this.snapshot.unreadCount : this.snapshot.unreadCount + 1;
+				this.set({
+					toasts,
+					unreadCount
+				});
+				if (this.snapshot.notificationsEnabled && typeof Notification !== "undefined" && !isVisible) try {
+					new Notification(`${notification.displayName} · ${notification.roomTitle}`, { body: notification.text });
+				} catch (error) {
+					this.set({
+						notificationsEnabled: false,
+						error: `系统消息提醒失败：${errorMessage(error)}`
+					});
+				}
+				globalThis.setTimeout(() => {
+					this.dismissToast(notification.id);
+				}, 6e3);
+			}
+			clearUnread() {
+				if (this.snapshot.unreadCount !== 0) this.set({ unreadCount: 0 });
+			}
+			updateDocumentTitle(unreadCount) {
+				if (typeof document === "undefined" || this.originalTitle === void 0) return;
+				document.title = unreadCount === 0 ? this.originalTitle : `(${unreadCount}) ${this.originalTitle}`;
 			}
 			set(patch) {
 				if (this.stopped) return;
@@ -1032,9 +1442,13 @@ window.__ModuleLoader__.load({
 					...this.snapshot,
 					...patch
 				};
+				if (patch.unreadCount !== void 0) this.updateDocumentTitle(this.snapshot.unreadCount);
 				for (const listener of this.listeners) listener();
 			}
 		};
+		function notificationPermission() {
+			return typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+		}
 		/** Submit one native composer payload through human-first room admission. */
 		async function submitRoomPrompt(request, signal) {
 			return await requestJson(`${CHATROOM_API_PREFIX}/prompt`, {
@@ -1126,20 +1540,28 @@ window.__ModuleLoader__.load({
 			const identity = room.identity;
 			const selected = room.room?.id === current.id;
 			const presence = selected && room.connection === "online" ? `${room.online} 人在线` : "共享会话";
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
-				className: "dsh-chatroom-identity-action",
-				type: "button",
-				title: identity === void 0 ? "选择聊天室身份" : "切换共享会话",
-				onClick: props.openRoom,
-				children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						className: "dsh-chatroom-presence-dot",
-						"data-online": selected && room.connection === "online"
-					}),
-					identity?.displayName ?? "选择身份",
-					" · ",
-					presence
-				]
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				className: "dsh-chatroom-header-actions",
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+					className: "dsh-chatroom-identity-action",
+					type: "button",
+					title: identity === void 0 ? "选择聊天室身份" : "切换共享会话",
+					onClick: props.openRoom,
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: "dsh-chatroom-presence-dot",
+							"data-online": selected && room.connection === "online"
+						}),
+						identity?.displayName ?? "选择身份",
+						" · ",
+						presence
+					]
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					className: "dsh-chatroom-manage-action",
+					type: "button",
+					onClick: props.openMembers,
+					children: "群管理"
+				})]
 			});
 		}
 		//#endregion
@@ -1161,6 +1583,19 @@ window.__ModuleLoader__.load({
   font-weight: 600;
   box-shadow: 0 10px 30px rgb(0 0 0 / 10%);
   cursor: pointer;
+}
+
+.dsh-chatroom-unread {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  padding: 0 6px;
+  font-size: 11px;
 }
 
 .dsh-chatroom-dialog-layer {
@@ -1353,6 +1788,19 @@ window.__ModuleLoader__.load({
   cursor: pointer;
 }
 
+.dsh-chatroom-header-actions { display: inline-flex; align-items: center; gap: 4px; }
+.dsh-chatroom-manage-action {
+  border: 1px solid var(--border-primary, #e5e7eb);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.dsh-chatroom-manage-action:hover { color: var(--brand-primary, #4f7cff); border-color: var(--brand-primary, #4f7cff); }
+
 .dsh-chatroom-presence-dot {
   width: 7px;
   height: 7px;
@@ -1480,6 +1928,7 @@ window.__ModuleLoader__.load({
 }
 
 .dsh-chatroom-reply-button:hover { color: var(--brand-primary, #4f7cff); opacity: 1; }
+.dsh-chatroom-message-actions, .dsh-chatroom-assistant-actions { display: inline-flex; align-items: center; gap: 2px; }
 
 .dsh-chatroom-assistant-reply {
   display: inline-grid;
@@ -1497,6 +1946,116 @@ window.__ModuleLoader__.load({
 }
 
 .dsh-chatroom-assistant-reply:hover { background: var(--bg-secondary, #f3f4f6); color: var(--brand-primary, #4f7cff); }
+
+.dsh-chatroom-toast-stack {
+  pointer-events: auto;
+  position: fixed;
+  top: 76px;
+  right: 24px;
+  z-index: 75;
+  display: grid;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+}
+
+.dsh-chatroom-toast {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  border: 1px solid var(--border-primary, #e5e7eb);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-primary, #fff) 94%, transparent);
+  color: var(--text-primary, #111827);
+  padding: 13px 15px;
+  box-shadow: 0 14px 40px rgb(15 23 42 / 16%);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  backdrop-filter: blur(14px);
+}
+.dsh-chatroom-toast strong { font-size: 13px; }
+.dsh-chatroom-toast strong small { color: var(--text-secondary, #6b7280); font-weight: 400; }
+.dsh-chatroom-toast > span { overflow: hidden; color: var(--text-secondary, #6b7280); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+
+.dsh-chatroom-member-layer { z-index: 70; }
+.dsh-chatroom-member-card { width: min(460px, calc(100vw - 48px)); }
+.dsh-chatroom-member-list { display: grid; gap: 5px; max-height: min(440px, 55vh); overflow-y: auto; }
+.dsh-chatroom-member {
+  display: grid;
+  grid-template-columns: 42px 1fr auto;
+  align-items: center;
+  gap: 11px;
+  border-radius: 12px;
+  padding: 8px 9px;
+}
+.dsh-chatroom-member:hover { background: var(--bg-secondary, #f3f4f6); }
+.dsh-chatroom-member > span:nth-child(2) { display: grid; gap: 2px; min-width: 0; }
+.dsh-chatroom-member strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-chatroom-member small { color: var(--text-secondary, #6b7280); font-size: 12px; }
+.dsh-chatroom-member > i { width: 8px; height: 8px; border-radius: 50%; background: #c4c9d1; }
+.dsh-chatroom-member > i[data-online="true"] { background: #20b26b; box-shadow: 0 0 0 3px rgb(32 178 107 / 14%); }
+.dsh-chatroom-member-avatar {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #eaf2ff, #cbdcff);
+  font-size: 20px;
+}
+.dsh-chatroom-notification-button {
+  width: 100%;
+  margin-top: 14px;
+  border: 1px solid var(--border-primary, #e5e7eb);
+  border-radius: 10px;
+  background: var(--bg-secondary, #f3f4f6);
+  color: var(--text-primary, #111827);
+  padding: 10px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+.dsh-chatroom-notification-button:disabled { color: #20a466; cursor: default; }
+
+.dsh-chatroom-thread-panel {
+  pointer-events: auto;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 55;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto auto;
+  width: min(430px, 94vw);
+  border-left: 1px solid var(--border-primary, #e5e7eb);
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #111827);
+  box-shadow: -18px 0 48px rgb(15 23 42 / 12%);
+}
+.dsh-chatroom-thread-panel > header { display: flex; align-items: center; justify-content: space-between; min-height: 64px; border-bottom: 1px solid var(--border-primary, #e5e7eb); padding: 0 18px; }
+.dsh-chatroom-thread-panel > header div { display: grid; gap: 2px; }
+.dsh-chatroom-thread-panel > header strong { font-size: 16px; }
+.dsh-chatroom-thread-panel > header small { color: var(--text-secondary, #6b7280); font-size: 12px; }
+.dsh-chatroom-thread-panel > header button { border: 0; background: transparent; color: var(--text-secondary, #6b7280); font: inherit; font-size: 25px; cursor: pointer; }
+.dsh-chatroom-thread-root { display: grid; gap: 5px; margin: 14px 16px 4px; border-left: 3px solid var(--brand-primary, #4f7cff); border-radius: 0 10px 10px 0; background: color-mix(in srgb, var(--brand-primary, #4f7cff) 7%, transparent); padding: 10px 12px; }
+.dsh-chatroom-thread-root strong { font-size: 12px; }
+.dsh-chatroom-thread-root span { color: var(--text-secondary, #6b7280); font-size: 13px; line-height: 1.5; }
+.dsh-chatroom-thread-messages { overflow-y: auto; padding: 14px 16px 8px; }
+.dsh-chatroom-thread-empty { margin: 18px; color: var(--text-secondary, #6b7280); font-size: 13px; line-height: 1.6; text-align: center; }
+.dsh-chatroom-thread-message { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 15px; }
+.dsh-chatroom-thread-message[data-own="true"] { flex-direction: row-reverse; }
+.dsh-chatroom-thread-message > div { display: grid; gap: 4px; max-width: calc(100% - 50px); }
+.dsh-chatroom-thread-message[data-own="true"] > div { justify-items: end; }
+.dsh-chatroom-thread-message strong { display: flex; gap: 7px; color: var(--text-secondary, #6b7280); font-size: 12px; }
+.dsh-chatroom-thread-message time { font-weight: 400; opacity: .8; }
+.dsh-chatroom-thread-message p { margin: 0; border-radius: 5px 15px 15px; background: var(--bg-secondary, #f3f4f6); padding: 9px 12px; font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.dsh-chatroom-thread-message[data-own="true"] p { border-radius: 15px 5px 15px 15px; background: color-mix(in srgb, var(--brand-primary, #4f7cff) 15%, var(--bg-primary, #fff)); }
+.dsh-chatroom-thread-message[data-role="ai"] p { border: 1px solid color-mix(in srgb, var(--brand-primary, #4f7cff) 25%, transparent); background: color-mix(in srgb, var(--brand-primary, #4f7cff) 6%, var(--bg-primary, #fff)); }
+.dsh-chatroom-thread-composer { display: grid; grid-template-columns: 1fr auto; gap: 8px; border-top: 1px solid var(--border-primary, #e5e7eb); padding: 12px 14px; }
+.dsh-chatroom-thread-composer textarea { resize: none; border: 1px solid var(--border-primary, #d1d5db); border-radius: 12px; background: var(--bg-primary, #fff); color: var(--text-primary, #111827); padding: 10px 11px; font: inherit; outline: none; }
+.dsh-chatroom-thread-composer textarea:focus { border-color: var(--brand-primary, #4f7cff); }
+.dsh-chatroom-thread-composer button { align-self: end; border: 0; border-radius: 10px; background: var(--brand-primary, #4f7cff); color: #fff; padding: 10px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+.dsh-chatroom-thread-composer button:disabled { opacity: .45; cursor: not-allowed; }
+.dsh-chatroom-thread-panel > .dsh-chatroom-error { margin: 0; padding: 0 16px 12px; }
 
 .dsh-chatroom-file-card {
   display: flex;
@@ -1641,7 +2200,12 @@ window.__ModuleLoader__.load({
 					selectRoom: store.selectRoom,
 					createRoom: store.createRoom,
 					resetIdentity: store.resetIdentity,
-					retry: store.retry
+					retry: store.retry,
+					closeMembers: store.closeMembers,
+					closeThread: store.closeThread,
+					sendThreadMessage: store.sendThreadMessage,
+					enableSystemNotifications: store.enableSystemNotifications,
+					dismissToast: store.dismissToast
 				})
 			}, ChatroomEntry));
 			ctx.slots.inject("conversation.session.header.actions", () => ctx.slots.register({
@@ -1650,7 +2214,8 @@ window.__ModuleLoader__.load({
 				order: -5,
 				inject: () => ({
 					hooks: { chatroom: store },
-					openRoom: store.openRoom
+					openRoom: store.openRoom,
+					openMembers: store.openMembers
 				})
 			}, RoomIdentityAction));
 			ctx.slots.inject("conversation.input.left", () => ctx.slots.register({
@@ -1683,7 +2248,8 @@ window.__ModuleLoader__.load({
 				order: 5,
 				inject: () => ({
 					hooks: { chatroom: store },
-					setReply: store.setReply
+					setReply: store.setReply,
+					openThread: store.openThread
 				})
 			}, ChatroomAssistantReplyAction));
 			ctx.slots.inject("conversation.chat.node", () => {
@@ -1698,7 +2264,8 @@ window.__ModuleLoader__.load({
 					inject: () => ({
 						hooks: { chatroom: store },
 						nativeMessageView,
-						setReply: store.setReply
+						setReply: store.setReply,
+						openThread: store.openThread
 					})
 				}, ChatroomUserMessageNodeView);
 			});
@@ -1714,7 +2281,8 @@ window.__ModuleLoader__.load({
 					inject: () => ({
 						hooks: { chatroom: store },
 						nativeMessageView,
-						setReply: store.setReply
+						setReply: store.setReply,
+						openThread: store.openThread
 					})
 				}, ChatroomSteeringMessageNodeView);
 			});

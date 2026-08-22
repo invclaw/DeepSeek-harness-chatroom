@@ -16,10 +16,13 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Oversized images are resized before entering Harness's durable attachment store; stop/queue/steer behavior, slash commands, approvals, and question interactions stay native
 - Participant names added on the Host before Session admission, so every browser and the model see the same identity
 - Current identity and online count in the native Session header, with direct access to the shared-room directory
+- Durable room membership with a group-management panel, member avatars, online state, and recent activity
+- In-page message toasts, unread title badges, and opt-in browser system notifications across rooms
+- Persistent branch replies in a right-side panel; every branch owns a separate Harness Session, and `@AI` answers stay inside that branch
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.5.1 adds avatar identities, the native `@AI` candidate, reply quotes, and downloadable file cards to the multi-room, human-first foundation. Each browser keeps its own messages on the right, while peer and AI messages render on the left. Human messages show an avatar and the participant name above the bubble. Images are resized against `maxImageSidePixels` and Harness's decoded-pixel limit before attachment admission. Identity changes are applied only when submitted, so closing the picker preserves the current participant and room.
+Version 0.6.0 establishes the collaboration-platform foundation: durable membership, live member management, room-wide unread notifications, and persistent branch conversations. A branch opens beside the native Harness conversation and uses its own Agent Session, so ordinary branch messages remain human chat and `@AI` produces an answer only in that branch. The main room continues to use Harness's complete native conversation interface.
 
 ## Requirements
 
@@ -87,7 +90,7 @@ Override it in the Web profile's `cordis.patch.yml` when needed:
     sseHeartbeatMs: 15000
 ```
 
-`sessionId` remains the persistent Session for the pre-upgrade lobby. Rooms created in the UI receive independent Sessions and contexts. Room files and metadata live in the `files` table of the same `chatroom` storage domain, and downloads require a valid chatroom cookie. The added table keeps domain version zero, so existing identities and lobby data open without migration.
+`sessionId` remains the persistent Session for the pre-upgrade lobby. Rooms created in the UI receive independent Sessions and contexts. Every branch also receives an independent persistent Session. Room files, membership, branch metadata, and branch messages live in the same `chatroom` storage domain, and downloads require a valid chatroom cookie. The additive tables keep domain version zero, so existing identities and lobby data open without migration.
 
 The API route is registered immediately and reports `503` until identity storage and the Session are ready. Initialization runs in the background, and failures remain isolated from Harness Web startup.
 
@@ -107,7 +110,9 @@ A display name is presentation, not authentication. Every participant who can re
 6. Select **Reply** below a human message. The composer must show the quote, and both browsers must render the same quote after sending.
 7. Send an oversized image through the native image path; it must resize and synchronize. Send a file through **File**; the other browser must download the original bytes.
 8. Run `/new`, approval and question interactions, and stop/queue/steer flows through their native Harness paths.
-9. Reload and restart Harness. Identity, room directory, and every Session context must recover.
+9. Open **Group management** in the Session header. Both participants must appear with the correct avatar and online state. Enable system notifications from this explicit user action, hide the tab, and verify that a new peer message creates a system alert and unread title badge.
+10. Select **Branch** below a human or AI message. A right-side branch panel must open. Send ordinary branch text and confirm that the AI stays silent; send `@AI summarize` and confirm that the reply appears in the branch rather than the main room.
+11. Reload and restart Harness. Identity, room directory, membership, branches, and every Session context must recover.
 
 The health endpoint is `/plugins/deepseek-harness-chatroom/api/health`; direct Harness Web deployments may also use `/chatroom/api/health`. A ready room returns:
 

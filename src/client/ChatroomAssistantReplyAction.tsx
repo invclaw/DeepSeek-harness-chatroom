@@ -1,10 +1,11 @@
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ChatroomReplyReference } from '../types.js'
+import type { ChatroomReplyReference, ChatroomThreadRoot } from '../types.js'
 import type { ChatroomView } from './store.js'
 
 interface AssistantReplyInjected {
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
   setReply(roomId: string, reply: ChatroomReplyReference): void
+  openThread(roomId: string, root: ChatroomThreadRoot): Promise<void>
 }
 
 type AssistantReplyProps = PropsRuntime<'conversation.chat.assistant-actions'> & AssistantReplyInjected
@@ -24,14 +25,21 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
     text: [...(text || 'AI 回复')].slice(0, 120).join(''),
   }
   return (
-    <button
-      className="dsh-chatroom-assistant-reply"
-      type="button"
-      title={`回复 ${room.aiDisplayName}`}
-      aria-label={`回复 ${room.aiDisplayName}`}
-      onClick={() => { props.setReply(room.id, reply) }}
-    >
-      ↩
-    </button>
+    <span className="dsh-chatroom-assistant-actions">
+      <button
+        className="dsh-chatroom-assistant-reply"
+        type="button"
+        title={`回复 ${room.aiDisplayName}`}
+        aria-label={`回复 ${room.aiDisplayName}`}
+        onClick={() => { props.setReply(room.id, reply) }}
+      >↩</button>
+      <button
+        className="dsh-chatroom-assistant-reply"
+        type="button"
+        title="发起分支"
+        aria-label="发起分支"
+        onClick={() => { void props.openThread(room.id, { ...reply, role: 'ai' }) }}
+      >⑂</button>
+    </span>
   )
 }

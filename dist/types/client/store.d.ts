@@ -1,5 +1,5 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomIdentity, ChatroomInfo, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReplyReference } from '../types.js';
+import type { ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReplyReference, ChatroomThread, ChatroomThreadMessage, ChatroomThreadRoot } from '../types.js';
 export type ChatroomPhase = 'loading' | 'identity-required' | 'ready' | 'error';
 export type ChatroomConnection = 'offline' | 'connecting' | 'online';
 /** Browser-owned file waiting to be merged into the next room submission. */
@@ -23,12 +23,21 @@ export interface ChatroomView {
     readonly room: ChatroomInfo | undefined;
     readonly identity: ChatroomIdentity | undefined;
     readonly online: number;
+    readonly members: readonly ChatroomMember[];
+    readonly membersOpen: boolean;
     readonly error: string | undefined;
     readonly composerRoomId: string | undefined;
     readonly pendingFiles: readonly PendingChatroomFile[];
     readonly reply: ChatroomReplyReference | undefined;
     readonly composerBusy: boolean;
     readonly composerError: string | undefined;
+    readonly thread: ChatroomThread | undefined;
+    readonly threadMessages: readonly ChatroomThreadMessage[];
+    readonly threadBusy: boolean;
+    readonly threadError: string | undefined;
+    readonly unreadCount: number;
+    readonly toasts: readonly ChatroomNotification[];
+    readonly notificationsEnabled: boolean;
 }
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
 export declare class ChatroomClientStore implements HostObservable<ChatroomView> {
@@ -36,10 +45,12 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private snapshot;
     private readonly listeners;
     private eventSource;
+    private notificationSource;
     private pendingOpenRoomId;
     private stopped;
     private compositionRevision;
     private pendingFileSequence;
+    private originalTitle;
     constructor(openSession?: (sessionId: string) => boolean);
     /** Current immutable room projection. */
     getSnapshot: () => ChatroomView;
@@ -53,6 +64,10 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     stop(): void;
     /** Show identity setup or the shared room directory. */
     openRoom: () => void;
+    /** Open group management for the active room. */
+    openMembers: () => void;
+    /** Close group management without changing the active room. */
+    closeMembers: () => void;
     /** Close only the additive room dialog. */
     closeRoom: () => void;
     /** Retry pending native navigation when the Host Session list changes. */
@@ -79,6 +94,16 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     selectRoom: (roomId: string) => Promise<void>;
     /** Create, activate, and navigate to a new independent shared room. */
     createRoom: (title: string) => Promise<void>;
+    /** Create or reopen a branch rooted at one main-room message. */
+    openThread: (roomId: string, root: ChatroomThreadRoot) => Promise<void>;
+    /** Close the right-side branch panel. */
+    closeThread: () => void;
+    /** Send one human-first branch message. */
+    sendThreadMessage: (text: string) => Promise<boolean>;
+    /** Request browser notification permission from an explicit user gesture. */
+    enableSystemNotifications: () => Promise<void>;
+    /** Remove one in-page message alert. */
+    dismissToast: (id: string) => void;
     /** Open identity editing without revoking the current identity. */
     resetIdentity: () => Promise<void>;
     /** Retry identity and directory recovery. */
@@ -87,8 +112,13 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private compositionFor;
     private loadSession;
     private openEvents;
+    private openNotifications;
     private closeEvents;
+    private closeNotifications;
     private receive;
+    private receiveNotification;
+    private clearUnread;
+    private updateDocumentTitle;
     private set;
 }
 /** Submit one native composer payload through human-first room admission. */

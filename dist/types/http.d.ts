@@ -13,9 +13,12 @@ export declare class ChatroomHttpController {
     private handleSession;
     private handleRooms;
     private handleRoomSelection;
+    private handleThreadOpen;
+    private handleThreadPrompt;
     private handlePrompt;
     private handleFile;
     private handleEvents;
+    private handleNotifications;
     private sessionPayload;
     private requireIdentity;
     private token;
