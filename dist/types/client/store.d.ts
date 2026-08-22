@@ -1,5 +1,6 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReplyReference, ChatroomThread, ChatroomThreadMessage, ChatroomThreadRoot } from '../types.js';
+import type { ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomThread, ChatroomThreadMessage, ChatroomThreadRoot } from '../types.js';
+import type { ChatroomReactionEmoji } from '../reactions.js';
 export type ChatroomPhase = 'loading' | 'identity-required' | 'ready' | 'error';
 export type ChatroomConnection = 'offline' | 'connecting' | 'online';
 /** Browser-owned file waiting to be merged into the next room submission. */
@@ -24,6 +25,7 @@ export interface ChatroomView {
     readonly identity: ChatroomIdentity | undefined;
     readonly online: number;
     readonly members: readonly ChatroomMember[];
+    readonly reactions: readonly ChatroomReaction[];
     readonly membersOpen: boolean;
     readonly error: string | undefined;
     readonly composerRoomId: string | undefined;
@@ -38,6 +40,11 @@ export interface ChatroomView {
     readonly unreadCount: number;
     readonly toasts: readonly ChatroomNotification[];
     readonly notificationsEnabled: boolean;
+    readonly selectionRoomId: string | undefined;
+    readonly selectedMessages: readonly ChatroomForwardItem[];
+    readonly forwardOpen: boolean;
+    readonly forwardBusy: boolean;
+    readonly forwardError: string | undefined;
 }
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
 export declare class ChatroomClientStore implements HostObservable<ChatroomView> {
@@ -85,6 +92,18 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     setReply: (roomId: string, reply: ChatroomReplyReference) => void;
     /** Cancel the next-message reply without changing pending files. */
     clearReply: (roomId: string) => void;
+    /** Toggle one reaction and replace the message summary immediately. */
+    toggleReaction: (roomId: string, messageId: string, emoji: ChatroomReactionEmoji) => Promise<void>;
+    /** Add or remove one message from the current room selection. */
+    toggleMessageSelection: (roomId: string, message: ChatroomForwardItem) => void;
+    /** Open the target-room chooser for one message or the active selection. */
+    openForward: (roomId: string, message?: ChatroomForwardItem) => void;
+    /** Cancel message selection and merged-forward composition. */
+    clearMessageSelection: () => void;
+    /** Close only the forward target chooser while retaining selected messages. */
+    closeForward: () => void;
+    /** Send the current selection to another shared room as one merged card. */
+    forwardSelected: (targetRoomId: string) => Promise<boolean>;
     /** Capture files and reply metadata for one native prompt submission. */
     composition: (roomId: string) => ChatroomComposition;
     /** Clear only the composition that was successfully admitted. */
@@ -117,6 +136,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private closeEvents;
     private closeNotifications;
     private receive;
+    private replaceReaction;
     private receiveNotification;
     private clearUnread;
     private updateDocumentTitle;
@@ -126,7 +146,5 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
 /** Submit one native composer payload through human-first room admission. */
 export declare function submitRoomPrompt(request: ChatroomPromptRequest, signal?: AbortSignal): Promise<ChatroomPromptResponse>;
 /** Serialize browser Files only at submission time, keeping bytes out of observable state. */
-export declare function serializePendingFiles(files: readonly PendingChatroomFile[]): Promise<Extract<ChatroomPromptContentPart, {
-    type: 'file';
-}>[]>;
+export declare function serializePendingFiles(files: readonly PendingChatroomFile[]): Promise<ChatroomPromptContentPart[]>;
 //# sourceMappingURL=store.d.ts.map

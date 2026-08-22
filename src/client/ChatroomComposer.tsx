@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatroomReplyReference } from '../types.js'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
@@ -14,23 +14,61 @@ interface ChatroomComposerInjected {
 type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomComposerInjected
 type ComposerDockProps = PropsRuntime<'conversation.input.dock'> & ChatroomComposerInjected
 
+const MESSAGE_EMOJIS = ['😀', '😄', '😂', '🥰', '😍', '🤔', '😮', '😭', '😡', '👍', '👏', '🙏', '🎉', '❤️', '🔥', '✨', '✅', '👀'] as const
+
 /** Small file chooser inside the native composer tool row. */
 export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
   const room = props.useChatroom(snapshot => snapshot)
   const active = room.rooms.find(candidate => candidate.sessionId === String(props.sessionId))
   const input = useRef<HTMLInputElement>(null)
+  const root = useRef<HTMLDivElement>(null)
+  const [emojiOpen, setEmojiOpen] = useState(false)
+  useEffect(() => {
+    if (!emojiOpen) return
+    const close = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setEmojiOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    return () => { document.removeEventListener('pointerdown', close) }
+  }, [emojiOpen])
   if (active === undefined) return null
   return (
-    <>
+    <div className="dsh-chatroom-composer-actions" ref={root}>
       <button
         className="dsh-chatroom-file-button"
         type="button"
-        title="发送文件"
-        aria-label="发送文件"
+        title="发送表情"
+        aria-label="发送表情"
+        aria-expanded={emojiOpen}
+        onClick={() => { setEmojiOpen(open => !open) }}
+      >
+        <span aria-hidden>☺</span>
+        <span>表情</span>
+      </button>
+      {emojiOpen && (
+        <div className="dsh-chatroom-emoji-picker" role="dialog" aria-label="选择表情">
+          {MESSAGE_EMOJIS.map(emoji => (
+            <button
+              type="button"
+              key={emoji}
+              aria-label={`插入 ${emoji}`}
+              onClick={() => {
+                props.inputActions.setDraft(`${props.input.draft}${emoji}`)
+                setEmojiOpen(false)
+              }}
+            >{emoji}</button>
+          ))}
+        </div>
+      )}
+      <button
+        className="dsh-chatroom-file-button"
+        type="button"
+        title="发送图片或文件"
+        aria-label="发送图片或文件"
         onClick={() => { input.current?.click() }}
       >
         <span aria-hidden>📎</span>
-        <span>文件</span>
+        <span>附件</span>
       </button>
       <input
         ref={input}
@@ -44,7 +82,7 @@ export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
           event.currentTarget.value = ''
         }}
       />
-    </>
+    </div>
   )
 }
 
@@ -63,7 +101,7 @@ export function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | nu
         <div className="dsh-chatroom-pending-files">
           {room.pendingFiles.map(item => (
             <span className="dsh-chatroom-pending-file" key={item.id}>
-              <span aria-hidden>📎</span>
+              <span aria-hidden>{item.file.type.startsWith('image/') ? '🖼️' : '📎'}</span>
               <span title={item.file.name}>{item.file.name}</span>
               <button type="button" aria-label={`移除 ${item.file.name}`} onClick={() => { props.removeFile(active.id, item.id) }}>×</button>
             </span>
@@ -76,7 +114,7 @@ export function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | nu
                 disabled={room.composerBusy}
                 onClick={() => { void props.sendFiles(active.id) }}
               >
-                {room.composerBusy ? '正在发送…' : '发送文件'}
+                {room.composerBusy ? '正在发送…' : '发送'}
               </button>
             )
             : <small className="dsh-chatroom-file-hint">文件将随当前消息发送</small>}

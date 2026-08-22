@@ -2,6 +2,8 @@ import { useState } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { CHATROOM_AVATARS, chatroomAvatar, type ChatroomAvatarId } from '../avatars.js'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
+import type { ChatroomForwardItem } from '../types.js'
+import type { ChatroomReactionEmoji } from '../reactions.js'
 import { ChatroomPanels } from './ChatroomPanels.js'
 
 interface ChatroomEntryInjected {
@@ -18,6 +20,12 @@ interface ChatroomEntryInjected {
   sendThreadMessage(text: string): Promise<boolean>
   enableSystemNotifications(): Promise<void>
   dismissToast(id: string): void
+  toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>
+  openForward(roomId: string, message?: ChatroomForwardItem): void
+  closeForward(): void
+  forwardSelected(targetRoomId: string): Promise<boolean>
+  toggleMessageSelection(roomId: string, message: ChatroomForwardItem): void
+  clearMessageSelection(): void
 }
 
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected

@@ -2,7 +2,8 @@ import type { ServerResponse } from 'node:http';
 import type { Context } from '@deepseek-ai/cordis';
 import { type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
 import type { Config } from './config.js';
-import type { ChatroomFileReference, ChatroomIdentity, ChatroomInfo, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReplyReference, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
+import { type ChatroomReactionEmoji } from './reactions.js';
+import type { ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
 /** Runtime validation failure safe to return to a browser. */
 export declare class ChatroomInputError extends Error {
 }
@@ -18,6 +19,7 @@ export declare class ChatroomRuntime {
     private members;
     private threads;
     private threadMessages;
+    private reactions;
     private readonly states;
     private readonly threadStates;
     private readonly notificationClients;
@@ -53,6 +55,10 @@ export declare class ChatroomRuntime {
     selectRoom(roomId: string, identity?: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Append human chat immediately; wake the Agent only for an explicit AI mention. */
     submit(roomId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
+    /** Toggle one participant reaction and replace its room-wide summary. */
+    toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji, identity: ChatroomIdentity): Promise<ChatroomReaction>;
+    /** Append selected messages as one merged-forward card in another room. */
+    forwardMessages(sourceRoomId: string, targetRoomId: string, messages: readonly ChatroomForwardItem[], identity: ChatroomIdentity): Promise<ChatroomPromptResponse>;
     /** Resolve one authenticated room-file download. */
     file(fileId: string): {
         readonly ref: ChatroomFileReference;
@@ -75,6 +81,8 @@ export declare class ChatroomRuntime {
     private nextThreadSequence;
     private touchMember;
     private roomMembers;
+    private reactionsForRoom;
+    private reactionSummary;
     private notify;
     private seedConfiguredRoom;
     private ensureRoom;
@@ -98,6 +106,7 @@ export declare class ChatroomRuntime {
     private requireMembers;
     private requireThreads;
     private requireThreadMessages;
+    private requireReactions;
     private requireThreadState;
 }
 //# sourceMappingURL=room.d.ts.map

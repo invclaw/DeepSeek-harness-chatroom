@@ -88,6 +88,14 @@ function fallbackAvatarId(seed) {
 // src/domain.ts
 import { z as z2 } from "zod";
 import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
+
+// src/reactions.ts
+var CHATROOM_REACTION_EMOJIS = ["\u{1F44D}", "\u2764\uFE0F", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F389}"];
+function isChatroomReactionEmoji(value) {
+  return typeof value === "string" && CHATROOM_REACTION_EMOJIS.includes(value);
+}
+
+// src/domain.ts
 var nonNegativeSafeInteger = z2.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 var identitySchema = z2.object({
   participantId: z2.uuid(),
@@ -165,6 +173,13 @@ var threadMessageSchema = z2.object({
   text: z2.string().min(1),
   createdAt: nonNegativeSafeInteger
 });
+var reactionSchema = z2.object({
+  roomId: z2.string().min(1),
+  messageId: z2.string().min(1),
+  emoji: z2.string().refine(isChatroomReactionEmoji),
+  participantId: z2.string().min(1),
+  createdAt: nonNegativeSafeInteger
+});
 var chatroomDomainSpec = defineDomain({
   name: "chatroom",
   version: 0,
@@ -175,7 +190,8 @@ var chatroomDomainSpec = defineDomain({
     files: domainTable(fileSchema),
     members: domainTable(memberSchema),
     threads: domainTable(threadSchema),
-    thread_messages: domainTable(threadMessageSchema)
+    thread_messages: domainTable(threadMessageSchema),
+    reactions: domainTable(reactionSchema)
   }
 });
 
@@ -184,6 +200,7 @@ var PARTICIPANT_MARKER_START = "\u2063dsh-chatroom:";
 var PARTICIPANT_MARKER_END = "\u2063";
 var REPLY_MARKER_START = "\u2063dsh-chatroom-reply:";
 var FILE_MARKER_START = "\u2063dsh-chatroom-file:";
+var FORWARD_MARKER_START = "\u2063dsh-chatroom-forward:";
 function identifyChatroomText(text, identity) {
   return `${PARTICIPANT_MARKER_START}${identity.participantId}|${identity.avatarId}${PARTICIPANT_MARKER_END}${identity.displayName}\uFF1A${text}`;
 }
@@ -194,8 +211,7 @@ function identifyPrompt(content, identity, reply) {
     identified = true;
     return { ...part, text: identifyChatroomText(reply === void 0 ? part.text : identifyReplyText(part.text, reply), identity) };
   });
-  const fallback = content.some((part) => part.type === "file") ? "\u53D1\u9001\u4E86\u6587\u4EF6\u3002" : "\u53D1\u9001\u4E86\u4E00\u5F20\u56FE\u7247\u3002";
-  return identified ? output : [{ type: "text", text: identifyChatroomText(reply === void 0 ? fallback : identifyReplyText(fallback, reply), identity) }, ...output];
+  return identified ? output : [{ type: "text", text: identifyChatroomText(reply === void 0 ? "" : identifyReplyText("", reply), identity) }, ...output];
 }
 function identifyReplyText(text, reply) {
   return `${REPLY_MARKER_START}${encodePayload(reply)}${PARTICIPANT_MARKER_END}${replyPrefix(reply)}${text}`;
@@ -203,6 +219,9 @@ function identifyReplyText(text, reply) {
 function identifyFileText(file) {
   return `
 ${FILE_MARKER_START}${encodePayload(file)}${PARTICIPANT_MARKER_END}${filePrefix(file)}`;
+}
+function identifyForwardText(bundle) {
+  return `${FORWARD_MARKER_START}${encodePayload(bundle)}${PARTICIPANT_MARKER_END}${forwardPrefix(bundle)}`;
 }
 function mentionsAi(content, aiDisplayName) {
   const text = content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
@@ -218,6 +237,11 @@ function replyPrefix(reply) {
 }
 function filePrefix(file) {
   return `\u6587\u4EF6\uFF1A${file.name}`;
+}
+function forwardPrefix(bundle) {
+  const lines = bundle.items.map((item) => `${item.displayName}\uFF1A${item.text}`);
+  return `\u5408\u5E76\u8F6C\u53D1\uFF08${bundle.items.length} \u6761\uFF09
+${lines.join("\n")}`;
 }
 function encodePayload(value) {
   return encodeURIComponent(JSON.stringify(value));
@@ -242,6 +266,7 @@ var ChatroomRuntime = class {
   members;
   threads;
   threadMessages;
+  reactions;
   states = /* @__PURE__ */ new Map();
   threadStates = /* @__PURE__ */ new Map();
   notificationClients = /* @__PURE__ */ new Set();
@@ -282,6 +307,7 @@ var ChatroomRuntime = class {
     this.members = domain.table("members");
     this.threads = domain.table("threads");
     this.threadMessages = domain.table("thread_messages");
+    this.reactions = domain.table("reactions");
     await this.seedConfiguredRoom();
     for (const [, record] of this.requireRoomRecords().entries()) {
       this.states.set(record.id, newRoomState(record));
@@ -325,6 +351,7 @@ var ChatroomRuntime = class {
     this.members = void 0;
     this.threads = void 0;
     this.threadMessages = void 0;
+    this.reactions = void 0;
   }
   /** Resolve an opaque cookie token to its durable identity. */
   identity(token) {
@@ -456,6 +483,69 @@ var ChatroomRuntime = class {
     state.admission = task.then(() => void 0, () => void 0);
     return await task;
   }
+  /** Toggle one participant reaction and replace its room-wide summary. */
+  async toggleReaction(roomId, messageId, emoji, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    const normalizedMessageId = normalizeMessageId(messageId);
+    const task = state.admission.then(async () => {
+      const key = reactionKey(roomId, normalizedMessageId, emoji, identity.participantId);
+      const table = this.requireReactions();
+      if (table.get(key) === void 0) {
+        await table.put(key, {
+          roomId,
+          messageId: normalizedMessageId,
+          emoji,
+          participantId: identity.participantId,
+          createdAt: Date.now()
+        });
+      } else {
+        await table.delete(key);
+      }
+      await this.touchMember(roomId, identity);
+      const reaction = this.reactionSummary(roomId, normalizedMessageId, emoji);
+      this.broadcast(state, { type: "reaction", reaction });
+      return reaction;
+    });
+    state.admission = task.then(() => void 0, () => void 0);
+    return await task;
+  }
+  /** Append selected messages as one merged-forward card in another room. */
+  async forwardMessages(sourceRoomId, targetRoomId, messages, identity) {
+    this.assertReady();
+    if (sourceRoomId === targetRoomId) throw new ChatroomInputError("\u8BF7\u9009\u62E9\u5176\u4ED6\u7FA4\u804A\u8FDB\u884C\u8F6C\u53D1\u3002");
+    const source = this.requireState(sourceRoomId);
+    const target = this.requireState(targetRoomId);
+    const normalized = normalizeForwardItems(messages);
+    const task = target.admission.then(async () => {
+      const binding = await this.ensureRoom(targetRoomId);
+      const bundle = {
+        sourceRoomId,
+        sourceRoomTitle: source.record.title,
+        items: normalized
+      };
+      const identified = identifyPrompt([{ type: "text", text: identifyForwardText(bundle) }], identity);
+      const durable = await this.durableContent(targetRoomId, identity, identified);
+      binding.agent.session.append("user/message", createUserMessage({
+        content: durable,
+        source: { kind: "user" }
+      }), { surfaceOp: "append" });
+      await this.touchMember(targetRoomId, identity);
+      this.notify({
+        id: randomUUID(),
+        roomId: targetRoomId,
+        roomTitle: target.record.title,
+        participantId: identity.participantId,
+        displayName: identity.displayName,
+        role: "human",
+        text: `\u8F6C\u53D1\u4E86 ${normalized.length} \u6761\u6D88\u606F`,
+        createdAt: Date.now()
+      });
+      return { accepted: true, aiTriggered: false };
+    });
+    target.admission = task.then(() => void 0, () => void 0);
+    return await task;
+  }
   /** Resolve one authenticated room-file download. */
   file(fileId) {
     this.assertReady();
@@ -475,7 +565,8 @@ var ChatroomRuntime = class {
       room: publicRoom(state.record),
       identity,
       online: onlineCount(state),
-      members: this.roomMembers(state)
+      members: this.roomMembers(state),
+      reactions: this.reactionsForRoom(roomId)
     };
     writeSse(response, snapshot);
     this.broadcastPresence(state);
@@ -695,6 +786,28 @@ var ChatroomRuntime = class {
       lastSeenAt: record.lastSeenAt,
       online: online.has(record.participantId)
     }));
+  }
+  reactionsForRoom(roomId) {
+    const grouped = /* @__PURE__ */ new Map();
+    for (const [, record] of this.requireReactions().entries()) {
+      if (record.roomId !== roomId) continue;
+      const key = `${record.messageId}\0${record.emoji}`;
+      const existing = grouped.get(key);
+      if (existing === void 0) {
+        grouped.set(key, { messageId: record.messageId, emoji: record.emoji, participantIds: [record.participantId] });
+      } else {
+        existing.participantIds.push(record.participantId);
+      }
+    }
+    return [...grouped.values()].map((item) => ({
+      roomId,
+      messageId: item.messageId,
+      emoji: item.emoji,
+      participantIds: [...new Set(item.participantIds)].sort()
+    })).sort((left, right) => left.messageId.localeCompare(right.messageId) || CHATROOM_REACTION_EMOJIS.indexOf(left.emoji) - CHATROOM_REACTION_EMOJIS.indexOf(right.emoji));
+  }
+  reactionSummary(roomId, messageId, emoji) {
+    return this.reactionsForRoom(roomId).find((item) => item.messageId === messageId && item.emoji === emoji) ?? { roomId, messageId, emoji, participantIds: [] };
   }
   notify(notification) {
     const event = { type: "notification", notification };
@@ -945,6 +1058,10 @@ var ChatroomRuntime = class {
     if (this.threadMessages === void 0) throw new Error("chatroom thread message storage is unavailable");
     return this.threadMessages;
   }
+  requireReactions() {
+    if (this.reactions === void 0) throw new Error("chatroom reaction storage is unavailable");
+    return this.reactions;
+  }
   requireThreadState(threadId) {
     const state = this.threadStates.get(threadId);
     if (state === void 0) throw new ChatroomInputError("\u5206\u652F\u4F1A\u8BDD\u4E0D\u5B58\u5728\u3002");
@@ -1047,6 +1164,32 @@ function normalizeThreadText(value, maxChars) {
   if ([...normalized].length > maxChars) throw new ChatroomInputError(`\u5206\u652F\u6D88\u606F\u4E0D\u80FD\u8D85\u8FC7 ${maxChars} \u4E2A\u5B57\u7B26\u3002`);
   if (/\p{Cc}/u.test(normalized)) throw new ChatroomInputError("\u5206\u652F\u6D88\u606F\u4E0D\u80FD\u5305\u542B\u63A7\u5236\u5B57\u7B26\u3002");
   return normalized;
+}
+function normalizeMessageId(value) {
+  const normalized = value.trim();
+  if (normalized === "" || [...normalized].length > 240 || /\p{Cc}/u.test(normalized)) {
+    throw new ChatroomInputError("\u6D88\u606F\u7F16\u53F7\u65E0\u6548\u3002");
+  }
+  return normalized;
+}
+function normalizeForwardItems(items) {
+  if (items.length === 0 || items.length > 50) throw new ChatroomInputError("\u8BF7\u9009\u62E9 1 \u5230 50 \u6761\u6D88\u606F\u8FDB\u884C\u8F6C\u53D1\u3002");
+  const seen = /* @__PURE__ */ new Set();
+  return items.map((item) => {
+    const messageId = normalizeMessageId(item.messageId);
+    if (seen.has(messageId)) throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u4E0D\u80FD\u91CD\u590D\u3002");
+    seen.add(messageId);
+    const displayName = item.displayName.trim().replace(/\s+/gu, " ");
+    const text = item.text.trim().replace(/\s+/gu, " ");
+    if (item.role !== "human" && item.role !== "ai") throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u89D2\u8272\u65E0\u6548\u3002");
+    if (displayName === "" || [...displayName].length > 80) throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u6635\u79F0\u65E0\u6548\u3002");
+    if (text === "" || [...text].length > 2e3) throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u5185\u5BB9\u65E0\u6548\u3002");
+    if (!Number.isSafeInteger(item.createdAt) || item.createdAt < 0) throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u65F6\u95F4\u65E0\u6548\u3002");
+    return { messageId, role: item.role, displayName, text, createdAt: item.createdAt };
+  });
+}
+function reactionKey(roomId, messageId, emoji, participantId) {
+  return `${roomId}\0${messageId}\0${emoji}\0${participantId}`;
 }
 function promptPreview(content) {
   const text = content.filter((part) => part.type === "text").map((part) => part.text.trim()).filter(Boolean).join(" ");
@@ -1154,6 +1297,14 @@ var ChatroomHttpController = class {
       }
       if (route.endpoint === "/threads/prompt") {
         await this.handleThreadPrompt(request, response);
+        return;
+      }
+      if (route.endpoint === "/reactions/toggle") {
+        await this.handleReactionToggle(request, response);
+        return;
+      }
+      if (route.endpoint === "/forward") {
+        await this.handleForward(request, response);
         return;
       }
       if (route.endpoint.startsWith("/files/")) {
@@ -1291,6 +1442,42 @@ var ChatroomHttpController = class {
     const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode, prompt.reply);
     json(response, 200, result);
   }
+  async handleReactionToggle(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const body = await readJson(request, smallRequestLimit(this.config));
+    const emoji = body.emoji;
+    if (!isChatroomReactionEmoji(emoji)) throw new ChatroomInputError("\u8BF7\u9009\u62E9\u652F\u6301\u7684\u6D88\u606F\u8868\u60C5\u3002");
+    const reaction = await this.runtime.toggleReaction(
+      fieldString(body, "roomId"),
+      fieldString(body, "messageId"),
+      emoji,
+      identity
+    );
+    json(response, 200, reaction);
+  }
+  async handleForward(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const body = await readJson(request, this.config.maxMessageTextChars * 12 + 32768);
+    const result = await this.runtime.forwardMessages(
+      fieldString(body, "sourceRoomId"),
+      fieldString(body, "targetRoomId"),
+      forwardItems(body.messages),
+      identity
+    );
+    json(response, 200, result);
+  }
   handleFile(request, response, fileId) {
     if (request.method !== "GET") {
       methodNotAllowed(response, "GET");
@@ -1418,6 +1605,25 @@ function optionalFieldString(body, field) {
   if (value === void 0) return void 0;
   if (typeof value !== "string") throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
   return value;
+}
+function forwardItems(value) {
+  if (!Array.isArray(value)) throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u5217\u8868\u65E0\u6548\u3002");
+  return value.map((raw) => {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u683C\u5F0F\u65E0\u6548\u3002");
+    }
+    const item = raw;
+    const role = item.role;
+    if (role !== "human" && role !== "ai") throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u89D2\u8272\u65E0\u6548\u3002");
+    if (typeof item.createdAt !== "number") throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u65F6\u95F4\u65E0\u6548\u3002");
+    return {
+      messageId: fieldString(item, "messageId"),
+      role,
+      displayName: fieldString(item, "displayName"),
+      text: fieldString(item, "text"),
+      createdAt: item.createdAt
+    };
+  });
 }
 function promptRequest(body, config) {
   const roomId = fieldString(body, "roomId");

@@ -1,4 +1,5 @@
 import type { ChatroomMessageRole, ChatroomThreadRoot } from './types.js';
+import type { ChatroomReactionEmoji } from './reactions.js';
 import type { ChatroomAvatarId } from './avatars.js';
 export interface IdentityRecord {
     readonly participantId: string;
@@ -64,6 +65,13 @@ export interface ThreadMessageRecord {
     readonly text: string;
     readonly createdAt: number;
 }
+export interface ReactionRecord {
+    readonly roomId: string;
+    readonly messageId: string;
+    readonly emoji: ChatroomReactionEmoji;
+    readonly participantId: string;
+    readonly createdAt: number;
+}
 /** Durable identities, rooms, and the version-zero message table retained for on-disk compatibility. */
 export declare const chatroomDomainSpec: {
     name: string;
@@ -76,6 +84,7 @@ export declare const chatroomDomainSpec: {
         members: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, MemberRecord>;
         threads: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, ThreadRecord>;
         thread_messages: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, ThreadMessageRecord>;
+        reactions: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, ReactionRecord>;
     };
 };
 //# sourceMappingURL=domain.d.ts.map

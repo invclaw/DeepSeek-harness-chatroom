@@ -4,10 +4,12 @@ import type { Config } from './config.js'
 import { cookieValue, expiredSessionCookie, sessionCookie } from './cookies.js'
 import { matchChatroomApi } from './routes.js'
 import { ChatroomInputError, ChatroomRuntime } from './room.js'
+import { isChatroomReactionEmoji } from './reactions.js'
 import type {
   ChatroomErrorResponse,
   ChatroomPromptContentPart,
   ChatroomPromptRequest,
+  ChatroomForwardItem,
   ChatroomRoomResponse,
   ChatroomRoomsResponse,
   ChatroomSessionResponse,
@@ -66,6 +68,14 @@ export class ChatroomHttpController {
       }
       if (route.endpoint === '/threads/prompt') {
         await this.handleThreadPrompt(request, response)
+        return
+      }
+      if (route.endpoint === '/reactions/toggle') {
+        await this.handleReactionToggle(request, response)
+        return
+      }
+      if (route.endpoint === '/forward') {
+        await this.handleForward(request, response)
         return
       }
       if (route.endpoint.startsWith('/files/')) {
@@ -207,6 +217,44 @@ export class ChatroomHttpController {
     const body = await readJson(request, this.runtime.maxPromptRequestBytes)
     const prompt = promptRequest(body, this.config)
     const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode, prompt.reply)
+    json(response, 200, result)
+  }
+
+  private async handleReactionToggle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, smallRequestLimit(this.config))
+    const emoji = body.emoji
+    if (!isChatroomReactionEmoji(emoji)) throw new ChatroomInputError('请选择支持的消息表情。')
+    const reaction = await this.runtime.toggleReaction(
+      fieldString(body, 'roomId'),
+      fieldString(body, 'messageId'),
+      emoji,
+      identity,
+    )
+    json(response, 200, reaction)
+  }
+
+  private async handleForward(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, this.config.maxMessageTextChars * 12 + 32_768)
+    const result = await this.runtime.forwardMessages(
+      fieldString(body, 'sourceRoomId'),
+      fieldString(body, 'targetRoomId'),
+      forwardItems(body.messages),
+      identity,
+    )
     json(response, 200, result)
   }
 
@@ -352,6 +400,26 @@ function optionalFieldString(body: Record<string, unknown>, field: string): stri
   if (value === undefined) return undefined
   if (typeof value !== 'string') throw new ChatroomInputError(`字段 ${field} 必须是字符串。`)
   return value
+}
+
+function forwardItems(value: unknown): readonly ChatroomForwardItem[] {
+  if (!Array.isArray(value)) throw new ChatroomInputError('转发消息列表无效。')
+  return value.map((raw) => {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new ChatroomInputError('转发消息格式无效。')
+    }
+    const item = raw as Record<string, unknown>
+    const role = item.role
+    if (role !== 'human' && role !== 'ai') throw new ChatroomInputError('转发消息角色无效。')
+    if (typeof item.createdAt !== 'number') throw new ChatroomInputError('转发消息时间无效。')
+    return {
+      messageId: fieldString(item, 'messageId'),
+      role,
+      displayName: fieldString(item, 'displayName'),
+      text: fieldString(item, 'text'),
+      createdAt: item.createdAt,
+    }
+  })
 }
 
 function promptRequest(body: Record<string, unknown>, config: Config): ChatroomPromptRequest {

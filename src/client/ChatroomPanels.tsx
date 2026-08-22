@@ -10,6 +10,10 @@ interface ChatroomPanelsProps {
   sendThreadMessage(text: string): Promise<boolean>
   enableSystemNotifications(): Promise<void>
   dismissToast(id: string): void
+  openForward(roomId: string): void
+  closeForward(): void
+  forwardSelected(targetRoomId: string): Promise<boolean>
+  clearMessageSelection(): void
 }
 
 /** Persistent member management, branch conversation, and in-page alerts. */
@@ -19,7 +23,47 @@ export function ChatroomPanels(props: ChatroomPanelsProps): JSX.Element {
       <ToastStack toasts={props.room.toasts} dismiss={props.dismissToast} />
       {props.room.membersOpen && <MemberPanel {...props} />}
       {props.room.thread !== undefined && <ThreadPanel {...props} />}
+      {props.room.selectedMessages.length > 0 && <SelectionBar {...props} />}
+      {props.room.forwardOpen && <ForwardPanel {...props} />}
     </>
+  )
+}
+
+function SelectionBar(props: ChatroomPanelsProps): JSX.Element {
+  const sourceRoomId = props.room.selectionRoomId
+  return (
+    <div className="dsh-chatroom-selection-bar" role="toolbar" aria-label="消息多选">
+      <strong>已选择 {props.room.selectedMessages.length} 条消息</strong>
+      <button type="button" onClick={() => { if (sourceRoomId !== undefined) props.openForward(sourceRoomId) }}>合并转发</button>
+      <button type="button" onClick={props.clearMessageSelection}>取消</button>
+    </div>
+  )
+}
+
+function ForwardPanel(props: ChatroomPanelsProps): JSX.Element {
+  const targets = props.room.rooms.filter(item => item.id !== props.room.selectionRoomId)
+  return (
+    <div className="dsh-chatroom-dialog-layer dsh-chatroom-forward-layer" data-testid="chatroom-forward-dialog">
+      <section className="dsh-chatroom-card dsh-chatroom-forward-dialog" aria-label="转发到群聊">
+        <button className="dsh-chatroom-close" aria-label="关闭转发" type="button" onClick={props.closeForward}>×</button>
+        <h2>转发到群聊</h2>
+        <p>将选中的 {props.room.selectedMessages.length} 条消息合并成一张聊天记录卡片。</p>
+        <div className="dsh-chatroom-forward-targets">
+          {targets.map(room => (
+            <button
+              type="button"
+              key={room.id}
+              disabled={props.room.forwardBusy}
+              onClick={() => { void props.forwardSelected(room.id) }}
+            >
+              <span>＃</span><strong>{room.title}</strong><small>@{room.aiDisplayName}</small>
+            </button>
+          ))}
+          {targets.length === 0 && <div className="dsh-chatroom-forward-empty">请先新建另一个群聊，再进行转发。</div>}
+        </div>
+        {props.room.forwardError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.forwardError}</div>}
+      </section>
+    </div>
   )
 }
 

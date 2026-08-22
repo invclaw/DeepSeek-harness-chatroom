@@ -1,7 +1,8 @@
-import { type ComponentType, type ReactNode } from 'react';
+import { type ComponentType } from 'react';
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import { type ChatroomAvatarId } from '../avatars.js';
-import type { ChatroomFileReference, ChatroomIdentity, ChatroomReplyReference, ChatroomThreadRoot } from '../types.js';
+import type { ChatroomFileReference, ChatroomForwardBundle, ChatroomForwardItem, ChatroomIdentity, ChatroomReplyReference, ChatroomThreadRoot } from '../types.js';
+import type { ChatroomReactionEmoji } from '../reactions.js';
 import type { ChatroomView } from './store.js';
 type ParticipantNode = ChatNode<'user' | 'steering'>;
 export { identifyChatroomText } from '../message.js';
@@ -10,6 +11,9 @@ interface ChatroomMessageNodeInjected<Kind extends 'user' | 'steering'> {
     nativeMessageView: ComponentType<ChatNodeViewProps<Kind>>;
     setReply(roomId: string, reply: ChatroomReplyReference): void;
     openThread(roomId: string, root: ChatroomThreadRoot): Promise<void>;
+    toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>;
+    openForward(roomId: string, message: ChatroomForwardItem): void;
+    toggleMessageSelection(roomId: string, message: ChatroomForwardItem): void;
 }
 /** Props for the native user-message wrapper. */
 export type ChatroomUserMessageNodeViewProps = ChatNodeViewProps<'user'> & ChatroomMessageNodeInjected<'user'>;
@@ -23,10 +27,11 @@ export declare function projectChatroomMessage(node: ParticipantNode, identity: 
     readonly avatarId: ChatroomAvatarId;
     readonly reply?: ChatroomReplyReference;
     readonly files: readonly ChatroomFileReference[];
+    readonly forward?: ChatroomForwardBundle;
     readonly text: string;
 };
 /** Reuse Harness' native user renderer and move only peer user messages to the left. */
-export declare const ChatroomUserMessageNodeView: import("react").MemoExoticComponent<(props: ChatroomUserMessageNodeViewProps) => string | number | boolean | import("react").JSX.Element | Iterable<ReactNode> | null | undefined>;
+export declare const ChatroomUserMessageNodeView: import("react").MemoExoticComponent<(props: ChatroomUserMessageNodeViewProps) => import("react").JSX.Element>;
 /** Reuse Harness' native steering renderer and move only peer steering messages to the left. */
-export declare const ChatroomSteeringMessageNodeView: import("react").MemoExoticComponent<(props: ChatroomSteeringMessageNodeViewProps) => string | number | boolean | import("react").JSX.Element | Iterable<ReactNode> | null | undefined>;
+export declare const ChatroomSteeringMessageNodeView: import("react").MemoExoticComponent<(props: ChatroomSteeringMessageNodeViewProps) => import("react").JSX.Element>;
 //# sourceMappingURL=ChatroomMessageNodeView.d.ts.map

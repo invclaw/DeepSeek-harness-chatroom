@@ -1,4 +1,4 @@
-import type { ChatroomIdentity, ChatroomPromptContentPart } from './types.js'
+import type { ChatroomForwardBundle, ChatroomIdentity, ChatroomPromptContentPart } from './types.js'
 import type { ChatroomFileReference, ChatroomReplyReference } from './types.js'
 import { fallbackAvatarId, isChatroomAvatarId, type ChatroomAvatarId } from './avatars.js'
 
@@ -6,6 +6,7 @@ export const PARTICIPANT_MARKER_START = '\u2063dsh-chatroom:'
 export const PARTICIPANT_MARKER_END = '\u2063'
 export const REPLY_MARKER_START = '\u2063dsh-chatroom-reply:'
 export const FILE_MARKER_START = '\u2063dsh-chatroom-file:'
+export const FORWARD_MARKER_START = '\u2063dsh-chatroom-forward:'
 
 /** Add a durable, visually invisible participant id before the display name. */
 export function identifyChatroomText(text: string, identity: ChatroomIdentity): string {
@@ -24,12 +25,9 @@ export function identifyPrompt(
     identified = true
     return { ...part, text: identifyChatroomText(reply === undefined ? part.text : identifyReplyText(part.text, reply), identity) }
   })
-  const fallback = content.some(part => part.type === 'file')
-    ? '发送了文件。'
-    : '发送了一张图片。'
   return identified
     ? output
-    : [{ type: 'text', text: identifyChatroomText(reply === undefined ? fallback : identifyReplyText(fallback, reply), identity) }, ...output]
+    : [{ type: 'text', text: identifyChatroomText(reply === undefined ? '' : identifyReplyText('', reply), identity) }, ...output]
 }
 
 /** Parse a current or historical participant marker at the start of text. */
@@ -97,6 +95,24 @@ export function projectFileText(text: string): { text: string; files: ChatroomFi
   return { text: visible, files }
 }
 
+/** Add one merged-forward payload plus a readable model transcript. */
+export function identifyForwardText(bundle: ChatroomForwardBundle): string {
+  return `${FORWARD_MARKER_START}${encodePayload(bundle)}${PARTICIPANT_MARKER_END}${forwardPrefix(bundle)}`
+}
+
+/** Remove a merged-forward transcript while returning its browser card metadata. */
+export function projectForwardText(text: string): { text: string; forward?: ChatroomForwardBundle } {
+  if (!text.startsWith(FORWARD_MARKER_START)) return { text }
+  const end = text.indexOf(PARTICIPANT_MARKER_END, FORWARD_MARKER_START.length)
+  if (end < 0) return { text }
+  const forward = decodePayload<ChatroomForwardBundle>(text.slice(FORWARD_MARKER_START.length, end))
+  if (!validForward(forward)) return { text }
+  let visible = text.slice(end + PARTICIPANT_MARKER_END.length)
+  const prefix = forwardPrefix(forward)
+  if (visible.startsWith(prefix)) visible = visible.slice(prefix.length)
+  return { text: visible, forward }
+}
+
 /** Whether visible room text explicitly mentions the generic or configured AI name. */
 export function mentionsAi(content: readonly ChatroomPromptContentPart[], aiDisplayName: string): boolean {
   const text = content.filter((part): part is Extract<ChatroomPromptContentPart, { type: 'text' }> =>
@@ -124,6 +140,11 @@ function filePrefix(file: ChatroomFileReference): string {
   return `文件：${file.name}`
 }
 
+function forwardPrefix(bundle: ChatroomForwardBundle): string {
+  const lines = bundle.items.map(item => `${item.displayName}：${item.text}`)
+  return `合并转发（${bundle.items.length} 条）\n${lines.join('\n')}`
+}
+
 function encodePayload(value: unknown): string {
   return encodeURIComponent(JSON.stringify(value))
 }
@@ -147,4 +168,20 @@ function validFile(value: unknown): value is ChatroomFileReference {
   const item = value as Partial<ChatroomFileReference>
   return typeof item.id === 'string' && typeof item.name === 'string'
     && typeof item.mediaType === 'string' && typeof item.bytes === 'number'
+}
+
+function validForward(value: unknown): value is ChatroomForwardBundle {
+  if (value === null || typeof value !== 'object') return false
+  const bundle = value as Partial<ChatroomForwardBundle>
+  if (typeof bundle.sourceRoomId !== 'string' || typeof bundle.sourceRoomTitle !== 'string'
+    || !Array.isArray(bundle.items) || bundle.items.length === 0) return false
+  return bundle.items.every((raw) => {
+    if (raw === null || typeof raw !== 'object') return false
+    const item = raw as Partial<ChatroomForwardBundle['items'][number]>
+    return typeof item.messageId === 'string'
+      && (item.role === 'human' || item.role === 'ai')
+      && typeof item.displayName === 'string'
+      && typeof item.text === 'string'
+      && typeof item.createdAt === 'number'
+  })
 }

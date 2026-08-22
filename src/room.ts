@@ -18,13 +18,17 @@ import {
   type FileRecord,
   type IdentityRecord,
   type MemberRecord,
+  type ReactionRecord,
   type RoomRecord,
   type ThreadMessageRecord,
   type ThreadRecord,
 } from './domain.js'
-import { identifyFileText, identifyPrompt, mentionsAi } from './message.js'
+import { identifyFileText, identifyForwardText, identifyPrompt, mentionsAi } from './message.js'
+import { CHATROOM_REACTION_EMOJIS, type ChatroomReactionEmoji } from './reactions.js'
 import type {
   ChatroomFileReference,
+  ChatroomForwardBundle,
+  ChatroomForwardItem,
   ChatroomIdentity,
   ChatroomInfo,
   ChatroomMember,
@@ -32,6 +36,7 @@ import type {
   ChatroomNotificationEvent,
   ChatroomPromptContentPart,
   ChatroomPromptResponse,
+  ChatroomReaction,
   ChatroomReplyReference,
   ChatroomServerEvent,
   ChatroomSnapshotEvent,
@@ -84,6 +89,7 @@ export class ChatroomRuntime {
   private members: KvTable<string, MemberRecord> | undefined
   private threads: KvTable<string, ThreadRecord> | undefined
   private threadMessages: KvTable<string, ThreadMessageRecord> | undefined
+  private reactions: KvTable<string, ReactionRecord> | undefined
   private readonly states = new Map<string, RoomState>()
   private readonly threadStates = new Map<string, ThreadState>()
   private readonly notificationClients = new Set<NotificationClient>()
@@ -137,6 +143,7 @@ export class ChatroomRuntime {
     this.members = domain.table('members')
     this.threads = domain.table('threads')
     this.threadMessages = domain.table('thread_messages')
+    this.reactions = domain.table('reactions')
     await this.seedConfiguredRoom()
     for (const [, record] of this.requireRoomRecords().entries()) {
       this.states.set(record.id, newRoomState(record))
@@ -181,6 +188,7 @@ export class ChatroomRuntime {
     this.members = undefined
     this.threads = undefined
     this.threadMessages = undefined
+    this.reactions = undefined
   }
 
   /** Resolve an opaque cookie token to its durable identity. */
@@ -326,6 +334,81 @@ export class ChatroomRuntime {
     return await task
   }
 
+  /** Toggle one participant reaction and replace its room-wide summary. */
+  async toggleReaction(
+    roomId: string,
+    messageId: string,
+    emoji: ChatroomReactionEmoji,
+    identity: ChatroomIdentity,
+  ): Promise<ChatroomReaction> {
+    this.assertReady()
+    const state = this.requireState(roomId)
+    const normalizedMessageId = normalizeMessageId(messageId)
+    const task = state.admission.then(async () => {
+      const key = reactionKey(roomId, normalizedMessageId, emoji, identity.participantId)
+      const table = this.requireReactions()
+      if (table.get(key) === undefined) {
+        await table.put(key, {
+          roomId,
+          messageId: normalizedMessageId,
+          emoji,
+          participantId: identity.participantId,
+          createdAt: Date.now(),
+        })
+      } else {
+        await table.delete(key)
+      }
+      await this.touchMember(roomId, identity)
+      const reaction = this.reactionSummary(roomId, normalizedMessageId, emoji)
+      this.broadcast(state, { type: 'reaction', reaction })
+      return reaction
+    })
+    state.admission = task.then(() => undefined, () => undefined)
+    return await task
+  }
+
+  /** Append selected messages as one merged-forward card in another room. */
+  async forwardMessages(
+    sourceRoomId: string,
+    targetRoomId: string,
+    messages: readonly ChatroomForwardItem[],
+    identity: ChatroomIdentity,
+  ): Promise<ChatroomPromptResponse> {
+    this.assertReady()
+    if (sourceRoomId === targetRoomId) throw new ChatroomInputError('请选择其他群聊进行转发。')
+    const source = this.requireState(sourceRoomId)
+    const target = this.requireState(targetRoomId)
+    const normalized = normalizeForwardItems(messages)
+    const task = target.admission.then(async () => {
+      const binding = await this.ensureRoom(targetRoomId)
+      const bundle: ChatroomForwardBundle = {
+        sourceRoomId,
+        sourceRoomTitle: source.record.title,
+        items: normalized,
+      }
+      const identified = identifyPrompt([{ type: 'text', text: identifyForwardText(bundle) }], identity)
+      const durable = await this.durableContent(targetRoomId, identity, identified)
+      binding.agent.session.append('user/message', createUserMessage({
+        content: durable,
+        source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+      await this.touchMember(targetRoomId, identity)
+      this.notify({
+        id: randomUUID(),
+        roomId: targetRoomId,
+        roomTitle: target.record.title,
+        participantId: identity.participantId,
+        displayName: identity.displayName,
+        role: 'human',
+        text: `转发了 ${normalized.length} 条消息`,
+        createdAt: Date.now(),
+      })
+      return { accepted: true as const, aiTriggered: false }
+    })
+    target.admission = task.then(() => undefined, () => undefined)
+    return await task
+  }
+
   /** Resolve one authenticated room-file download. */
   file(fileId: string): { readonly ref: ChatroomFileReference; readonly data: Uint8Array } {
     this.assertReady()
@@ -347,6 +430,7 @@ export class ChatroomRuntime {
       identity,
       online: onlineCount(state),
       members: this.roomMembers(state),
+      reactions: this.reactionsForRoom(roomId),
     }
     writeSse(response, snapshot)
     this.broadcastPresence(state)
@@ -593,6 +677,34 @@ export class ChatroomRuntime {
         lastSeenAt: record.lastSeenAt,
         online: online.has(record.participantId),
       }))
+  }
+
+  private reactionsForRoom(roomId: string): readonly ChatroomReaction[] {
+    const grouped = new Map<string, { messageId: string; emoji: ChatroomReactionEmoji; participantIds: string[] }>()
+    for (const [, record] of this.requireReactions().entries()) {
+      if (record.roomId !== roomId) continue
+      const key = `${record.messageId}\u0000${record.emoji}`
+      const existing = grouped.get(key)
+      if (existing === undefined) {
+        grouped.set(key, { messageId: record.messageId, emoji: record.emoji, participantIds: [record.participantId] })
+      } else {
+        existing.participantIds.push(record.participantId)
+      }
+    }
+    return [...grouped.values()]
+      .map(item => ({
+        roomId,
+        messageId: item.messageId,
+        emoji: item.emoji,
+        participantIds: [...new Set(item.participantIds)].sort(),
+      }))
+      .sort((left, right) => left.messageId.localeCompare(right.messageId)
+        || CHATROOM_REACTION_EMOJIS.indexOf(left.emoji) - CHATROOM_REACTION_EMOJIS.indexOf(right.emoji))
+  }
+
+  private reactionSummary(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): ChatroomReaction {
+    return this.reactionsForRoom(roomId).find(item => item.messageId === messageId && item.emoji === emoji)
+      ?? { roomId, messageId, emoji, participantIds: [] }
   }
 
   private notify(notification: ChatroomNotification): void {
@@ -880,6 +992,11 @@ export class ChatroomRuntime {
     return this.threadMessages
   }
 
+  private requireReactions(): KvTable<string, ReactionRecord> {
+    if (this.reactions === undefined) throw new Error('chatroom reaction storage is unavailable')
+    return this.reactions
+  }
+
   private requireThreadState(threadId: string): ThreadState {
     const state = this.threadStates.get(threadId)
     if (state === undefined) throw new ChatroomInputError('分支会话不存在。')
@@ -995,6 +1112,35 @@ function normalizeThreadText(value: string, maxChars: number): string {
   if ([...normalized].length > maxChars) throw new ChatroomInputError(`分支消息不能超过 ${maxChars} 个字符。`)
   if (/\p{Cc}/u.test(normalized)) throw new ChatroomInputError('分支消息不能包含控制字符。')
   return normalized
+}
+
+function normalizeMessageId(value: string): string {
+  const normalized = value.trim()
+  if (normalized === '' || [...normalized].length > 240 || /\p{Cc}/u.test(normalized)) {
+    throw new ChatroomInputError('消息编号无效。')
+  }
+  return normalized
+}
+
+function normalizeForwardItems(items: readonly ChatroomForwardItem[]): readonly ChatroomForwardItem[] {
+  if (items.length === 0 || items.length > 50) throw new ChatroomInputError('请选择 1 到 50 条消息进行转发。')
+  const seen = new Set<string>()
+  return items.map((item) => {
+    const messageId = normalizeMessageId(item.messageId)
+    if (seen.has(messageId)) throw new ChatroomInputError('转发消息不能重复。')
+    seen.add(messageId)
+    const displayName = item.displayName.trim().replace(/\s+/gu, ' ')
+    const text = item.text.trim().replace(/\s+/gu, ' ')
+    if (item.role !== 'human' && item.role !== 'ai') throw new ChatroomInputError('转发消息角色无效。')
+    if (displayName === '' || [...displayName].length > 80) throw new ChatroomInputError('转发消息昵称无效。')
+    if (text === '' || [...text].length > 2_000) throw new ChatroomInputError('转发消息内容无效。')
+    if (!Number.isSafeInteger(item.createdAt) || item.createdAt < 0) throw new ChatroomInputError('转发消息时间无效。')
+    return { messageId, role: item.role, displayName, text, createdAt: item.createdAt }
+  })
+}
+
+function reactionKey(roomId: string, messageId: string, emoji: ChatroomReactionEmoji, participantId: string): string {
+  return `${roomId}\u0000${messageId}\u0000${emoji}\u0000${participantId}`
 }
 
 function promptPreview(content: readonly ChatroomPromptContentPart[]): string {

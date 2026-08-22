@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ChatroomClientStore } from '../src/client/store.js'
+import { ChatroomClientStore, serializePendingFiles } from '../src/client/store.js'
 import type { ChatroomNotificationEvent, ChatroomServerEvent } from '../src/types.js'
 
 class FakeEventSource {
@@ -121,7 +121,7 @@ describe('ChatroomClientStore', () => {
     const store = new ChatroomClientStore()
     await store.start()
     store.activateSession(room.sessionId)
-    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room, identity, online: 2, members: [] })
+    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room, identity, online: 2, members: [], reactions: [] })
 
     await store.resetIdentity()
     expect(store.getSnapshot()).toMatchObject({ open: true, phase: 'identity-required', identity, room })
@@ -153,7 +153,7 @@ describe('ChatroomClientStore', () => {
     await store.start()
 
     store.activateSession(room.sessionId)
-    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room, identity, online: 2, members: [] })
+    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room, identity, online: 2, members: [], reactions: [] })
     expect(store.getSnapshot()).toMatchObject({ connection: 'online', online: 2 })
 
     store.activateSession('ordinary-session')
@@ -186,6 +186,41 @@ describe('ChatroomClientStore', () => {
     expect(store.getSnapshot()).toMatchObject({ pendingFiles: [], composerBusy: false, composerError: undefined })
   })
 
+  it('classifies images natively and synchronizes reactions and merged forwarding', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const lobby = roomInfo()
+    const target = { id: 'second', title: '项目二', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-second' }
+    const reaction = { roomId: 'lobby', messageId: 'user:1', emoji: '🎉' as const, participantIds: ['alice-id'] }
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [lobby, target])))
+      .mockResolvedValueOnce(jsonResponse(reaction))
+      .mockResolvedValueOnce(jsonResponse({ accepted: true, aiTriggered: false }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    const imageBytes = new Uint8Array([1, 2, 3]).buffer
+    await expect(serializePendingFiles([{
+      id: 'image-1',
+      file: { name: 'photo.png', type: 'image/png', arrayBuffer: async () => imageBytes } as File,
+    }])).resolves.toEqual([{ type: 'image', name: 'photo.png', mediaType: 'image/png', data: 'AQID' }])
+    store.activateSession(lobby.sessionId)
+    FakeEventSource.instances[1]?.emit({ type: 'snapshot', room: lobby, identity, online: 1, members: [], reactions: [] })
+
+    await store.toggleReaction('lobby', 'user:1', '🎉')
+    expect(store.getSnapshot().reactions).toEqual([reaction])
+    const item = { messageId: 'user:1', role: 'human' as const, displayName: 'Alice', text: '你好', createdAt: 1 }
+    store.toggleMessageSelection('lobby', item)
+    store.openForward('lobby')
+    await expect(store.forwardSelected('second')).resolves.toBe(true)
+    expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+      sourceRoomId: 'lobby', targetRoomId: 'second', messages: [item],
+    })
+    expect(store.getSnapshot()).toMatchObject({
+      selectionRoomId: undefined, selectedMessages: [], forwardOpen: false, forwardBusy: false,
+    })
+  })
+
   it('shows member presence, unread alerts, and a live right-side branch', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()
@@ -205,6 +240,7 @@ describe('ChatroomClientStore', () => {
     FakeEventSource.instances[1]?.emit({
       type: 'snapshot', room, identity, online: 2,
       members: [{ ...identity, joinedAt: 1, lastSeenAt: 2, online: true }],
+      reactions: [],
     })
     expect(store.getSnapshot()).toMatchObject({ online: 2, members: [{ displayName: 'Alice', online: true }] })
 

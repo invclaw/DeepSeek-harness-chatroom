@@ -114,6 +114,26 @@ describe('native chatroom integration', () => {
     fireEvent.click(screen.getByText('发送'))
     expect(sendThreadMessage).toHaveBeenCalledWith('@AI 总结')
   })
+
+  it('opens a target chooser for a merged multi-message forward', () => {
+    const openForward = vi.fn()
+    const forwardSelected = vi.fn(async () => true)
+    const second = { id: 'second', title: '项目二', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-second' }
+    const room = view({
+      rooms: [view().room!, second],
+      selectionRoomId: 'lobby',
+      selectedMessages: [
+        { messageId: 'user:1', role: 'human', displayName: 'Alice', text: '第一条', createdAt: 1 },
+        { messageId: 'assistant:2', role: 'ai', displayName: 'DeepSeek', text: '第二条', createdAt: 2 },
+      ],
+      forwardOpen: true,
+    })
+    renderEntry(room, { openForward, forwardSelected })
+    expect(screen.getByText('已选择 2 条消息')).toBeTruthy()
+    expect(screen.getByTestId('chatroom-forward-dialog')).toBeTruthy()
+    fireEvent.click(screen.getByText('项目二'))
+    expect(forwardSelected).toHaveBeenCalledWith('second')
+  })
 })
 
 function view(patch: Partial<ChatroomView> = {}): ChatroomView {
@@ -127,6 +147,7 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' },
     online: 1,
     members: [],
+    reactions: [],
     membersOpen: false,
     error: undefined,
     composerRoomId: undefined,
@@ -141,6 +162,11 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     unreadCount: 0,
     toasts: [],
     notificationsEnabled: false,
+    selectionRoomId: undefined,
+    selectedMessages: [],
+    forwardOpen: false,
+    forwardBusy: false,
+    forwardError: undefined,
     ...patch,
   }
 }
@@ -165,6 +191,12 @@ function renderEntry(
     sendThreadMessage={vi.fn(async () => true)}
     enableSystemNotifications={vi.fn(async () => undefined)}
     dismissToast={vi.fn()}
+    toggleReaction={vi.fn(async () => undefined)}
+    openForward={vi.fn()}
+    closeForward={vi.fn()}
+    forwardSelected={vi.fn(async () => true)}
+    toggleMessageSelection={vi.fn()}
+    clearMessageSelection={vi.fn()}
     {...overrides}
   />)
 }

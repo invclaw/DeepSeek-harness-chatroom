@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { ChatroomMessageRole, ChatroomThreadRoot } from './types.js'
+import type { ChatroomReactionEmoji } from './reactions.js'
+import { isChatroomReactionEmoji } from './reactions.js'
 import type { ChatroomAvatarId } from './avatars.js'
 import { isChatroomAvatarId } from './avatars.js'
 
@@ -74,6 +76,14 @@ export interface ThreadMessageRecord {
   readonly displayName: string
   readonly avatarId?: ChatroomAvatarId
   readonly text: string
+  readonly createdAt: number
+}
+
+export interface ReactionRecord {
+  readonly roomId: string
+  readonly messageId: string
+  readonly emoji: ChatroomReactionEmoji
+  readonly participantId: string
   readonly createdAt: number
 }
 
@@ -161,6 +171,14 @@ const threadMessageSchema = z.object({
   createdAt: nonNegativeSafeInteger,
 }) as z.ZodType<ThreadMessageRecord>
 
+const reactionSchema = z.object({
+  roomId: z.string().min(1),
+  messageId: z.string().min(1),
+  emoji: z.string().refine(isChatroomReactionEmoji),
+  participantId: z.string().min(1),
+  createdAt: nonNegativeSafeInteger,
+}) as z.ZodType<ReactionRecord>
+
 /** Durable identities, rooms, and the version-zero message table retained for on-disk compatibility. */
 export const chatroomDomainSpec = defineDomain({
   name: 'chatroom',
@@ -173,5 +191,6 @@ export const chatroomDomainSpec = defineDomain({
     members: domainTable<string, MemberRecord>(memberSchema),
     threads: domainTable<string, ThreadRecord>(threadSchema),
     thread_messages: domainTable<string, ThreadMessageRecord>(threadMessageSchema),
+    reactions: domainTable<string, ReactionRecord>(reactionSchema),
   },
 })

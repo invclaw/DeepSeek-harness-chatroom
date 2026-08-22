@@ -1,6 +1,7 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   ChatroomErrorResponse,
+  ChatroomForwardItem,
   ChatroomIdentity,
   ChatroomInfo,
   ChatroomMember,
@@ -9,6 +10,7 @@ import type {
   ChatroomPromptContentPart,
   ChatroomPromptRequest,
   ChatroomPromptResponse,
+  ChatroomReaction,
   ChatroomReplyReference,
   ChatroomRoomResponse,
   ChatroomServerEvent,
@@ -18,6 +20,7 @@ import type {
   ChatroomThreadResponse,
   ChatroomThreadRoot,
 } from '../types.js'
+import type { ChatroomReactionEmoji } from '../reactions.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
 
 export type ChatroomPhase = 'loading' | 'identity-required' | 'ready' | 'error'
@@ -47,6 +50,7 @@ export interface ChatroomView {
   readonly identity: ChatroomIdentity | undefined
   readonly online: number
   readonly members: readonly ChatroomMember[]
+  readonly reactions: readonly ChatroomReaction[]
   readonly membersOpen: boolean
   readonly error: string | undefined
   readonly composerRoomId: string | undefined
@@ -61,6 +65,11 @@ export interface ChatroomView {
   readonly unreadCount: number
   readonly toasts: readonly ChatroomNotification[]
   readonly notificationsEnabled: boolean
+  readonly selectionRoomId: string | undefined
+  readonly selectedMessages: readonly ChatroomForwardItem[]
+  readonly forwardOpen: boolean
+  readonly forwardBusy: boolean
+  readonly forwardError: string | undefined
 }
 
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
@@ -74,6 +83,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     identity: undefined,
     online: 0,
     members: [],
+    reactions: [],
     membersOpen: false,
     error: undefined,
     composerRoomId: undefined,
@@ -88,6 +98,11 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     unreadCount: 0,
     toasts: [],
     notificationsEnabled: notificationPermission() === 'granted',
+    selectionRoomId: undefined,
+    selectedMessages: [],
+    forwardOpen: false,
+    forwardBusy: false,
+    forwardError: undefined,
   }
   private readonly listeners = new Set<() => void>()
   private eventSource: EventSource | undefined
@@ -176,7 +191,19 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       this.closeEvents()
       this.identityPromptedRoomId = undefined
       this.updateActiveDocumentRoom(false)
-      this.set({ room: undefined, connection: 'offline', online: 0, members: [], membersOpen: false, thread: undefined, threadMessages: [] })
+      this.set({
+        room: undefined,
+        connection: 'offline',
+        online: 0,
+        members: [],
+        reactions: [],
+        membersOpen: false,
+        thread: undefined,
+        threadMessages: [],
+        selectionRoomId: undefined,
+        selectedMessages: [],
+        forwardOpen: false,
+      })
       return
     }
     this.updateActiveDocumentRoom(true)
@@ -185,7 +212,19 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       this.set({ open: true })
     }
     if (this.snapshot.room?.id === room.id && this.eventSource !== undefined) return
-    this.set({ room, connection: 'connecting', online: 0, members: [], membersOpen: false, thread: undefined, threadMessages: [] })
+    this.set({
+      room,
+      connection: 'connecting',
+      online: 0,
+      members: [],
+      reactions: [],
+      membersOpen: false,
+      thread: undefined,
+      threadMessages: [],
+      selectionRoomId: undefined,
+      selectedMessages: [],
+      forwardOpen: false,
+    })
     this.clearUnread()
     this.openEvents(room)
   }
@@ -261,6 +300,84 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     if (this.snapshot.composerRoomId !== roomId || this.snapshot.reply === undefined) return
     this.compositionRevision += 1
     this.set({ reply: undefined, composerError: undefined })
+  }
+
+  /** Toggle one reaction and replace the message summary immediately. */
+  toggleReaction = async (roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void> => {
+    try {
+      const reaction = await requestJson<ChatroomReaction>(`${CHATROOM_API_PREFIX}/reactions/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, messageId, emoji }),
+      })
+      this.replaceReaction(reaction)
+    } catch (error) {
+      this.set({ composerError: errorMessage(error) })
+    }
+  }
+
+  /** Add or remove one message from the current room selection. */
+  toggleMessageSelection = (roomId: string, message: ChatroomForwardItem): void => {
+    const current = this.snapshot.selectionRoomId === roomId ? this.snapshot.selectedMessages : []
+    const selected = current.some(item => item.messageId === message.messageId)
+      ? current.filter(item => item.messageId !== message.messageId)
+      : [...current, message]
+    this.set({
+      selectionRoomId: selected.length === 0 ? undefined : roomId,
+      selectedMessages: selected,
+      forwardOpen: false,
+      forwardError: undefined,
+    })
+  }
+
+  /** Open the target-room chooser for one message or the active selection. */
+  openForward = (roomId: string, message?: ChatroomForwardItem): void => {
+    const selected = this.snapshot.selectionRoomId === roomId ? this.snapshot.selectedMessages : []
+    const messages = message === undefined
+      ? selected
+      : selected.some(item => item.messageId === message.messageId) ? selected : [message]
+    if (messages.length === 0) return
+    this.set({
+      selectionRoomId: roomId,
+      selectedMessages: messages,
+      forwardOpen: true,
+      forwardError: undefined,
+    })
+  }
+
+  /** Cancel message selection and merged-forward composition. */
+  clearMessageSelection = (): void => {
+    this.set({
+      selectionRoomId: undefined,
+      selectedMessages: [],
+      forwardOpen: false,
+      forwardBusy: false,
+      forwardError: undefined,
+    })
+  }
+
+  /** Close only the forward target chooser while retaining selected messages. */
+  closeForward = (): void => {
+    this.set({ forwardOpen: false, forwardError: undefined })
+  }
+
+  /** Send the current selection to another shared room as one merged card. */
+  forwardSelected = async (targetRoomId: string): Promise<boolean> => {
+    const sourceRoomId = this.snapshot.selectionRoomId
+    if (sourceRoomId === undefined || this.snapshot.selectedMessages.length === 0 || this.snapshot.forwardBusy) return false
+    this.set({ forwardBusy: true, forwardError: undefined })
+    try {
+      await requestJson<ChatroomPromptResponse>(`${CHATROOM_API_PREFIX}/forward`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceRoomId, targetRoomId, messages: this.snapshot.selectedMessages }),
+      })
+      this.clearMessageSelection()
+      return true
+    } catch (error) {
+      this.set({ forwardBusy: false, forwardError: errorMessage(error) })
+      return false
+    }
   }
 
   /** Capture files and reply metadata for one native prompt submission. */
@@ -509,6 +626,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           identity: event.identity,
           online: event.online,
           members: event.members,
+          reactions: event.reactions,
           error: undefined,
         })
         return
@@ -519,7 +637,18 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         if (this.snapshot.thread?.id !== event.message.threadId
           || this.snapshot.threadMessages.some(message => message.id === event.message.id)) return
         this.set({ threadMessages: [...this.snapshot.threadMessages, event.message] })
+        return
+      case 'reaction':
+        this.replaceReaction(event.reaction)
+        return
     }
+  }
+
+  private replaceReaction(reaction: ChatroomReaction): void {
+    if (this.snapshot.room?.id !== reaction.roomId) return
+    const without = this.snapshot.reactions.filter(item =>
+      item.messageId !== reaction.messageId || item.emoji !== reaction.emoji)
+    this.set({ reactions: reaction.participantIds.length === 0 ? without : [...without, reaction] })
   }
 
   private receiveNotification(notification: ChatroomNotification): void {
@@ -582,13 +711,19 @@ export async function submitRoomPrompt(
 /** Serialize browser Files only at submission time, keeping bytes out of observable state. */
 export async function serializePendingFiles(
   files: readonly PendingChatroomFile[],
-): Promise<Extract<ChatroomPromptContentPart, { type: 'file' }>[]> {
-  return await Promise.all(files.map(async ({ file }) => ({
-    type: 'file' as const,
-    name: file.name,
-    mediaType: file.type === '' ? 'application/octet-stream' : file.type,
-    data: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
-  })))
+): Promise<ChatroomPromptContentPart[]> {
+  return await Promise.all(files.map(async ({ file }): Promise<ChatroomPromptContentPart> => {
+    const data = bytesToBase64(new Uint8Array(await file.arrayBuffer()))
+    if (file.type === 'image/png' || file.type === 'image/jpeg' || file.type === 'image/webp' || file.type === 'image/gif') {
+      return { type: 'image', name: file.name, mediaType: file.type, data }
+    }
+    return {
+      type: 'file',
+      name: file.name,
+      mediaType: file.type === '' ? 'application/octet-stream' : file.type,
+      data,
+    }
+  }))
 }
 
 class HttpError extends Error {

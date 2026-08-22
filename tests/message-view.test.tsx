@@ -92,6 +92,36 @@ describe('participant-specific native message projection', () => {
     fireEvent.click(screen.getByRole('button', { name: '↩ 回复' }))
     expect(setReply).toHaveBeenCalledWith('lobby', expect.objectContaining({ displayName: 'Bob', text: '请查收' }))
   })
+
+  it('renders a pure file directly and exposes reactions, forwarding, and multi-select on right click', () => {
+    const file = { id: 'file-id', name: 'brief.pdf', mediaType: 'application/pdf', bytes: 2048 }
+    const toggleReaction = vi.fn(async () => undefined)
+    const openForward = vi.fn()
+    const toggleMessageSelection = vi.fn()
+    const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>
+    render(<ChatroomUserMessageNodeView {...{
+      ...messageProps(userNode(identifyChatroomText(identifyFileText(file), bob)), alice, Native),
+      toggleReaction,
+      openForward,
+      toggleMessageSelection,
+    }} />)
+
+    expect(screen.getByText('brief.pdf')).toBeTruthy()
+    expect(screen.queryByTestId('native')).toBeNull()
+    expect(screen.queryByText(/发送了/u)).toBeNull()
+    const row = screen.getByText('brief.pdf').closest('.dsh-chatroom-participant-message')!
+    fireEvent.contextMenu(row, { clientX: 120, clientY: 80 })
+    fireEvent.click(screen.getByTitle('贴表情 👍'))
+    expect(toggleReaction).toHaveBeenCalledWith('lobby', 'user:1', '👍')
+
+    fireEvent.contextMenu(row, { clientX: 120, clientY: 80 })
+    fireEvent.click(screen.getByRole('menuitem', { name: /转发/u }))
+    expect(openForward).toHaveBeenCalledWith('lobby', expect.objectContaining({ messageId: 'user:1', text: 'brief.pdf' }))
+
+    fireEvent.contextMenu(row, { clientX: 120, clientY: 80 })
+    fireEvent.click(screen.getByRole('menuitem', { name: /多选/u }))
+    expect(toggleMessageSelection).toHaveBeenCalledWith('lobby', expect.objectContaining({ messageId: 'user:1' }))
+  })
 })
 
 function userNode(text: string): ChatNode<'user'> {
@@ -132,6 +162,7 @@ function messageProps(
       identity,
       online: 2,
       members: [],
+      reactions: [],
       membersOpen: false,
       error: undefined,
       composerRoomId: undefined,
@@ -146,6 +177,11 @@ function messageProps(
       unreadCount: 0,
       toasts: [],
       notificationsEnabled: false,
+      selectionRoomId: undefined,
+      selectedMessages: [],
+      forwardOpen: false,
+      forwardBusy: false,
+      forwardError: undefined,
     }),
     nativeMessageView,
     setReply: () => undefined,

@@ -78,8 +78,86 @@ window.__ModuleLoader__.load({
 					dismiss: props.dismissToast
 				}),
 				props.room.membersOpen && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(MemberPanel, { ...props }),
-				props.room.thread !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ThreadPanel, { ...props })
+				props.room.thread !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ThreadPanel, { ...props }),
+				props.room.selectedMessages.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SelectionBar, { ...props }),
+				props.room.forwardOpen && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ForwardPanel, { ...props })
 			] });
+		}
+		function SelectionBar(props) {
+			const sourceRoomId = props.room.selectionRoomId;
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "dsh-chatroom-selection-bar",
+				role: "toolbar",
+				"aria-label": "消息多选",
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("strong", { children: [
+						"已选择 ",
+						props.room.selectedMessages.length,
+						" 条消息"
+					] }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: () => {
+							if (sourceRoomId !== void 0) props.openForward(sourceRoomId);
+						},
+						children: "合并转发"
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: props.clearMessageSelection,
+						children: "取消"
+					})
+				]
+			});
+		}
+		function ForwardPanel(props) {
+			const targets = props.room.rooms.filter((item) => item.id !== props.room.selectionRoomId);
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: "dsh-chatroom-dialog-layer dsh-chatroom-forward-layer",
+				"data-testid": "chatroom-forward-dialog",
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
+					className: "dsh-chatroom-card dsh-chatroom-forward-dialog",
+					"aria-label": "转发到群聊",
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							className: "dsh-chatroom-close",
+							"aria-label": "关闭转发",
+							type: "button",
+							onClick: props.closeForward,
+							children: "×"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", { children: "转发到群聊" }),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("p", { children: [
+							"将选中的 ",
+							props.room.selectedMessages.length,
+							" 条消息合并成一张聊天记录卡片。"
+						] }),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							className: "dsh-chatroom-forward-targets",
+							children: [targets.map((room) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+								type: "button",
+								disabled: props.room.forwardBusy,
+								onClick: () => {
+									props.forwardSelected(room.id);
+								},
+								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "＃" }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: room.title }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("small", { children: ["@", room.aiDisplayName] })
+								]
+							}, room.id)), targets.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								className: "dsh-chatroom-forward-empty",
+								children: "请先新建另一个群聊，再进行转发。"
+							})]
+						}),
+						props.room.forwardError !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							className: "dsh-chatroom-error",
+							role: "alert",
+							children: props.room.forwardError
+						})
+					]
+				})
+			});
 		}
 		function ToastStack({ toasts, dismiss }) {
 			if (toasts.length === 0) return null;
@@ -208,7 +286,7 @@ window.__ModuleLoader__.load({
 										className: "dsh-chatroom-member-avatar",
 										"data-avatar": avatar.id,
 										children: avatar.emoji
-									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("strong", { children: [message.displayName, /* @__PURE__ */ (0, react_jsx_runtime.jsx)("time", { children: formatTime(message.createdAt) })] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: message.text })] })]
+									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("strong", { children: [message.displayName, /* @__PURE__ */ (0, react_jsx_runtime.jsx)("time", { children: formatTime$1(message.createdAt) })] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: message.text })] })]
 								}, message.id);
 							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { ref: endRef })
@@ -257,7 +335,7 @@ window.__ModuleLoader__.load({
 			if (minutes < 1440) return `${Math.floor(minutes / 60)} 小时前`;
 			return `${Math.floor(minutes / 1440)} 天前`;
 		}
-		function formatTime(time) {
+		function formatTime$1(time) {
 			return new Date(time).toLocaleTimeString([], {
 				hour: "2-digit",
 				minute: "2-digit"
@@ -481,11 +559,154 @@ window.__ModuleLoader__.load({
 			});
 		}
 		//#endregion
+		//#region src/reactions.ts
+		/** Reactions offered by the room message menu. */
+		const CHATROOM_REACTION_EMOJIS = [
+			"👍",
+			"❤️",
+			"😂",
+			"😮",
+			"😢",
+			"🎉"
+		];
+		//#endregion
+		//#region src/client/ChatroomMessageTools.tsx
+		/** Local context-menu state for one native message row. */
+		function useChatroomMessageMenu() {
+			const [position, setPosition] = (0, react.useState)();
+			(0, react.useEffect)(() => {
+				if (position === void 0) return;
+				const close = () => {
+					setPosition(void 0);
+				};
+				const escape = (event) => {
+					if (event.key === "Escape") close();
+				};
+				document.addEventListener("pointerdown", close);
+				document.addEventListener("keydown", escape);
+				return () => {
+					document.removeEventListener("pointerdown", close);
+					document.removeEventListener("keydown", escape);
+				};
+			}, [position]);
+			return {
+				position,
+				open: (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					setPosition({
+						x: Math.max(8, Math.min(event.clientX, globalThis.innerWidth - 248)),
+						y: Math.max(8, Math.min(event.clientY, globalThis.innerHeight - 168))
+					});
+				},
+				close: () => {
+					setPosition(void 0);
+				}
+			};
+		}
+		/** Persisted reaction chips shown below one message. */
+		function ChatroomReactionBar(props) {
+			const reactions = props.reactions.filter((item) => item.messageId === props.message.messageId && item.participantIds.length > 0);
+			if (reactions.length === 0) return null;
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: "dsh-chatroom-reaction-bar",
+				children: reactions.map((reaction) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+					type: "button",
+					"aria-label": `${reaction.emoji} ${reaction.participantIds.length}`,
+					"aria-pressed": reaction.participantIds.includes(props.identity?.participantId ?? ""),
+					disabled: props.identity === void 0,
+					onClick: () => {
+						props.toggleReaction(props.roomId, props.message.messageId, reaction.emoji);
+					},
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: reaction.emoji }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("small", { children: reaction.participantIds.length })]
+				}, reaction.emoji))
+			});
+		}
+		/** Right-click menu shared by human and AI messages. */
+		function ChatroomMessageContextMenu({ tools, position, close }) {
+			if (position === void 0 || tools.identity === void 0) return null;
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "dsh-chatroom-context-menu",
+				style: {
+					left: position.x,
+					top: position.y
+				},
+				role: "menu",
+				onPointerDown: (event) => {
+					event.stopPropagation();
+				},
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						className: "dsh-chatroom-context-reactions",
+						"aria-label": "贴表情",
+						children: CHATROOM_REACTION_EMOJIS.map((emoji) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							title: `贴表情 ${emoji}`,
+							onClick: () => {
+								tools.toggleReaction(tools.roomId, tools.message.messageId, emoji);
+								close();
+							},
+							children: emoji
+						}, emoji))
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+						type: "button",
+						role: "menuitem",
+						onClick: () => {
+							tools.openForward(tools.roomId, tools.message);
+							close();
+						},
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							"aria-hidden": true,
+							children: "↗"
+						}), " 转发"]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+						type: "button",
+						role: "menuitem",
+						onClick: () => {
+							tools.toggleSelection(tools.roomId, tools.message);
+							close();
+						},
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								"aria-hidden": true,
+								children: tools.selected ? "✓" : "☑"
+							}),
+							" ",
+							tools.selected ? "取消选择" : "多选"
+						]
+					})
+				]
+			});
+		}
+		//#endregion
 		//#region src/client/ChatroomAssistantReplyAction.tsx
 		/** Reply action contributed to finalized AI messages in shared rooms. */
 		function ChatroomAssistantReplyAction(props) {
-			const room = props.useChatroom((snapshot) => snapshot.rooms.find((candidate) => candidate.sessionId === String(props.sessionId)));
+			const view = props.useChatroom((snapshot) => snapshot);
+			const room = view.rooms.find((candidate) => candidate.sessionId === String(props.sessionId));
 			const assistant = props.useSession((snapshot) => snapshot.nodes.find((node) => node.kind === "assistant" && node.messageId === props.messageId));
+			const rootRef = (0, react.useRef)(null);
+			const menu = useChatroomMessageMenu();
+			const selected = view.selectionRoomId === room?.id && view.selectedMessages.some((item) => item.messageId === String(props.messageId));
+			(0, react.useEffect)(() => {
+				const root = rootRef.current?.closest("[data-time-hover-root]");
+				if (root === null || root === void 0 || room === void 0) return;
+				const onContextMenu = (event) => {
+					menu.open(event);
+				};
+				root.addEventListener("contextmenu", onContextMenu);
+				root.toggleAttribute("data-dsh-chatroom-selected", selected);
+				return () => {
+					root.removeEventListener("contextmenu", onContextMenu);
+					root.removeAttribute("data-dsh-chatroom-selected");
+				};
+			}, [
+				menu.open,
+				room,
+				selected
+			]);
 			if (room === void 0 || assistant?.kind !== "assistant") return null;
 			const text = assistant.blocks.flatMap((block) => block.kind === "text" ? [block.text] : []).join("").trim().replace(/\s+/gu, " ");
 			const reply = {
@@ -493,63 +714,155 @@ window.__ModuleLoader__.load({
 				displayName: room.aiDisplayName,
 				text: [...text || "AI 回复"].slice(0, 120).join("")
 			};
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+			const message = {
+				...reply,
+				role: "ai",
+				createdAt: assistant.time
+			};
+			const tools = {
+				roomId: room.id,
+				message,
+				reactions: view.reactions,
+				identity: view.identity,
+				selected,
+				toggleReaction: props.toggleReaction,
+				openForward: props.openForward,
+				toggleSelection: props.toggleMessageSelection
+			};
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: "dsh-chatroom-assistant-actions",
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					className: "dsh-chatroom-assistant-reply",
-					type: "button",
-					title: `回复 ${room.aiDisplayName}`,
-					"aria-label": `回复 ${room.aiDisplayName}`,
-					onClick: () => {
-						props.setReply(room.id, reply);
-					},
-					children: "↩"
-				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					className: "dsh-chatroom-assistant-reply",
-					type: "button",
-					title: "发起分支",
-					"aria-label": "发起分支",
-					onClick: () => {
-						props.openThread(room.id, {
-							...reply,
-							role: "ai"
-						});
-					},
-					children: "⑂"
-				})]
+				ref: rootRef,
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomReactionBar, { ...tools }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						className: "dsh-chatroom-assistant-reply",
+						type: "button",
+						title: `回复 ${room.aiDisplayName}`,
+						"aria-label": `回复 ${room.aiDisplayName}`,
+						onClick: () => {
+							props.setReply(room.id, reply);
+						},
+						children: "↩"
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						className: "dsh-chatroom-assistant-reply",
+						type: "button",
+						title: "发起分支",
+						"aria-label": "发起分支",
+						onClick: () => {
+							props.openThread(room.id, {
+								...reply,
+								role: "ai"
+							});
+						},
+						children: "⑂"
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomMessageContextMenu, {
+						tools,
+						position: menu.position,
+						close: menu.close
+					})
+				]
 			});
 		}
 		//#endregion
 		//#region src/client/ChatroomComposer.tsx
+		const MESSAGE_EMOJIS = [
+			"😀",
+			"😄",
+			"😂",
+			"🥰",
+			"😍",
+			"🤔",
+			"😮",
+			"😭",
+			"😡",
+			"👍",
+			"👏",
+			"🙏",
+			"🎉",
+			"❤️",
+			"🔥",
+			"✨",
+			"✅",
+			"👀"
+		];
 		/** Small file chooser inside the native composer tool row. */
 		function ChatroomFileAction(props) {
 			const active = props.useChatroom((snapshot) => snapshot).rooms.find((candidate) => candidate.sessionId === String(props.sessionId));
 			const input = (0, react.useRef)(null);
+			const root = (0, react.useRef)(null);
+			const [emojiOpen, setEmojiOpen] = (0, react.useState)(false);
+			(0, react.useEffect)(() => {
+				if (!emojiOpen) return;
+				const close = (event) => {
+					if (!root.current?.contains(event.target)) setEmojiOpen(false);
+				};
+				document.addEventListener("pointerdown", close);
+				return () => {
+					document.removeEventListener("pointerdown", close);
+				};
+			}, [emojiOpen]);
 			if (active === void 0) return null;
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
-				className: "dsh-chatroom-file-button",
-				type: "button",
-				title: "发送文件",
-				"aria-label": "发送文件",
-				onClick: () => {
-					input.current?.click();
-				},
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-					"aria-hidden": true,
-					children: "📎"
-				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "文件" })]
-			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-				ref: input,
-				className: "dsh-chatroom-file-input",
-				"data-testid": "chatroom-file-input",
-				type: "file",
-				multiple: true,
-				onChange: (event) => {
-					const files = event.currentTarget.files;
-					if (files !== null) props.addFiles(active.id, [...files]);
-					event.currentTarget.value = "";
-				}
-			})] });
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "dsh-chatroom-composer-actions",
+				ref: root,
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+						className: "dsh-chatroom-file-button",
+						type: "button",
+						title: "发送表情",
+						"aria-label": "发送表情",
+						"aria-expanded": emojiOpen,
+						onClick: () => {
+							setEmojiOpen((open) => !open);
+						},
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							"aria-hidden": true,
+							children: "☺"
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "表情" })]
+					}),
+					emojiOpen && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						className: "dsh-chatroom-emoji-picker",
+						role: "dialog",
+						"aria-label": "选择表情",
+						children: MESSAGE_EMOJIS.map((emoji) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							"aria-label": `插入 ${emoji}`,
+							onClick: () => {
+								props.inputActions.setDraft(`${props.input.draft}${emoji}`);
+								setEmojiOpen(false);
+							},
+							children: emoji
+						}, emoji))
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+						className: "dsh-chatroom-file-button",
+						type: "button",
+						title: "发送图片或文件",
+						"aria-label": "发送图片或文件",
+						onClick: () => {
+							input.current?.click();
+						},
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							"aria-hidden": true,
+							children: "📎"
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "附件" })]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+						ref: input,
+						className: "dsh-chatroom-file-input",
+						"data-testid": "chatroom-file-input",
+						type: "file",
+						multiple: true,
+						onChange: (event) => {
+							const files = event.currentTarget.files;
+							if (files !== null) props.addFiles(active.id, [...files]);
+							event.currentTarget.value = "";
+						}
+					})
+				]
+			});
 		}
 		/** Reply quote and pending file rail above the native composer. */
 		function ChatroomComposerDock(props) {
@@ -576,7 +889,7 @@ window.__ModuleLoader__.load({
 							children: [
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 									"aria-hidden": true,
-									children: "📎"
+									children: item.file.type.startsWith("image/") ? "🖼️" : "📎"
 								}),
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 									title: item.file.name,
@@ -598,7 +911,7 @@ window.__ModuleLoader__.load({
 							onClick: () => {
 								props.sendFiles(active.id);
 							},
-							children: room.composerBusy ? "正在发送…" : "发送文件"
+							children: room.composerBusy ? "正在发送…" : "发送"
 						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("small", {
 							className: "dsh-chatroom-file-hint",
 							children: "文件将随当前消息发送"
@@ -678,6 +991,21 @@ window.__ModuleLoader__.load({
 				files
 			};
 		}
+		/** Remove a merged-forward transcript while returning its browser card metadata. */
+		function projectForwardText(text) {
+			if (!text.startsWith("⁣dsh-chatroom-forward:")) return { text };
+			const end = text.indexOf("⁣", 22);
+			if (end < 0) return { text };
+			const forward = decodePayload(text.slice(22, end));
+			if (!validForward(forward)) return { text };
+			let visible = text.slice(end + 1);
+			const prefix = forwardPrefix(forward);
+			if (visible.startsWith(prefix)) visible = visible.slice(prefix.length);
+			return {
+				text: visible,
+				forward
+			};
+		}
 		/** Whether the native command dispatcher must retain ownership of this submission. */
 		function isSlashCommand(content) {
 			return content.find((part) => part.type === "text")?.text.trimStart().startsWith("/") ?? false;
@@ -687,6 +1015,10 @@ window.__ModuleLoader__.load({
 		}
 		function filePrefix(file) {
 			return `文件：${file.name}`;
+		}
+		function forwardPrefix(bundle) {
+			const lines = bundle.items.map((item) => `${item.displayName}：${item.text}`);
+			return `合并转发（${bundle.items.length} 条）\n${lines.join("\n")}`;
 		}
 		function decodePayload(value) {
 			try {
@@ -705,6 +1037,16 @@ window.__ModuleLoader__.load({
 			const item = value;
 			return typeof item.id === "string" && typeof item.name === "string" && typeof item.mediaType === "string" && typeof item.bytes === "number";
 		}
+		function validForward(value) {
+			if (value === null || typeof value !== "object") return false;
+			const bundle = value;
+			if (typeof bundle.sourceRoomId !== "string" || typeof bundle.sourceRoomTitle !== "string" || !Array.isArray(bundle.items) || bundle.items.length === 0) return false;
+			return bundle.items.every((raw) => {
+				if (raw === null || typeof raw !== "object") return false;
+				const item = raw;
+				return typeof item.messageId === "string" && (item.role === "human" || item.role === "ai") && typeof item.displayName === "string" && typeof item.text === "string" && typeof item.createdAt === "number";
+			});
+		}
 		//#endregion
 		//#region src/routes.ts
 		/** Canonical API prefix carried through the Host's existing plugin proxy route. */
@@ -718,10 +1060,15 @@ window.__ModuleLoader__.load({
 			let displayName;
 			let avatarId;
 			let reply;
+			let forward;
 			const files = [];
 			const texts = [];
-			const content = node.data.content.map((block) => {
-				if (block.type !== "text") return block;
+			const content = [];
+			for (const block of node.data.content) {
+				if (block.type !== "text") {
+					content.push(block);
+					continue;
+				}
 				let visibleText = block.text;
 				if (!identityProjected) {
 					identityProjected = true;
@@ -735,16 +1082,19 @@ window.__ModuleLoader__.load({
 					const replyProjection = projectReplyText(visibleText);
 					visibleText = replyProjection.text;
 					reply = replyProjection.reply;
+					const forwardProjection = projectForwardText(visibleText);
+					visibleText = forwardProjection.text;
+					forward = forwardProjection.forward;
 				}
 				const fileProjection = projectFileText(visibleText);
 				visibleText = fileProjection.text;
 				files.push(...fileProjection.files);
 				if (visibleText.trim() !== "") texts.push(visibleText.trim());
-				return visibleText === block.text ? block : {
+				if (visibleText.trim() !== "") content.push(visibleText === block.text ? block : {
 					...block,
 					text: visibleText
-				};
-			});
+				});
+			}
 			return {
 				node: identityProjected ? {
 					...node,
@@ -758,7 +1108,8 @@ window.__ModuleLoader__.load({
 				files,
 				text: texts.join("\n"),
 				...displayName === void 0 ? {} : { displayName },
-				...reply === void 0 ? {} : { reply }
+				...reply === void 0 ? {} : { reply },
+				...forward === void 0 ? {} : { forward }
 			};
 		}
 		/** Reuse Harness' native user renderer and move only peer user messages to the left. */
@@ -772,14 +1123,22 @@ window.__ModuleLoader__.load({
 				node: projection.node
 			});
 			const activeRoom = room.rooms.find((candidate) => String(props.sessionId) === candidate.sessionId);
-			const target = replyTarget(props.node, projection);
-			return participantMessage(native, projection, room.identity === void 0 ? void 0 : () => {
-				props.setReply(activeRoom.id, target);
-			}, room.identity === void 0 ? void 0 : () => {
-				props.openThread(activeRoom.id, {
-					...target,
-					role: "human"
-				});
+			const message = messageTarget(props.node, projection);
+			const target = replyTarget(message);
+			const tools = messageTools(props, room, activeRoom.id, message);
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ParticipantMessage, {
+				native,
+				projection,
+				tools,
+				onReply: room.identity === void 0 ? void 0 : () => {
+					props.setReply(activeRoom.id, target);
+				},
+				onThread: room.identity === void 0 ? void 0 : () => {
+					props.openThread(activeRoom.id, {
+						...target,
+						role: "human"
+					});
+				}
 			});
 		});
 		/** Reuse Harness' native steering renderer and move only peer steering messages to the left. */
@@ -793,59 +1152,80 @@ window.__ModuleLoader__.load({
 				node: projection.node
 			});
 			const activeRoom = room.rooms.find((candidate) => String(props.sessionId) === candidate.sessionId);
-			const target = replyTarget(props.node, projection);
-			return participantMessage(native, projection, room.identity === void 0 ? void 0 : () => {
-				props.setReply(activeRoom.id, target);
-			}, room.identity === void 0 ? void 0 : () => {
-				props.openThread(activeRoom.id, {
-					...target,
-					role: "human"
-				});
+			const message = messageTarget(props.node, projection);
+			const target = replyTarget(message);
+			const tools = messageTools(props, room, activeRoom.id, message);
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ParticipantMessage, {
+				native,
+				projection,
+				tools,
+				onReply: room.identity === void 0 ? void 0 : () => {
+					props.setReply(activeRoom.id, target);
+				},
+				onThread: room.identity === void 0 ? void 0 : () => {
+					props.openThread(activeRoom.id, {
+						...target,
+						role: "human"
+					});
+				}
 			});
 		});
-		function participantMessage(native, projection, onReply, onThread) {
+		function ParticipantMessage({ native, projection, tools, onReply, onThread }) {
 			const avatar = chatroomAvatar(projection.avatarId, projection.displayName ?? "");
+			const menu = useChatroomMessageMenu();
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: "dsh-chatroom-participant-message",
 				"data-dsh-chatroom-own": projection.own,
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					className: "dsh-chatroom-avatar",
-					"data-avatar": avatar.id,
-					title: avatar.label,
-					"aria-hidden": true,
-					children: avatar.emoji
-				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					className: "dsh-chatroom-message-column",
-					children: [
-						projection.displayName !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-							className: "dsh-chatroom-display-name",
-							children: projection.displayName
-						}),
-						projection.reply !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-							className: "dsh-chatroom-reply-quote",
-							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("strong", { children: ["回复 ", projection.reply.displayName] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: projection.reply.text })]
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-							className: "dsh-chatroom-native-message",
-							children: native
-						}),
-						projection.files.map((file) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FileCard, { file }, file.id)),
-						onReply !== void 0 && onThread !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-							className: "dsh-chatroom-message-actions",
-							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								className: "dsh-chatroom-reply-button",
-								type: "button",
-								onClick: onReply,
-								children: "↩ 回复"
-							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								className: "dsh-chatroom-reply-button",
-								type: "button",
-								onClick: onThread,
-								children: "⑂ 分支"
-							})]
-						})
-					]
-				})]
+				"data-dsh-chatroom-selected": tools.selected || void 0,
+				onContextMenu: menu.open,
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						className: "dsh-chatroom-avatar",
+						"data-avatar": avatar.id,
+						title: avatar.label,
+						"aria-hidden": true,
+						children: avatar.emoji
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "dsh-chatroom-message-column",
+						children: [
+							projection.displayName !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								className: "dsh-chatroom-display-name",
+								children: projection.displayName
+							}),
+							projection.reply !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								className: "dsh-chatroom-reply-quote",
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("strong", { children: ["回复 ", projection.reply.displayName] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: projection.reply.text })]
+							}),
+							projection.node.data.content.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								className: "dsh-chatroom-native-message",
+								children: native
+							}),
+							projection.files.map((file) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FileCard, { file }, file.id)),
+							projection.forward !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ForwardCard, { forward: projection.forward }),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomReactionBar, { ...tools }),
+							onReply !== void 0 && onThread !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								className: "dsh-chatroom-message-actions",
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									className: "dsh-chatroom-reply-button",
+									type: "button",
+									onClick: onReply,
+									children: "↩ 回复"
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									className: "dsh-chatroom-reply-button",
+									type: "button",
+									onClick: onThread,
+									children: "⑂ 分支"
+								})]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ChatroomMessageContextMenu, {
+						tools,
+						position: menu.position,
+						close: menu.close
+					})
+				]
 			});
 		}
 		function FileCard({ file }) {
@@ -870,14 +1250,52 @@ window.__ModuleLoader__.load({
 				]
 			});
 		}
-		function replyTarget(node, projection) {
+		function ForwardCard({ forward }) {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("details", {
+				className: "dsh-chatroom-forward-card",
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("summary", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("strong", { children: [
+					"合并转发 · ",
+					forward.items.length,
+					" 条消息"
+				] }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("small", { children: ["来自 ", forward.sourceRoomTitle] })] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { children: forward.items.map((item) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("article", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("strong", { children: [item.displayName, /* @__PURE__ */ (0, react_jsx_runtime.jsx)("time", { children: formatTime(item.createdAt) })] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: item.text })] }, item.messageId)) })]
+			});
+		}
+		function messageTarget(node, projection) {
 			const fileText = projection.files.length === 0 ? "" : projection.files.map((file) => file.name).join("、");
-			const text = (projection.text.trim() || fileText || "图片消息").replace(/\s+/gu, " ");
+			const forwardText = projection.forward === void 0 ? "" : `合并转发 ${projection.forward.items.length} 条消息`;
+			const text = (projection.text.trim() || fileText || forwardText || "图片消息").replace(/\s+/gu, " ");
 			return {
 				messageId: `${node.kind}:${node.data.seq}`,
+				role: "human",
 				displayName: projection.displayName ?? "参与者",
-				text: [...text].slice(0, 120).join("")
+				text: [...text].slice(0, 120).join(""),
+				createdAt: node.data.time
 			};
+		}
+		function replyTarget(message) {
+			return {
+				messageId: message.messageId,
+				displayName: message.displayName,
+				text: message.text
+			};
+		}
+		function messageTools(props, room, roomId, message) {
+			return {
+				roomId,
+				message,
+				reactions: room.reactions,
+				identity: room.identity,
+				selected: room.selectionRoomId === roomId && room.selectedMessages.some((item) => item.messageId === message.messageId),
+				toggleReaction: props.toggleReaction,
+				openForward: props.openForward,
+				toggleSelection: props.toggleMessageSelection
+			};
+		}
+		function formatTime(time) {
+			return new Date(time).toLocaleTimeString([], {
+				hour: "2-digit",
+				minute: "2-digit"
+			});
 		}
 		function formatFileSize(bytes) {
 			if (bytes < 1024) return `${bytes} B`;
@@ -898,6 +1316,7 @@ window.__ModuleLoader__.load({
 				identity: void 0,
 				online: 0,
 				members: [],
+				reactions: [],
 				membersOpen: false,
 				error: void 0,
 				composerRoomId: void 0,
@@ -911,7 +1330,12 @@ window.__ModuleLoader__.load({
 				threadError: void 0,
 				unreadCount: 0,
 				toasts: [],
-				notificationsEnabled: notificationPermission() === "granted"
+				notificationsEnabled: notificationPermission() === "granted",
+				selectionRoomId: void 0,
+				selectedMessages: [],
+				forwardOpen: false,
+				forwardBusy: false,
+				forwardError: void 0
 			};
 			listeners = /* @__PURE__ */ new Set();
 			eventSource;
@@ -1005,9 +1429,13 @@ window.__ModuleLoader__.load({
 						connection: "offline",
 						online: 0,
 						members: [],
+						reactions: [],
 						membersOpen: false,
 						thread: void 0,
-						threadMessages: []
+						threadMessages: [],
+						selectionRoomId: void 0,
+						selectedMessages: [],
+						forwardOpen: false
 					});
 					return;
 				}
@@ -1022,9 +1450,13 @@ window.__ModuleLoader__.load({
 					connection: "connecting",
 					online: 0,
 					members: [],
+					reactions: [],
 					membersOpen: false,
 					thread: void 0,
-					threadMessages: []
+					threadMessages: [],
+					selectionRoomId: void 0,
+					selectedMessages: [],
+					forwardOpen: false
 				});
 				this.clearUnread();
 				this.openEvents(room);
@@ -1112,6 +1544,91 @@ window.__ModuleLoader__.load({
 					reply: void 0,
 					composerError: void 0
 				});
+			};
+			/** Toggle one reaction and replace the message summary immediately. */
+			toggleReaction = async (roomId, messageId, emoji) => {
+				try {
+					const reaction = await requestJson(`${CHATROOM_API_PREFIX}/reactions/toggle`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							roomId,
+							messageId,
+							emoji
+						})
+					});
+					this.replaceReaction(reaction);
+				} catch (error) {
+					this.set({ composerError: errorMessage(error) });
+				}
+			};
+			/** Add or remove one message from the current room selection. */
+			toggleMessageSelection = (roomId, message) => {
+				const current = this.snapshot.selectionRoomId === roomId ? this.snapshot.selectedMessages : [];
+				const selected = current.some((item) => item.messageId === message.messageId) ? current.filter((item) => item.messageId !== message.messageId) : [...current, message];
+				this.set({
+					selectionRoomId: selected.length === 0 ? void 0 : roomId,
+					selectedMessages: selected,
+					forwardOpen: false,
+					forwardError: void 0
+				});
+			};
+			/** Open the target-room chooser for one message or the active selection. */
+			openForward = (roomId, message) => {
+				const selected = this.snapshot.selectionRoomId === roomId ? this.snapshot.selectedMessages : [];
+				const messages = message === void 0 ? selected : selected.some((item) => item.messageId === message.messageId) ? selected : [message];
+				if (messages.length === 0) return;
+				this.set({
+					selectionRoomId: roomId,
+					selectedMessages: messages,
+					forwardOpen: true,
+					forwardError: void 0
+				});
+			};
+			/** Cancel message selection and merged-forward composition. */
+			clearMessageSelection = () => {
+				this.set({
+					selectionRoomId: void 0,
+					selectedMessages: [],
+					forwardOpen: false,
+					forwardBusy: false,
+					forwardError: void 0
+				});
+			};
+			/** Close only the forward target chooser while retaining selected messages. */
+			closeForward = () => {
+				this.set({
+					forwardOpen: false,
+					forwardError: void 0
+				});
+			};
+			/** Send the current selection to another shared room as one merged card. */
+			forwardSelected = async (targetRoomId) => {
+				const sourceRoomId = this.snapshot.selectionRoomId;
+				if (sourceRoomId === void 0 || this.snapshot.selectedMessages.length === 0 || this.snapshot.forwardBusy) return false;
+				this.set({
+					forwardBusy: true,
+					forwardError: void 0
+				});
+				try {
+					await requestJson(`${CHATROOM_API_PREFIX}/forward`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							sourceRoomId,
+							targetRoomId,
+							messages: this.snapshot.selectedMessages
+						})
+					});
+					this.clearMessageSelection();
+					return true;
+				} catch (error) {
+					this.set({
+						forwardBusy: false,
+						forwardError: errorMessage(error)
+					});
+					return false;
+				}
 			};
 			/** Capture files and reply metadata for one native prompt submission. */
 			composition = (roomId) => {
@@ -1402,6 +1919,7 @@ window.__ModuleLoader__.load({
 							identity: event.identity,
 							online: event.online,
 							members: event.members,
+							reactions: event.reactions,
 							error: void 0
 						});
 						return;
@@ -1414,7 +1932,16 @@ window.__ModuleLoader__.load({
 					case "thread-message":
 						if (this.snapshot.thread?.id !== event.message.threadId || this.snapshot.threadMessages.some((message) => message.id === event.message.id)) return;
 						this.set({ threadMessages: [...this.snapshot.threadMessages, event.message] });
+						return;
+					case "reaction":
+						this.replaceReaction(event.reaction);
+						return;
 				}
+			}
+			replaceReaction(reaction) {
+				if (this.snapshot.room?.id !== reaction.roomId) return;
+				const without = this.snapshot.reactions.filter((item) => item.messageId !== reaction.messageId || item.emoji !== reaction.emoji);
+				this.set({ reactions: reaction.participantIds.length === 0 ? without : [...without, reaction] });
 			}
 			receiveNotification(notification) {
 				if (notification.participantId === this.snapshot.identity?.participantId) return;
@@ -1473,12 +2000,21 @@ window.__ModuleLoader__.load({
 		}
 		/** Serialize browser Files only at submission time, keeping bytes out of observable state. */
 		async function serializePendingFiles(files) {
-			return await Promise.all(files.map(async ({ file }) => ({
-				type: "file",
-				name: file.name,
-				mediaType: file.type === "" ? "application/octet-stream" : file.type,
-				data: bytesToBase64(new Uint8Array(await file.arrayBuffer()))
-			})));
+			return await Promise.all(files.map(async ({ file }) => {
+				const data = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
+				if (file.type === "image/png" || file.type === "image/jpeg" || file.type === "image/webp" || file.type === "image/gif") return {
+					type: "image",
+					name: file.name,
+					mediaType: file.type,
+					data
+				};
+				return {
+					type: "file",
+					name: file.name,
+					mediaType: file.type === "" ? "application/octet-stream" : file.type,
+					data
+				};
+			}));
 		}
 		var HttpError = class extends Error {
 			status;
@@ -2153,10 +2689,96 @@ window.__ModuleLoader__.load({
 .dsh-chatroom-file-hint { color: var(--text-secondary, #6b7280); }
 .dsh-chatroom-composer-error { color: #d14343; font-size: 12px; }
 
+.dsh-chatroom-composer-actions { position: relative; display: inline-flex; align-items: center; gap: 2px; }
+.dsh-chatroom-emoji-picker {
+  position: absolute;
+  z-index: 80;
+  bottom: 42px;
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(6, 36px);
+  gap: 4px;
+  border: 1px solid var(--border-primary, #e5e7eb);
+  border-radius: 14px;
+  background: var(--bg-primary, #fff);
+  padding: 10px;
+  box-shadow: 0 14px 36px rgb(15 23 42 / 18%);
+}
+.dsh-chatroom-emoji-picker button { display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 9px; background: transparent; font-size: 20px; cursor: pointer; }
+.dsh-chatroom-emoji-picker button:hover { background: var(--bg-secondary, #f3f4f6); }
+
+.dsh-chatroom-participant-message[data-dsh-chatroom-selected="true"],
+[data-time-hover-root][data-dsh-chatroom-selected] {
+  border-radius: 12px;
+  outline: 2px solid color-mix(in srgb, var(--brand-primary, #4f7cff) 45%, transparent);
+  outline-offset: 5px;
+}
+
+.dsh-chatroom-reaction-bar { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 3px; }
+.dsh-chatroom-reaction-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 38px;
+  height: 25px;
+  border: 1px solid var(--border-primary, #e5e7eb);
+  border-radius: 13px;
+  background: var(--bg-primary, #fff);
+  padding: 1px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.dsh-chatroom-reaction-bar button[aria-pressed="true"] { border-color: var(--brand-primary, #4f7cff); background: color-mix(in srgb, var(--brand-primary, #4f7cff) 10%, transparent); }
+.dsh-chatroom-reaction-bar small { color: var(--text-secondary, #6b7280); font-size: 11px; }
+
+.dsh-chatroom-context-menu {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  width: 228px;
+  border: 1px solid var(--border-primary, #e5e7eb);
+  border-radius: 13px;
+  background: var(--bg-primary, #fff);
+  padding: 6px;
+  box-shadow: 0 16px 42px rgb(15 23 42 / 22%);
+}
+.dsh-chatroom-context-menu > button { display: flex; align-items: center; gap: 9px; border: 0; border-radius: 8px; background: transparent; padding: 9px 10px; color: var(--text-primary, #111827); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.dsh-chatroom-context-menu > button:hover { background: var(--bg-secondary, #f3f4f6); }
+.dsh-chatroom-context-reactions { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; margin-bottom: 5px; border-bottom: 1px solid var(--border-primary, #e5e7eb); padding-bottom: 6px; }
+.dsh-chatroom-context-reactions button { display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 8px; background: transparent; font-size: 18px; cursor: pointer; }
+.dsh-chatroom-context-reactions button:hover { background: var(--bg-secondary, #f3f4f6); transform: scale(1.08); }
+
+.dsh-chatroom-forward-card { width: min(460px, 82vw); margin-top: 6px; border: 1px solid var(--border-primary, #e5e7eb); border-radius: 13px; background: var(--bg-primary, #fff); overflow: hidden; }
+.dsh-chatroom-forward-card summary { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; cursor: pointer; list-style: none; }
+.dsh-chatroom-forward-card summary::-webkit-details-marker { display: none; }
+.dsh-chatroom-forward-card summary small { color: var(--text-secondary, #6b7280); font-size: 11px; }
+.dsh-chatroom-forward-card > div { max-height: 360px; overflow-y: auto; border-top: 1px solid var(--border-primary, #e5e7eb); padding: 4px 14px; }
+.dsh-chatroom-forward-card article { padding: 10px 0; border-bottom: 1px solid var(--border-primary, #e5e7eb); }
+.dsh-chatroom-forward-card article:last-child { border-bottom: 0; }
+.dsh-chatroom-forward-card article strong { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.dsh-chatroom-forward-card article time { color: var(--text-secondary, #6b7280); font-weight: 400; }
+.dsh-chatroom-forward-card article p { margin: 4px 0 0; color: var(--text-primary, #111827); font-size: 13px; line-height: 1.45; }
+
+.dsh-chatroom-selection-bar { position: fixed; z-index: 170; bottom: 92px; left: 50%; display: flex; align-items: center; gap: 10px; border: 1px solid var(--border-primary, #e5e7eb); border-radius: 14px; background: var(--bg-primary, #fff); padding: 9px 12px; box-shadow: 0 12px 34px rgb(15 23 42 / 18%); transform: translateX(-50%); }
+.dsh-chatroom-selection-bar strong { margin-right: 8px; font-size: 13px; }
+.dsh-chatroom-selection-bar button { border: 0; border-radius: 8px; background: var(--bg-secondary, #f3f4f6); padding: 7px 10px; font: inherit; cursor: pointer; }
+.dsh-chatroom-selection-bar button:first-of-type { background: var(--brand-primary, #4f7cff); color: #fff; }
+
+.dsh-chatroom-forward-layer { z-index: 190; }
+.dsh-chatroom-forward-dialog { width: min(440px, calc(100vw - 48px)); }
+.dsh-chatroom-forward-targets { display: flex; flex-direction: column; gap: 7px; max-height: 360px; overflow-y: auto; }
+.dsh-chatroom-forward-targets > button { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 8px; width: 100%; border: 1px solid var(--border-primary, #e5e7eb); border-radius: 10px; background: var(--bg-primary, #fff); padding: 10px; color: var(--text-primary, #111827); font: inherit; text-align: left; cursor: pointer; }
+.dsh-chatroom-forward-targets > button:hover { border-color: var(--brand-primary, #4f7cff); background: color-mix(in srgb, var(--brand-primary, #4f7cff) 6%, transparent); }
+.dsh-chatroom-forward-targets small { color: var(--text-secondary, #6b7280); }
+.dsh-chatroom-forward-empty { border-radius: 10px; background: var(--bg-secondary, #f3f4f6); padding: 18px; color: var(--text-secondary, #6b7280); text-align: center; }
+
 @media (max-width: 640px) {
   .dsh-chatroom-avatar-grid { grid-template-columns: repeat(4, 1fr); }
   .dsh-chatroom-avatar { flex-basis: 34px; width: 34px; height: 34px; font-size: 19px; }
   .dsh-chatroom-message-column { max-width: calc(100% - 44px); }
+  .dsh-chatroom-context-menu { width: 216px; }
+  .dsh-chatroom-selection-bar { bottom: 84px; width: calc(100vw - 28px); justify-content: center; }
 }
 `;
 		//#endregion
@@ -2222,7 +2844,13 @@ window.__ModuleLoader__.load({
 					closeThread: store.closeThread,
 					sendThreadMessage: store.sendThreadMessage,
 					enableSystemNotifications: store.enableSystemNotifications,
-					dismissToast: store.dismissToast
+					dismissToast: store.dismissToast,
+					toggleReaction: store.toggleReaction,
+					openForward: store.openForward,
+					closeForward: store.closeForward,
+					forwardSelected: store.forwardSelected,
+					toggleMessageSelection: store.toggleMessageSelection,
+					clearMessageSelection: store.clearMessageSelection
 				})
 			}, ChatroomEntry));
 			ctx.slots.inject("conversation.session.header.actions", () => ctx.slots.register({
@@ -2266,7 +2894,10 @@ window.__ModuleLoader__.load({
 				inject: () => ({
 					hooks: { chatroom: store },
 					setReply: store.setReply,
-					openThread: store.openThread
+					openThread: store.openThread,
+					toggleReaction: store.toggleReaction,
+					openForward: store.openForward,
+					toggleMessageSelection: store.toggleMessageSelection
 				})
 			}, ChatroomAssistantReplyAction));
 			ctx.slots.inject("conversation.chat.node", () => {
@@ -2282,7 +2913,10 @@ window.__ModuleLoader__.load({
 						hooks: { chatroom: store },
 						nativeMessageView,
 						setReply: store.setReply,
-						openThread: store.openThread
+						openThread: store.openThread,
+						toggleReaction: store.toggleReaction,
+						openForward: store.openForward,
+						toggleMessageSelection: store.toggleMessageSelection
 					})
 				}, ChatroomUserMessageNodeView);
 			});
@@ -2299,12 +2933,15 @@ window.__ModuleLoader__.load({
 						hooks: { chatroom: store },
 						nativeMessageView,
 						setReply: store.setReply,
-						openThread: store.openThread
+						openThread: store.openThread,
+						toggleReaction: store.toggleReaction,
+						openForward: store.openForward,
+						toggleMessageSelection: store.toggleMessageSelection
 					})
 				}, ChatroomSteeringMessageNodeView);
 			});
 		}
-		/** Build the room-scoped source contributed to RC7's native @ menu. */
+		/** Build the room-scoped AI and member source contributed to RC7's native @ menu. */
 		function createChatroomAiSource(store) {
 			return {
 				trigger: "@",
@@ -2313,17 +2950,28 @@ window.__ModuleLoader__.load({
 				candidates(session, { query }) {
 					const room = store.roomForSession(String(session.sessionId));
 					if (room === void 0) return Promise.resolve([]);
-					const names = [.../* @__PURE__ */ new Set(["AI", room.aiDisplayName])];
-					const needle = query.toLocaleLowerCase();
-					return Promise.resolve(names.filter((name) => name.toLocaleLowerCase().includes(needle)).map((name) => ({
+					const snapshot = store.getSnapshot();
+					const candidates = [...[.../* @__PURE__ */ new Set(["AI", room.aiDisplayName])].map((name) => ({
 						name,
 						icon: "✦",
 						description: "提及后触发 AI 回复"
-					})));
+					})), ...snapshot.members.filter((member) => member.participantId !== snapshot.identity?.participantId).map((member) => ({
+						name: member.displayName,
+						icon: "●",
+						description: member.online ? "在线成员" : "群成员"
+					}))].filter((candidate, index, all) => all.findIndex((item) => item.name === candidate.name) === index);
+					const needle = query.toLocaleLowerCase();
+					return Promise.resolve(candidates.filter((candidate) => candidate.name.toLocaleLowerCase().includes(needle)));
 				},
 				lexicon(session) {
 					const room = store.roomForSession(String(session.sessionId));
-					return room === void 0 ? [] : [.../* @__PURE__ */ new Set(["AI", room.aiDisplayName])];
+					if (room === void 0) return [];
+					const snapshot = store.getSnapshot();
+					return [.../* @__PURE__ */ new Set([
+						"AI",
+						room.aiDisplayName,
+						...snapshot.members.filter((member) => member.participantId !== snapshot.identity?.participantId).map((member) => member.displayName)
+					])];
 				},
 				subscribeLexicon(_session, listener) {
 					return store.subscribe(listener);

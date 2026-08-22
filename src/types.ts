@@ -1,6 +1,7 @@
 /** Shared JSON contracts between the Host room service and browser client. */
 
 import type { ChatroomAvatarId } from './avatars.js'
+import type { ChatroomReactionEmoji } from './reactions.js'
 
 export type ChatroomMessageRole = 'human' | 'ai'
 
@@ -31,6 +32,30 @@ export interface ChatroomFileReference {
   readonly name: string
   readonly mediaType: string
   readonly bytes: number
+}
+
+/** One durable reaction summary for a native room message. */
+export interface ChatroomReaction {
+  readonly roomId: string
+  readonly messageId: string
+  readonly emoji: ChatroomReactionEmoji
+  readonly participantIds: readonly string[]
+}
+
+/** One selected message included in a merged forward. */
+export interface ChatroomForwardItem {
+  readonly messageId: string
+  readonly role: ChatroomMessageRole
+  readonly displayName: string
+  readonly text: string
+  readonly createdAt: number
+}
+
+/** Durable merged-forward metadata rendered as one expandable message card. */
+export interface ChatroomForwardBundle {
+  readonly sourceRoomId: string
+  readonly sourceRoomTitle: string
+  readonly items: readonly ChatroomForwardItem[]
 }
 
 /** One persisted room message delivered to every connected participant. */
@@ -100,6 +125,20 @@ export interface ChatroomPromptResponse {
   readonly aiTriggered: boolean
 }
 
+/** Toggle request for one participant and message reaction. */
+export interface ChatroomReactionRequest {
+  readonly roomId: string
+  readonly messageId: string
+  readonly emoji: ChatroomReactionEmoji
+}
+
+/** Merged-forward admission request. */
+export interface ChatroomForwardRequest {
+  readonly sourceRoomId: string
+  readonly targetRoomId: string
+  readonly messages: readonly ChatroomForwardItem[]
+}
+
 /** Root message used to create or reopen a branch conversation. */
 export interface ChatroomThreadRoot extends ChatroomReplyReference {
   readonly role: ChatroomMessageRole
@@ -159,6 +198,7 @@ export interface ChatroomSnapshotEvent {
   readonly identity: ChatroomIdentity
   readonly online: number
   readonly members: readonly ChatroomMember[]
+  readonly reactions: readonly ChatroomReaction[]
 }
 
 /** Online connection count event. */
@@ -174,13 +214,19 @@ export interface ChatroomThreadMessageEvent {
   readonly message: ChatroomThreadMessage
 }
 
+/** One reaction replacement delivered to every participant in a room. */
+export interface ChatroomReactionEvent {
+  readonly type: 'reaction'
+  readonly reaction: ChatroomReaction
+}
+
 /** One global message alert delivered independently of active-room presence. */
 export interface ChatroomNotificationEvent {
   readonly type: 'notification'
   readonly notification: ChatroomNotification
 }
 
-export type ChatroomServerEvent = ChatroomSnapshotEvent | ChatroomPresenceEvent | ChatroomThreadMessageEvent
+export type ChatroomServerEvent = ChatroomSnapshotEvent | ChatroomPresenceEvent | ChatroomThreadMessageEvent | ChatroomReactionEvent
 
 /** Browser-visible error envelope. */
 export interface ChatroomErrorResponse {

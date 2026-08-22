@@ -1,10 +1,11 @@
-import type { ChatroomIdentity, ChatroomPromptContentPart } from './types.js';
+import type { ChatroomForwardBundle, ChatroomIdentity, ChatroomPromptContentPart } from './types.js';
 import type { ChatroomFileReference, ChatroomReplyReference } from './types.js';
 import { type ChatroomAvatarId } from './avatars.js';
 export declare const PARTICIPANT_MARKER_START = "\u2063dsh-chatroom:";
 export declare const PARTICIPANT_MARKER_END = "\u2063";
 export declare const REPLY_MARKER_START = "\u2063dsh-chatroom-reply:";
 export declare const FILE_MARKER_START = "\u2063dsh-chatroom-file:";
+export declare const FORWARD_MARKER_START = "\u2063dsh-chatroom-forward:";
 /** Add a durable, visually invisible participant id before the display name. */
 export declare function identifyChatroomText(text: string, identity: ChatroomIdentity): string;
 /** Add the room identity to the first text block without altering image order. */
@@ -28,6 +29,13 @@ export declare function identifyFileText(file: ChatroomFileReference): string;
 export declare function projectFileText(text: string): {
     text: string;
     files: ChatroomFileReference[];
+};
+/** Add one merged-forward payload plus a readable model transcript. */
+export declare function identifyForwardText(bundle: ChatroomForwardBundle): string;
+/** Remove a merged-forward transcript while returning its browser card metadata. */
+export declare function projectForwardText(text: string): {
+    text: string;
+    forward?: ChatroomForwardBundle;
 };
 /** Whether visible room text explicitly mentions the generic or configured AI name. */
 export declare function mentionsAi(content: readonly ChatroomPromptContentPart[], aiDisplayName: string): boolean;

@@ -16,7 +16,7 @@ describe('native prompt admission', () => {
       image,
     ])
     expect(identifyPrompt([image], identity)).toEqual([
-      { type: 'text', text: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：发送了一张图片。' },
+      { type: 'text', text: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：' },
       image,
     ])
   })

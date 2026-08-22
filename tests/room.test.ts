@@ -6,7 +6,7 @@ import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import sharp from 'sharp'
 import type { Config } from '../src/config.js'
 import { ChatroomRuntime } from '../src/room.js'
-import { projectFileText } from '../src/message.js'
+import { participantMarker, projectFileText, projectForwardText } from '../src/message.js'
 
 describe('ChatroomRuntime', () => {
   it('appends human chat without waking AI and wakes only on explicit mention', async () => {
@@ -80,6 +80,7 @@ describe('ChatroomRuntime', () => {
     const text = message?.content.filter((block: { type: string }) => block.type === 'text')
       .map((block: { text?: string }) => block.text ?? '').join('') ?? ''
     expect(text).toContain('回复 Bob「前文」')
+    expect(text).not.toContain('发送了文件')
     const projected = projectFileText(text)
     expect(projected.files).toMatchObject([{ name: 'note.txt', mediaType: 'text/plain', bytes: 5 }])
     const stored = runtime.file(projected.files[0]!.id)
@@ -156,6 +157,62 @@ describe('ChatroomRuntime', () => {
     })
     await runtime.stop()
     expect(() => { unsubscribe() }).not.toThrow()
+  })
+
+  it('persists reaction toggles and broadcasts replacement summaries', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', alice)
+    const writes: string[] = []
+    runtime.subscribe('lobby', alice, {
+      destroyed: false,
+      writableEnded: false,
+      write: vi.fn((value: string) => { writes.push(value); return true }),
+      end: vi.fn(),
+    } as never)
+
+    await expect(runtime.toggleReaction('lobby', 'user:1', '👍', alice)).resolves.toEqual({
+      roomId: 'lobby', messageId: 'user:1', emoji: '👍', participantIds: ['alice-id'],
+    })
+    await expect(runtime.toggleReaction('lobby', 'user:1', '👍', alice)).resolves.toEqual({
+      roomId: 'lobby', messageId: 'user:1', emoji: '👍', participantIds: [],
+    })
+    const events = writes.filter(value => value.startsWith('data: '))
+      .map(value => JSON.parse(value.slice('data: '.length)) as { type: string; reaction?: { participantIds: string[] } })
+    expect(events.filter(event => event.type === 'reaction').map(event => event.reaction?.participantIds)).toEqual([
+      ['alice-id'], [],
+    ])
+    await runtime.stop()
+  })
+
+  it('forwards selected messages as one native card without waking AI', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const target = await runtime.createRoom('项目二', identity)
+    const items = [
+      { messageId: 'user:1', role: 'human' as const, displayName: 'Bob', text: '方案 A', createdAt: 1 },
+      { messageId: 'assistant:2', role: 'ai' as const, displayName: 'DeepSeek', text: '结论 B', createdAt: 2 },
+    ]
+
+    await expect(runtime.forwardMessages('lobby', target.id, items, identity)).resolves.toEqual({
+      accepted: true, aiTriggered: false,
+    })
+    expect(harness.agents[1]?.followup).not.toHaveBeenCalled()
+    const message = harness.agents[1]?.session.append.mock.calls
+      .find(call => (call[1] as { content?: unknown } | undefined)?.content !== undefined)?.[1]
+    const raw = message?.content.find((block: { type: string }) => block.type === 'text')?.text ?? ''
+    const marker = participantMarker(raw)
+    expect(marker?.participantId).toBe('alice-id')
+    const visible = raw.slice(marker?.length ?? 0).replace(/^Alice：/u, '')
+    expect(projectForwardText(visible)).toEqual({
+      text: '',
+      forward: { sourceRoomId: 'lobby', sourceRoomTitle: 'AI 聊天室', items },
+    })
+    await runtime.stop()
   })
 })
 

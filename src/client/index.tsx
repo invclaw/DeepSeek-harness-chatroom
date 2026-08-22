@@ -78,6 +78,12 @@ export function apply(ctx: ClientContext): void {
       sendThreadMessage: store.sendThreadMessage,
       enableSystemNotifications: store.enableSystemNotifications,
       dismissToast: store.dismissToast,
+      toggleReaction: store.toggleReaction,
+      openForward: store.openForward,
+      closeForward: store.closeForward,
+      forwardSelected: store.forwardSelected,
+      toggleMessageSelection: store.toggleMessageSelection,
+      clearMessageSelection: store.clearMessageSelection,
     }),
   }, ChatroomEntry))
 
@@ -122,7 +128,14 @@ export function apply(ctx: ClientContext): void {
     name: 'conversation.chat.assistant-actions',
     id: 'chatroom-reply',
     order: 5,
-    inject: () => ({ hooks: { chatroom: store }, setReply: store.setReply, openThread: store.openThread }),
+    inject: () => ({
+      hooks: { chatroom: store },
+      setReply: store.setReply,
+      openThread: store.openThread,
+      toggleReaction: store.toggleReaction,
+      openForward: store.openForward,
+      toggleMessageSelection: store.toggleMessageSelection,
+    }),
   }, ChatroomAssistantReplyAction))
 
   ctx.slots.inject('conversation.chat.node', () => {
@@ -135,7 +148,15 @@ export function apply(ctx: ClientContext): void {
       key: 'user',
       priority: -10,
       locale: 'conversation',
-      inject: () => ({ hooks: { chatroom: store }, nativeMessageView, setReply: store.setReply, openThread: store.openThread }),
+      inject: () => ({
+        hooks: { chatroom: store },
+        nativeMessageView,
+        setReply: store.setReply,
+        openThread: store.openThread,
+        toggleReaction: store.toggleReaction,
+        openForward: store.openForward,
+        toggleMessageSelection: store.toggleMessageSelection,
+      }),
     }, ChatroomUserMessageNodeView)
   })
 
@@ -149,12 +170,20 @@ export function apply(ctx: ClientContext): void {
       key: 'steering',
       priority: -10,
       locale: 'conversation',
-      inject: () => ({ hooks: { chatroom: store }, nativeMessageView, setReply: store.setReply, openThread: store.openThread }),
+      inject: () => ({
+        hooks: { chatroom: store },
+        nativeMessageView,
+        setReply: store.setReply,
+        openThread: store.openThread,
+        toggleReaction: store.toggleReaction,
+        openForward: store.openForward,
+        toggleMessageSelection: store.toggleMessageSelection,
+      }),
     }, ChatroomSteeringMessageNodeView)
   })
 }
 
-/** Build the room-scoped source contributed to RC7's native @ menu. */
+/** Build the room-scoped AI and member source contributed to RC7's native @ menu. */
 export function createChatroomAiSource(store: ChatroomClientStore): InputTriggerSource {
   return {
     trigger: '@',
@@ -163,15 +192,27 @@ export function createChatroomAiSource(store: ChatroomClientStore): InputTrigger
     candidates(session, { query }) {
       const room = store.roomForSession(String(session.sessionId))
       if (room === undefined) return Promise.resolve([])
-      const names = [...new Set(['AI', room.aiDisplayName])]
+      const snapshot = store.getSnapshot()
+      const candidates = [
+        ...[...new Set(['AI', room.aiDisplayName])].map(name => ({ name, icon: '✦', description: '提及后触发 AI 回复' })),
+        ...snapshot.members
+          .filter(member => member.participantId !== snapshot.identity?.participantId)
+          .map(member => ({ name: member.displayName, icon: '●', description: member.online ? '在线成员' : '群成员' })),
+      ].filter((candidate, index, all) => all.findIndex(item => item.name === candidate.name) === index)
       const needle = query.toLocaleLowerCase()
-      return Promise.resolve(names
-        .filter(name => name.toLocaleLowerCase().includes(needle))
-        .map(name => ({ name, icon: '✦', description: '提及后触发 AI 回复' })))
+      return Promise.resolve(candidates.filter(candidate => candidate.name.toLocaleLowerCase().includes(needle)))
     },
     lexicon(session) {
       const room = store.roomForSession(String(session.sessionId))
-      return room === undefined ? [] : [...new Set(['AI', room.aiDisplayName])]
+      if (room === undefined) return []
+      const snapshot = store.getSnapshot()
+      return [...new Set([
+        'AI',
+        room.aiDisplayName,
+        ...snapshot.members
+          .filter(member => member.participantId !== snapshot.identity?.participantId)
+          .map(member => member.displayName),
+      ])]
     },
     subscribeLexicon(_session, listener) {
       return store.subscribe(listener)
