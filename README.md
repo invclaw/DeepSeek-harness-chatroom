@@ -25,7 +25,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.7.2 adds AI/member mention candidates to the branch composer and lets text-only models safely continue after images appear in room or inherited branch history. Images stay in the native Session and chat UI; replacement happens only in model requests owned by this plugin and does not affect other Harness Sessions.
+Version 0.7.3 adds AI/member mention candidates to the branch composer and lets text-only models safely continue after images appear in room or inherited branch history. Images stay in the native Session and chat UI; replacement happens only in model requests owned by this plugin and does not affect other Harness Sessions. Native message enhancement now waits for Harness renderers, so reinstalling the plugin in a different client load order still reuses the native bubbles.
 
 ## Requirements
 

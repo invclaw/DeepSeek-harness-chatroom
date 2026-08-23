@@ -3183,46 +3183,55 @@ window.__ModuleLoader__.load({
 					toggleMessageSelection: store.toggleMessageSelection
 				})
 			}, ChatroomAssistantReplyAction));
-			ctx.slots.inject("conversation.chat.node", () => {
-				const nativeEntry = ctx.slots.entries("conversation.chat.node").find((entry) => entry.options.key === "user" && (entry.options.priority ?? 0) === 0);
-				if (nativeEntry === void 0) throw new Error("chatroom: native user message renderer unavailable");
-				const nativeMessageView = nativeEntry.component;
-				return ctx.slots.register({
-					name: "conversation.chat.node",
-					key: "user",
-					priority: -10,
-					locale: "conversation",
-					inject: () => ({
-						hooks: { chatroom: store },
-						nativeMessageView,
-						setReply: store.setReply,
-						openThread: store.openThread,
-						toggleReaction: store.toggleReaction,
-						openForward: store.openForward,
-						toggleMessageSelection: store.toggleMessageSelection
-					})
-				}, ChatroomUserMessageNodeView);
-			});
-			ctx.slots.inject("conversation.chat.node", () => {
-				const nativeEntry = ctx.slots.entries("conversation.chat.node").find((entry) => entry.options.key === "steering" && (entry.options.priority ?? 0) === 0);
-				if (nativeEntry === void 0) throw new Error("chatroom: native steering message renderer unavailable");
-				const nativeMessageView = nativeEntry.component;
-				return ctx.slots.register({
-					name: "conversation.chat.node",
-					key: "steering",
-					priority: -10,
-					locale: "conversation",
-					inject: () => ({
-						hooks: { chatroom: store },
-						nativeMessageView,
-						setReply: store.setReply,
-						openThread: store.openThread,
-						toggleReaction: store.toggleReaction,
-						openForward: store.openForward,
-						toggleMessageSelection: store.toggleMessageSelection
-					})
-				}, ChatroomSteeringMessageNodeView);
-			});
+			ctx.slots.inject("conversation.chat.node", () => mountAfterNativeMessageView(() => ctx.slots.entries("conversation.chat.node").find((entry) => entry.options.key === "user" && (entry.options.priority ?? 0) === 0)?.component, (listener) => ctx.slots.subscribe("conversation.chat.node", listener), (nativeMessageView) => ctx.slots.register({
+				name: "conversation.chat.node",
+				key: "user",
+				priority: -10,
+				locale: "conversation",
+				inject: () => chatroomMessageInjection(store, nativeMessageView)
+			}, ChatroomUserMessageNodeView)));
+			ctx.slots.inject("conversation.chat.node", () => mountAfterNativeMessageView(() => ctx.slots.entries("conversation.chat.node").find((entry) => entry.options.key === "steering" && (entry.options.priority ?? 0) === 0)?.component, (listener) => ctx.slots.subscribe("conversation.chat.node", listener), (nativeMessageView) => ctx.slots.register({
+				name: "conversation.chat.node",
+				key: "steering",
+				priority: -10,
+				locale: "conversation",
+				inject: () => chatroomMessageInjection(store, nativeMessageView)
+			}, ChatroomSteeringMessageNodeView)));
+		}
+		/** Mount one wrapper only after its native renderer exists, independent of client-plugin load order. */
+		function mountAfterNativeMessageView(readNative, subscribe, mount) {
+			let mountedNative;
+			let disposeMounted;
+			const reconcile = () => {
+				const native = readNative();
+				if (native === mountedNative) return;
+				const dispose = disposeMounted;
+				disposeMounted = void 0;
+				mountedNative = void 0;
+				dispose?.();
+				if (native === void 0) return;
+				mountedNative = native;
+				disposeMounted = mount(native);
+			};
+			const unsubscribe = subscribe(reconcile);
+			reconcile();
+			return () => {
+				unsubscribe();
+				disposeMounted?.();
+				disposeMounted = void 0;
+				mountedNative = void 0;
+			};
+		}
+		function chatroomMessageInjection(store, nativeMessageView) {
+			return {
+				hooks: { chatroom: store },
+				nativeMessageView,
+				setReply: store.setReply,
+				openThread: store.openThread,
+				toggleReaction: store.toggleReaction,
+				openForward: store.openForward,
+				toggleMessageSelection: store.toggleMessageSelection
+			};
 		}
 		/** Build the room-scoped AI and member source contributed to RC7's native @ menu. */
 		function createChatroomAiSource(store) {
@@ -3273,6 +3282,7 @@ window.__ModuleLoader__.load({
 		exports.createChatroomAiSource = createChatroomAiSource;
 		exports.default = client_default;
 		exports.inject = inject;
+		exports.mountAfterNativeMessageView = mountAfterNativeMessageView;
 		return module.exports;
 	}
 });

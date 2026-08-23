@@ -138,49 +138,79 @@ export function apply(ctx: ClientContext): void {
     }),
   }, ChatroomAssistantReplyAction))
 
-  ctx.slots.inject('conversation.chat.node', () => {
-    const nativeEntry = ctx.slots.entries('conversation.chat.node').find(entry =>
-      entry.options.key === 'user' && (entry.options.priority ?? 0) === 0)
-    if (nativeEntry === undefined) throw new Error('chatroom: native user message renderer unavailable')
-    const nativeMessageView = nativeEntry.component as ComponentType<ChatNodeViewProps<'user'>>
-    return ctx.slots.register({
+  ctx.slots.inject('conversation.chat.node', () => mountAfterNativeMessageView(
+    () => ctx.slots.entries('conversation.chat.node').find(entry =>
+      entry.options.key === 'user' && (entry.options.priority ?? 0) === 0)?.component as
+        | ComponentType<ChatNodeViewProps<'user'>>
+        | undefined,
+    listener => ctx.slots.subscribe('conversation.chat.node', listener),
+    nativeMessageView => ctx.slots.register({
       name: 'conversation.chat.node',
       key: 'user',
       priority: -10,
       locale: 'conversation',
-      inject: () => ({
-        hooks: { chatroom: store },
-        nativeMessageView,
-        setReply: store.setReply,
-        openThread: store.openThread,
-        toggleReaction: store.toggleReaction,
-        openForward: store.openForward,
-        toggleMessageSelection: store.toggleMessageSelection,
-      }),
-    }, ChatroomUserMessageNodeView)
-  })
+      inject: () => chatroomMessageInjection(store, nativeMessageView),
+    }, ChatroomUserMessageNodeView),
+  ))
 
-  ctx.slots.inject('conversation.chat.node', () => {
-    const nativeEntry = ctx.slots.entries('conversation.chat.node').find(entry =>
-      entry.options.key === 'steering' && (entry.options.priority ?? 0) === 0)
-    if (nativeEntry === undefined) throw new Error('chatroom: native steering message renderer unavailable')
-    const nativeMessageView = nativeEntry.component as ComponentType<ChatNodeViewProps<'steering'>>
-    return ctx.slots.register({
+  ctx.slots.inject('conversation.chat.node', () => mountAfterNativeMessageView(
+    () => ctx.slots.entries('conversation.chat.node').find(entry =>
+      entry.options.key === 'steering' && (entry.options.priority ?? 0) === 0)?.component as
+        | ComponentType<ChatNodeViewProps<'steering'>>
+        | undefined,
+    listener => ctx.slots.subscribe('conversation.chat.node', listener),
+    nativeMessageView => ctx.slots.register({
       name: 'conversation.chat.node',
       key: 'steering',
       priority: -10,
       locale: 'conversation',
-      inject: () => ({
-        hooks: { chatroom: store },
-        nativeMessageView,
-        setReply: store.setReply,
-        openThread: store.openThread,
-        toggleReaction: store.toggleReaction,
-        openForward: store.openForward,
-        toggleMessageSelection: store.toggleMessageSelection,
-      }),
-    }, ChatroomSteeringMessageNodeView)
-  })
+      inject: () => chatroomMessageInjection(store, nativeMessageView),
+    }, ChatroomSteeringMessageNodeView),
+  ))
+}
+
+/** Mount one wrapper only after its native renderer exists, independent of client-plugin load order. */
+export function mountAfterNativeMessageView<T>(
+  readNative: () => T | undefined,
+  subscribe: (listener: () => void) => () => void,
+  mount: (native: T) => () => void,
+): () => void {
+  let mountedNative: T | undefined
+  let disposeMounted: (() => void) | undefined
+  const reconcile = (): void => {
+    const native = readNative()
+    if (native === mountedNative) return
+    const dispose = disposeMounted
+    disposeMounted = undefined
+    mountedNative = undefined
+    dispose?.()
+    if (native === undefined) return
+    mountedNative = native
+    disposeMounted = mount(native)
+  }
+  const unsubscribe = subscribe(reconcile)
+  reconcile()
+  return () => {
+    unsubscribe()
+    disposeMounted?.()
+    disposeMounted = undefined
+    mountedNative = undefined
+  }
+}
+
+function chatroomMessageInjection<T extends 'user' | 'steering'>(
+  store: ChatroomClientStore,
+  nativeMessageView: ComponentType<ChatNodeViewProps<T>>,
+) {
+  return {
+    hooks: { chatroom: store },
+    nativeMessageView,
+    setReply: store.setReply,
+    openThread: store.openThread,
+    toggleReaction: store.toggleReaction,
+    openForward: store.openForward,
+    toggleMessageSelection: store.toggleMessageSelection,
+  }
 }
 
 /** Build the room-scoped AI and member source contributed to RC7's native @ menu. */
