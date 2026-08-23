@@ -10,9 +10,11 @@ import type { ChatroomReactionEmoji } from '../reactions.js'
 import {
   BRANCH_FRAME_READY,
   branchFrameDocumentReady,
+  branchFrameTarget,
   branchFrameUrl,
   prepareBranchFrameSelection,
   restoreParentSessionSelection,
+  switchBranchFrame,
 } from './branch-frame.js'
 import type { ChatroomView } from './store.js'
 
@@ -50,7 +52,6 @@ export function ChatroomPanels(props: ChatroomPanelsProps): JSX.Element {
       <ToastStack toasts={props.room.toasts} dismiss={props.dismissToast} />
       {props.room.membersOpen && <MemberPanel {...props} />}
       {mountedThread !== undefined && <ThreadPanel
-        key={mountedThread.id}
         {...props}
         thread={mountedThread}
         open={visibleThread?.id === mountedThread.id}
@@ -180,11 +181,15 @@ function ThreadPanel(props: ChatroomPanelsProps & {
   const { thread } = props
   const parentSessionId = props.room.room?.sessionId
   const frameRef = useRef<HTMLIFrameElement>(null)
+  const frameSeed = useRef<{ thread: ChatroomThread; parentSessionId: string }>()
   const [frameInstance] = useState(() => ++branchFrameInstance)
   const [attempt, setAttempt] = useState(0)
   const [preparedAttempt, setPreparedAttempt] = useState(-1)
   const [ready, setReady] = useState(false)
   const [timedOut, setTimedOut] = useState(false)
+  if (frameSeed.current === undefined && parentSessionId !== undefined) {
+    frameSeed.current = { thread, parentSessionId }
+  }
   useLayoutEffect(() => {
     if (parentSessionId === undefined) return
     prepareBranchFrameSelection(thread.sessionId)
@@ -209,10 +214,14 @@ function ThreadPanel(props: ChatroomPanelsProps & {
     let timer: ReturnType<typeof globalThis.setTimeout>
     const probe = () => {
       if (settled) return
+      const frameWindow = frameRef.current?.contentWindow
+      if (frameWindow !== null && frameWindow !== undefined && parentSessionId !== undefined) {
+        switchBranchFrame(frameWindow, branchFrameTarget(thread, parentSessionId))
+      }
       try {
         const document = frameRef.current?.contentDocument
         if (document === null || document === undefined
-          || !branchFrameDocumentReady(document, thread.sessionId)) return
+          || !branchFrameDocumentReady(document, thread.sessionId, thread.root.text)) return
       } catch {
         // An incomplete same-origin iframe can withhold its document; the visible timeout owns recovery.
         return
@@ -242,7 +251,8 @@ function ThreadPanel(props: ChatroomPanelsProps & {
       globalThis.clearInterval(poll)
       globalThis.clearTimeout(timer)
     }
-  }, [attempt, thread.id, thread.root.text, thread.sessionId])
+  }, [attempt, parentSessionId, thread.id, thread.root.text, thread.sessionId])
+  const seed = frameSeed.current
   return (
     <aside
       className="dsh-chatroom-thread-panel"
@@ -260,14 +270,21 @@ function ThreadPanel(props: ChatroomPanelsProps & {
         : <div className="dsh-chatroom-thread-frame-shell">
           {preparedAttempt === attempt && <iframe
             className="dsh-chatroom-thread-frame"
-            key={`${thread.id}:${attempt}`}
+            key={`${frameInstance}:${attempt}`}
             ref={frameRef}
             title={`分支回复：${thread.root.text}`}
-            src={branchFrameUrl(thread, parentSessionId, `${frameInstance}:${attempt}`)}
+            src={branchFrameUrl(
+              seed?.thread ?? thread,
+              seed?.parentSessionId ?? parentSessionId,
+              `${frameInstance}:${attempt}`,
+            )}
           />}
           {!ready && <div className="dsh-chatroom-thread-frame-status" role="status">
             {timedOut
-              ? <><strong>分支加载超时</strong><button type="button" onClick={() => { setAttempt(value => value + 1) }}>重新加载</button></>
+              ? <><strong>分支加载超时</strong><button type="button" onClick={() => {
+                frameSeed.current = { thread, parentSessionId }
+                setAttempt(value => value + 1)
+              }}>重新加载</button></>
               : <><span>{attempt === 0 ? '正在加载分支…' : '正在重新加载分支…'}</span><small>正在初始化原生 Harness 分支会话</small></>}
           </div>}
         </div>}

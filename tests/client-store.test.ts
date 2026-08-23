@@ -89,6 +89,35 @@ describe('ChatroomClientStore', () => {
     expect(store.getSnapshot().open).toBe(false)
   })
 
+  it('retargets a retained branch runtime without carrying composer state across threads', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const first = {
+      threadId: 'thread-1', sessionId: 'chatroom-thread-v1-thread-1', roomId: room.id,
+      parentSessionId: room.sessionId,
+    }
+    const second = { ...first, threadId: 'thread-2', sessionId: 'chatroom-thread-v1-thread-2' }
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(identity, [room]))))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore(() => true, first)
+    await store.start()
+    store.addFiles(room.id, [{ name: 'note.txt' } as File])
+    store.setReply(room.id, { messageId: 'user:1', displayName: 'Bob', text: '旧分支引用' })
+
+    store.switchBranchFrame(second)
+
+    expect(store.getSnapshot()).toMatchObject({
+      branchFrame: second,
+      composerRoomId: undefined,
+      pendingFiles: [],
+      reply: undefined,
+      composerBusy: false,
+      composerError: undefined,
+    })
+    expect(store.agentTargetForSession(second.sessionId)).toEqual({ kind: 'thread', room, threadId: 'thread-2' })
+    expect(store.agentTargetForSession(first.sessionId)).toBeUndefined()
+  })
+
   it('creates a second independent room and adds it to the directory', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const lobby = roomInfo()

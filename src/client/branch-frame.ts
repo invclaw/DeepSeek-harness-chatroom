@@ -8,6 +8,7 @@ const PARENT_SESSION = 'dsh-chatroom-parent-session'
 const FRAME_LOAD = 'dsh-chatroom-frame-load'
 const BRANCH_SESSION_READY = 'data-dsh-chatroom-branch-session-ready'
 export const BRANCH_FRAME_READY = 'dsh-chatroom-branch-ready'
+export const BRANCH_FRAME_SWITCH = 'dsh-chatroom-branch-switch'
 
 interface BranchSessionList {
   readonly current?: string | undefined
@@ -40,6 +41,43 @@ export function branchFrameUrl(thread: ChatroomThread, parentSessionId: string, 
   if (loadId !== undefined) url.searchParams.set(FRAME_LOAD, loadId)
   url.hash = ''
   return url.toString()
+}
+
+/** Build the dynamic branch target sent to one retained native runtime. */
+export function branchFrameTarget(thread: ChatroomThread, parentSessionId: string): ChatroomBranchFrame {
+  return {
+    threadId: thread.id,
+    sessionId: thread.sessionId,
+    roomId: thread.roomId,
+    parentSessionId,
+  }
+}
+
+/** Request that a retained native runtime select another branch Session. */
+export function switchBranchFrame(target: Window, frame: ChatroomBranchFrame): void {
+  target.postMessage({ type: BRANCH_FRAME_SWITCH, frame }, globalThis.location.origin)
+}
+
+/** Parse a same-origin parent request to select another branch Session. */
+export function branchFrameSwitchFromMessage(value: unknown): ChatroomBranchFrame | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const message = value as { type?: unknown; frame?: unknown }
+  if (message.type !== BRANCH_FRAME_SWITCH
+    || typeof message.frame !== 'object'
+    || message.frame === null
+    || Array.isArray(message.frame)) return undefined
+  const frame = message.frame as Record<string, unknown>
+  if (!['threadId', 'sessionId', 'roomId', 'parentSessionId'].every(key =>
+    typeof frame[key] === 'string' && frame[key] !== '')) return undefined
+  return frame as unknown as ChatroomBranchFrame
+}
+
+/** Return whether two branch targets address the same retained runtime state. */
+export function sameBranchFrame(left: ChatroomBranchFrame, right: ChatroomBranchFrame): boolean {
+  return left.threadId === right.threadId
+    && left.sessionId === right.sessionId
+    && left.roomId === right.roomId
+    && left.parentSessionId === right.parentSessionId
 }
 
 /** Restore the parent's room selection after the child runtime stages its branch. */
@@ -90,10 +128,13 @@ export function markBranchFrameSessionReady(document: Document, sessionId: strin
 export function branchFrameDocumentReady(
   document: Document,
   sessionId: string,
+  rootText: string,
 ): boolean {
   const shell = document.querySelector('[data-dsh-chatroom-branch-shell]')
   const conversation = shell?.children.item(1)
+  const titlePrefix = `分支：${[...rootText].slice(0, 12).join('')}`
   return document.documentElement.getAttribute(BRANCH_SESSION_READY) === sessionId
+    && (conversation?.textContent ?? '').includes(titlePrefix)
     && conversation?.querySelector('textarea') !== null
 }
 

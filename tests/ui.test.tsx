@@ -155,6 +155,15 @@ describe('native chatroom integration', () => {
     rendered.rerender(entry(room, overrides))
     expect(screen.getByTestId('chatroom-thread-panel').getAttribute('data-open')).toBe('true')
     expect(screen.getByTitle('分支回复：主题消息')).toBe(frame)
+
+    const nextThread = {
+      id: 'thread-2', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread-2', createdAt: 2,
+      root: { messageId: 'assistant:2', displayName: 'DeepSeek', text: '一条较长的 AI 回复', role: 'ai' as const },
+    }
+    rendered.rerender(entry({ ...room, thread: nextThread }, overrides))
+    const retainedFrame = screen.getByTitle('分支回复：一条较长的 AI 回复') as HTMLIFrameElement
+    expect(retainedFrame).toBe(frame)
+    expect(retainedFrame.src).toBe(frameUrl.href)
   })
 
   it('does not mount a second chatroom shell inside the native branch frame', () => {

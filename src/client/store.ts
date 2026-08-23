@@ -170,6 +170,24 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       : { kind: 'room', room }
   }
 
+  /** Retarget one retained native branch runtime without carrying composer state across threads. */
+  switchBranchFrame(frame: ChatroomBranchFrame): void {
+    const current = this.snapshot.branchFrame
+    if (current?.threadId === frame.threadId
+      && current.sessionId === frame.sessionId
+      && current.roomId === frame.roomId
+      && current.parentSessionId === frame.parentSessionId) return
+    this.compositionRevision += 1
+    this.set({
+      branchFrame: frame,
+      composerRoomId: undefined,
+      pendingFiles: [],
+      reply: undefined,
+      composerBusy: false,
+      composerError: undefined,
+    })
+  }
+
   /** Subscribe to room projection changes. */
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)

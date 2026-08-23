@@ -20,10 +20,12 @@ import { RoomIdentityAction } from './RoomIdentityAction.js'
 import { ChatroomClientStore } from './store.js'
 import { CHATROOM_STYLES } from './styles.js'
 import {
+  branchFrameSwitchFromMessage,
   branchFrameFromLocation,
   clearBranchFrameReady,
   notifyBranchFrameReady,
   restoreParentSessionSelection,
+  sameBranchFrame,
   stageBranchFrameSession,
 } from './branch-frame.js'
 
@@ -62,19 +64,38 @@ export function apply(ctx: ClientContext): void {
     const restoreConfiguration = installRemoteConfigurationApi(connection)
     const restoreSettingsMirror = activateRemoteSettingsMirror(ctx.get('settingsScope'))
     const restorePrompt = installNativePromptIdentity(connection.api, store)
+    let activeBranchFrame = branchFrame
     let branchStaged = false
     const stageBranch = () => {
-      if (branchFrame === undefined || branchStaged) return
+      const frame = activeBranchFrame
+      if (frame === undefined || branchStaged) return
       const list = sessions.list.getSnapshot()
-      const staged = stageBranchFrameSession(branchFrame, {
+      const staged = stageBranchFrameSession(frame, {
         current: list.current === undefined ? undefined : String(list.current),
         byId: list.byId,
       }, sessionId => { sessions.open(sessionId as SessionId) })
       if (!staged) return
       branchStaged = true
-      restoreParentSessionSelection(branchFrame.parentSessionId)
-      notifyBranchFrameReady(branchFrame)
+      restoreParentSessionSelection(frame.parentSessionId)
+      notifyBranchFrameReady(frame)
     }
+    const receiveBranchSwitch = (event: MessageEvent) => {
+      if (branchFrame === undefined
+        || event.origin !== globalThis.location.origin
+        || event.source !== globalThis.parent) return
+      const next = branchFrameSwitchFromMessage(event.data)
+      if (next === undefined) return
+      if (activeBranchFrame !== undefined && sameBranchFrame(activeBranchFrame, next)) {
+        stageBranch()
+        return
+      }
+      activeBranchFrame = next
+      branchStaged = false
+      clearBranchFrameReady()
+      store.switchBranchFrame(next)
+      stageBranch()
+    }
+    globalThis.addEventListener('message', receiveBranchSwitch)
     const syncSession = () => {
       stageBranch()
       store.resumeOpen()
@@ -85,6 +106,7 @@ export function apply(ctx: ClientContext): void {
     void store.start().then(syncSession)
     return () => {
       unsubscribeSessions()
+      globalThis.removeEventListener('message', receiveBranchSwitch)
       restorePrompt()
       restoreSettingsMirror()
       restoreConfiguration()

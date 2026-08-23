@@ -87,6 +87,8 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     roomForSession(sessionId: string): ChatroomInfo | undefined;
     /** Resolve whether one native Session submits to a room or one branch. */
     agentTargetForSession(sessionId: string): ChatroomAgentTarget | undefined;
+    /** Retarget one retained native branch runtime without carrying composer state across threads. */
+    switchBranchFrame(frame: ChatroomBranchFrame): void;
     /** Subscribe to room projection changes. */
     subscribe: (listener: () => void) => (() => void);
     /** Resolve the persistent browser identity and shared room directory. */

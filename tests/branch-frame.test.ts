@@ -4,11 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   branchFrameDocumentReady,
   branchFrameFromLocation,
+  branchFrameSwitchFromMessage,
+  branchFrameTarget,
   branchFrameUrl,
   notifyBranchFrameReady,
   prepareBranchFrameSelection,
   restoreParentSessionSelection,
+  sameBranchFrame,
   stageBranchFrameSession,
+  switchBranchFrame,
 } from '../src/client/branch-frame.js'
 import { CHATROOM_STYLES } from '../src/client/styles.js'
 
@@ -46,13 +50,30 @@ describe('native branch frame isolation', () => {
     const frame = {
       threadId: 'thread', roomId: 'room', sessionId: 'branch-session', parentSessionId: 'parent-session',
     }
-    document.body.innerHTML = '<main data-dsh-chatroom-branch-shell><nav></nav><section><header>被原生 UI 截断的分支标题</header></section><aside></aside></main>'
+    const rootText = `${'猫'.repeat(40)}不会进入原生标题`
+    document.body.innerHTML = `<main data-dsh-chatroom-branch-shell><nav></nav><section><header>分支：${'猫'.repeat(18)}</header></section><aside></aside></main>`
     notifyBranchFrameReady(frame)
-    expect(branchFrameDocumentReady(document, frame.sessionId)).toBe(false)
+    expect(branchFrameDocumentReady(document, frame.sessionId, rootText)).toBe(false)
 
     document.querySelector('section')!.insertAdjacentHTML('beforeend', '<textarea></textarea>')
-    expect(branchFrameDocumentReady(document, frame.sessionId)).toBe(true)
-    expect(branchFrameDocumentReady(document, 'another-session')).toBe(false)
+    expect(branchFrameDocumentReady(document, frame.sessionId, rootText)).toBe(true)
+    expect(branchFrameDocumentReady(document, 'another-session', rootText)).toBe(false)
+    expect(branchFrameDocumentReady(document, frame.sessionId, '不同的主题')).toBe(false)
+  })
+
+  it('switches one retained native runtime to another branch target', () => {
+    const thread = {
+      id: 'thread-id', roomId: 'room-id', sessionId: 'chatroom-thread-v1-thread-id', createdAt: 1,
+      root: { messageId: 'assistant:1', displayName: 'DeepSeek', text: '较长的 AI 回复', role: 'ai' as const },
+    }
+    const frame = branchFrameTarget(thread, 'chatroom-v1-room-id')
+    const postMessage = vi.fn()
+    switchBranchFrame({ postMessage } as unknown as Window, frame)
+    expect(postMessage).toHaveBeenCalledWith({ type: 'dsh-chatroom-branch-switch', frame }, location.origin)
+    expect(branchFrameSwitchFromMessage(postMessage.mock.calls[0]?.[0])).toEqual(frame)
+    expect(branchFrameSwitchFromMessage({ type: 'dsh-chatroom-branch-switch', frame: { ...frame, sessionId: '' } })).toBeUndefined()
+    expect(sameBranchFrame(frame, { ...frame })).toBe(true)
+    expect(sameBranchFrame(frame, { ...frame, threadId: 'another-thread' })).toBe(false)
   })
 
   it('rejects partial frame addresses and restores the parent selection', () => {

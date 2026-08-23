@@ -19,7 +19,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Current identity and online count in the native Session header, with direct access to the shared-room directory
 - Durable room membership with member avatars, online state, and recent activity; owners can rename rooms and manage administrators, while administrators can also rename rooms
 - In-page message toasts, unread title badges, and opt-in browser system notifications across rooms
-- Persistent branch replies in a right-side panel that loads the branch's complete native Harness Session UI, including Markdown, image/file upload, model and permission selectors, stop/queue/steer, slash commands, approvals, question interactions, Think/tool trajectory, failure details, and retries
+- Persistent branch replies in a right-side panel that retains one native Harness runtime and switches its Session in place, including Markdown, image/file upload, model and permission selectors, stop/queue/steer, slash commands, approvals, question interactions, Think/tool trajectory, failure details, and retries
 - Native AI/member `@` candidates inside the branch composer; every branch owns an independent Session, so `@AI` answers, quotes, and tool runs stay inside that branch while chatroom reactions, replies, forwarding, and selection remain available without nested chatroom branches
 - Images remain visible and durable in room and branch history; when a selected model is text-only, only that model request receives deterministic text markers in place of historical images
 - Quiet root-message branch activity with the total reply count and latest three replies, updated live without opening the branch panel
@@ -28,7 +28,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.9.7 recognizes a branch by its exact Session id and native composer instead of comparing the Harness-truncated title, so long AI replies cannot be misreported as a timeout after the branch is already ready. Closing a branch keeps its isolated Harness runtime mounted off-screen, making repeated opens immediate instead of cold-starting the whole native Web client again. Version 0.9.6 replaced the custom branch transcript with the isolated native Harness Session and added owner/administrator management, source-verified lossless forwarding, and compact desktop/mobile message actions.
+Version 0.9.8 keeps one native Harness branch runtime alive and switches new branch Sessions inside it, so only the first branch pays the Web-client initialization cost. Exact Session ids and a safe truncated-title prefix guard the handoff, and pending files or reply metadata are cleared between branches. Version 0.9.7 fixed long AI reply branches being misreported as timeouts and retained the most recently closed branch.
 
 ## Requirements
 
