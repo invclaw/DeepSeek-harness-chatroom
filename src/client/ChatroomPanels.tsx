@@ -6,7 +6,12 @@ import type {
   ChatroomReplyReference,
 } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
-import { BRANCH_FRAME_READY, branchFrameUrl } from './branch-frame.js'
+import {
+  BRANCH_FRAME_READY,
+  branchFrameDocumentReady,
+  branchFrameTitle,
+  branchFrameUrl,
+} from './branch-frame.js'
 import type { ChatroomView } from './store.js'
 
 interface ChatroomPanelsProps {
@@ -27,6 +32,8 @@ interface ChatroomPanelsProps {
   clearMessageSelection(): void
   toggleMessageSelection(roomId: string, message: ChatroomForwardItem): void
 }
+
+let branchFrameInstance = 0
 
 /** Persistent member management, branch conversation, and in-page alerts. */
 export function ChatroomPanels(props: ChatroomPanelsProps): JSX.Element {
@@ -157,25 +164,53 @@ function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
   const thread = props.room.thread!
   const parentSessionId = props.room.room?.sessionId
   const frameRef = useRef<HTMLIFrameElement>(null)
+  const [frameInstance] = useState(() => ++branchFrameInstance)
   const [attempt, setAttempt] = useState(0)
   const [ready, setReady] = useState(false)
   const [timedOut, setTimedOut] = useState(false)
   useEffect(() => {
     setReady(false)
     setTimedOut(false)
-    const receive = (event: MessageEvent) => {
-      if (event.origin !== globalThis.location.origin || event.source !== frameRef.current?.contentWindow) return
-      if (!isBranchReadyMessage(event.data, thread.id)) return
+    let settled = false
+    let poll: ReturnType<typeof globalThis.setInterval>
+    let timer: ReturnType<typeof globalThis.setTimeout>
+    const probe = () => {
+      if (settled) return
+      try {
+        const document = frameRef.current?.contentDocument
+        if (document === null || document === undefined
+          || !branchFrameDocumentReady(document, thread.sessionId, branchFrameTitle(thread.root.text))) return
+      } catch {
+        // An incomplete same-origin iframe can withhold its document; the visible timeout owns recovery.
+        return
+      }
+      settled = true
+      globalThis.clearInterval(poll)
+      globalThis.clearTimeout(timer)
       setReady(true)
       setTimedOut(false)
     }
+    const receive = (event: MessageEvent) => {
+      if (event.origin !== globalThis.location.origin || event.source !== frameRef.current?.contentWindow) return
+      if (!isBranchReadyMessage(event.data, thread.id)) return
+      probe()
+    }
     globalThis.addEventListener('message', receive)
-    const timer = globalThis.setTimeout(() => { setTimedOut(true) }, 8_000)
+    poll = globalThis.setInterval(probe, 150)
+    timer = globalThis.setTimeout(() => {
+      if (settled) return
+      globalThis.clearInterval(poll)
+      if (attempt === 0) setAttempt(1)
+      else setTimedOut(true)
+    }, attempt === 0 ? 8_000 : 12_000)
+    probe()
     return () => {
+      settled = true
       globalThis.removeEventListener('message', receive)
+      globalThis.clearInterval(poll)
       globalThis.clearTimeout(timer)
     }
-  }, [attempt, thread.id])
+  }, [attempt, thread.id, thread.root.text, thread.sessionId])
   return (
     <aside className="dsh-chatroom-thread-panel" data-testid="chatroom-thread-panel" aria-label="分支回复">
       <header>
@@ -190,12 +225,12 @@ function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
             key={`${thread.id}:${attempt}`}
             ref={frameRef}
             title={`分支回复：${thread.root.text}`}
-            src={branchFrameUrl(thread, parentSessionId)}
+            src={branchFrameUrl(thread, parentSessionId, `${frameInstance}:${attempt}`)}
           />
           {!ready && <div className="dsh-chatroom-thread-frame-status" role="status">
             {timedOut
               ? <><strong>分支加载超时</strong><button type="button" onClick={() => { setAttempt(value => value + 1) }}>重新加载</button></>
-              : <span>正在加载分支…</span>}
+              : <span>{attempt === 0 ? '正在加载分支…' : '正在重新加载分支…'}</span>}
           </div>}
         </div>}
       {props.room.threadError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.threadError}</div>}

@@ -2,8 +2,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  branchFrameDocumentReady,
   branchFrameFromLocation,
+  branchFrameTitle,
   branchFrameUrl,
+  notifyBranchFrameReady,
   restoreParentSessionSelection,
   stageBranchFrameSession,
 } from '../src/client/branch-frame.js'
@@ -12,6 +15,8 @@ import { CHATROOM_STYLES } from '../src/client/styles.js'
 beforeEach(() => {
   history.replaceState({}, '', '/private-entry/?keep=1#old')
   localStorage.clear()
+  document.documentElement.removeAttribute('data-dsh-chatroom-branch-session-ready')
+  document.body.replaceChildren()
 })
 
 describe('native branch frame isolation', () => {
@@ -22,11 +27,12 @@ describe('native branch frame isolation', () => {
       sessionId: 'chatroom-thread-v1-thread-id',
       createdAt: 1,
       root: { messageId: 'user:1', displayName: 'Alice', text: '主题', role: 'human' },
-    }, 'chatroom-v1-room-id')
+    }, 'chatroom-v1-room-id', 'frame-load-2')
     const url = new URL(href)
 
     expect(url.pathname).toBe('/private-entry/')
     expect(url.searchParams.get('keep')).toBe('1')
+    expect(url.searchParams.get('dsh-chatroom-frame-load')).toBe('frame-load-2')
     expect(url.hash).toBe('')
     expect(branchFrameFromLocation({ search: url.search } as Location)).toEqual({
       threadId: 'thread-id',
@@ -34,6 +40,23 @@ describe('native branch frame isolation', () => {
       sessionId: 'chatroom-thread-v1-thread-id',
       parentSessionId: 'chatroom-v1-room-id',
     })
+  })
+
+  it('waits for the intended native title and composer before exposing the frame', () => {
+    const frame = {
+      threadId: 'thread', roomId: 'room', sessionId: 'branch-session', parentSessionId: 'parent-session',
+    }
+    const title = branchFrameTitle(`${'猫'.repeat(40)}不会进入标题`)
+    expect(title).toBe(`分支：${'猫'.repeat(40)}`)
+    document.body.innerHTML = `<main data-dsh-chatroom-branch-shell><nav>${title}</nav><section><header>父会话</header></section><aside></aside></main>`
+    notifyBranchFrameReady(frame)
+    expect(branchFrameDocumentReady(document, frame.sessionId, title)).toBe(false)
+
+    document.querySelector('section')!.insertAdjacentHTML('beforeend', '<textarea></textarea>')
+    expect(branchFrameDocumentReady(document, frame.sessionId, title)).toBe(false)
+    document.querySelector('header')!.textContent = title
+    expect(branchFrameDocumentReady(document, frame.sessionId, title)).toBe(true)
+    expect(branchFrameDocumentReady(document, 'another-session', title)).toBe(false)
   })
 
   it('rejects partial frame addresses and restores the parent selection', () => {

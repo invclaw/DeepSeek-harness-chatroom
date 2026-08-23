@@ -21,6 +21,7 @@ import { ChatroomClientStore } from './store.js'
 import { CHATROOM_STYLES } from './styles.js'
 import {
   branchFrameFromLocation,
+  clearBranchFrameReady,
   notifyBranchFrameReady,
   restoreParentSessionSelection,
   stageBranchFrameSession,
@@ -90,7 +91,10 @@ export function apply(ctx: ClientContext): void {
       store.stop()
       style.remove()
       shellObserver?.disconnect()
-      if (branchFrame !== undefined) document.documentElement.removeAttribute('data-dsh-chatroom-branch-frame')
+      if (branchFrame !== undefined) {
+        clearBranchFrameReady()
+        document.documentElement.removeAttribute('data-dsh-chatroom-branch-frame')
+      }
     }
   }, 'chatroom: browser state and styles')
 

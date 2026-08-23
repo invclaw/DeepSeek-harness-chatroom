@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChatroomEntry } from '../src/client/ChatroomEntry.js'
 import { RoomIdentityAction } from '../src/client/RoomIdentityAction.js'
+import { BRANCH_FRAME_READY, markBranchFrameSessionReady } from '../src/client/branch-frame.js'
 import type { ChatroomView } from '../src/client/store.js'
 
 afterEach(cleanup)
@@ -120,6 +121,24 @@ describe('native chatroom integration', () => {
     expect(frameUrl.searchParams.get('dsh-chatroom-thread-session')).toBe('chatroom-thread-v1-thread')
     expect(frameUrl.searchParams.get('dsh-chatroom-parent-session')).toBe('chatroom-v1-lobby')
     expect(screen.getByText('正在加载分支…')).toBeTruthy()
+    fireEvent(window, new MessageEvent('message', {
+      origin: globalThis.location.origin,
+      source: frame.contentWindow,
+      data: { type: BRANCH_FRAME_READY, threadId: 'thread' },
+    }))
+    expect(screen.getByText('正在加载分支…')).toBeTruthy()
+
+    const frameDocument = frame.contentDocument!
+    frameDocument.open()
+    frameDocument.write('<!doctype html><html><body><main data-dsh-chatroom-branch-shell><nav></nav><section><header>分支：主题消息</header><textarea></textarea></section><aside></aside></main></body></html>')
+    frameDocument.close()
+    markBranchFrameSessionReady(frameDocument, 'chatroom-thread-v1-thread')
+    fireEvent(window, new MessageEvent('message', {
+      origin: globalThis.location.origin,
+      source: frame.contentWindow,
+      data: { type: BRANCH_FRAME_READY, threadId: 'thread' },
+    }))
+    expect(screen.queryByText('正在加载分支…')).toBeNull()
 
     fireEvent.change(screen.getByRole('textbox', { name: '群聊名称' }), { target: { value: '新群名' } })
     fireEvent.click(screen.getByRole('button', { name: '保存名称' }))

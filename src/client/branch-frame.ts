@@ -5,6 +5,8 @@ const THREAD_ID = 'dsh-chatroom-thread'
 const THREAD_SESSION = 'dsh-chatroom-thread-session'
 const ROOM_ID = 'dsh-chatroom-room'
 const PARENT_SESSION = 'dsh-chatroom-parent-session'
+const FRAME_LOAD = 'dsh-chatroom-frame-load'
+const BRANCH_SESSION_READY = 'data-dsh-chatroom-branch-session-ready'
 export const BRANCH_FRAME_READY = 'dsh-chatroom-branch-ready'
 
 interface BranchSessionList {
@@ -29,14 +31,20 @@ export function branchFrameFromLocation(location: Pick<Location, 'search'>): Cha
 }
 
 /** Build a same-origin Harness URL whose current session is isolated to one branch. */
-export function branchFrameUrl(thread: ChatroomThread, parentSessionId: string): string {
+export function branchFrameUrl(thread: ChatroomThread, parentSessionId: string, loadId?: string): string {
   const url = new URL(globalThis.location.href)
   url.searchParams.set(THREAD_ID, thread.id)
   url.searchParams.set(THREAD_SESSION, thread.sessionId)
   url.searchParams.set(ROOM_ID, thread.roomId)
   url.searchParams.set(PARENT_SESSION, parentSessionId)
+  if (loadId !== undefined) url.searchParams.set(FRAME_LOAD, loadId)
   url.hash = ''
   return url.toString()
+}
+
+/** Return the native Session title assigned to a branch root. */
+export function branchFrameTitle(rootText: string): string {
+  return `分支：${[...rootText].slice(0, 40).join('')}`
 }
 
 /** Restore the parent's room selection after the child runtime stages its branch. */
@@ -64,6 +72,30 @@ export function stageBranchFrameSession(
 
 /** Notify the parent panel after the native runtime selects the branch Session. */
 export function notifyBranchFrameReady(frame: ChatroomBranchFrame): void {
+  markBranchFrameSessionReady(globalThis.document, frame.sessionId)
   if (globalThis.parent === globalThis.window) return
   globalThis.parent.postMessage({ type: BRANCH_FRAME_READY, threadId: frame.threadId }, globalThis.location.origin)
+}
+
+/** Mark which native Session the isolated child document selected. */
+export function markBranchFrameSessionReady(document: Document, sessionId: string): void {
+  document.documentElement.setAttribute(BRANCH_SESSION_READY, sessionId)
+}
+
+/** Confirm that the isolated document has rendered the intended native branch Session. */
+export function branchFrameDocumentReady(
+  document: Document,
+  sessionId: string,
+  title: string,
+): boolean {
+  const shell = document.querySelector('[data-dsh-chatroom-branch-shell]')
+  const conversation = shell?.children.item(1)
+  return document.documentElement.getAttribute(BRANCH_SESSION_READY) === sessionId
+    && (conversation?.textContent ?? '').includes(title)
+    && conversation?.querySelector('textarea') !== null
+}
+
+/** Remove the child-document marker when the branch runtime unmounts. */
+export function clearBranchFrameReady(): void {
+  globalThis.document.documentElement.removeAttribute(BRANCH_SESSION_READY)
 }
