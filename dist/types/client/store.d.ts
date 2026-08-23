@@ -36,6 +36,7 @@ export interface ChatroomView {
     readonly composerError: string | undefined;
     readonly thread: ChatroomThread | undefined;
     readonly threadMessages: readonly ChatroomThreadMessage[];
+    readonly threadReply: ChatroomReplyReference | undefined;
     readonly threadBusy: boolean;
     readonly threadError: string | undefined;
     readonly unreadCount: number;
@@ -119,6 +120,10 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     openThread: (roomId: string, root: ChatroomThreadRoot) => Promise<void>;
     /** Close the right-side branch panel. */
     closeThread: () => void;
+    /** Address the next branch message as a reply without opening a nested branch. */
+    setThreadReply: (reply: ChatroomReplyReference) => void;
+    /** Cancel the pending branch reply. */
+    clearThreadReply: () => void;
     /** Send one human-first branch message. */
     sendThreadMessage: (text: string) => Promise<boolean>;
     /** Request browser notification permission from an explicit user gesture. */

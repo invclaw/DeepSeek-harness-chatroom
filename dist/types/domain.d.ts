@@ -1,4 +1,4 @@
-import type { ChatroomMessageRole, ChatroomThreadRoot } from './types.js';
+import type { ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js';
 import type { ChatroomReactionEmoji } from './reactions.js';
 import type { ChatroomAvatarId } from './avatars.js';
 export interface IdentityRecord {
@@ -63,6 +63,7 @@ export interface ThreadMessageRecord {
     readonly displayName: string;
     readonly avatarId?: ChatroomAvatarId;
     readonly text: string;
+    readonly reply?: ChatroomReplyReference;
     readonly createdAt: number;
 }
 export interface ReactionRecord {

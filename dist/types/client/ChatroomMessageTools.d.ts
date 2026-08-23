@@ -8,10 +8,15 @@ export interface ChatroomMessageToolsProps {
     readonly identity: ChatroomIdentity | undefined;
     readonly selecting: boolean;
     readonly selected: boolean;
+    readonly copyText?: string;
+    readonly onReply?: (() => void) | undefined;
+    readonly onBranch?: (() => void) | undefined;
     toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>;
     openForward(roomId: string, message: ChatroomForwardItem): void;
     toggleSelection(roomId: string, message: ChatroomForwardItem): void;
 }
+/** Capability-driven actions reused by main-room and branch message rows. */
+export declare function ChatroomInlineMessageActions({ copyText, onReply, onBranch, }: Pick<ChatroomMessageToolsProps, 'copyText' | 'onReply' | 'onBranch'>): JSX.Element | null;
 /** Checkbox shown on every message while the room is in multi-select mode. */
 export declare function ChatroomSelectionCheckbox({ tools }: {
     tools: ChatroomMessageToolsProps;

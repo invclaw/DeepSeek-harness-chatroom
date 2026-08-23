@@ -139,6 +139,45 @@ describe('native chatroom integration', () => {
     expect(sendThreadMessage).toHaveBeenCalledWith('@AI 请总结')
   })
 
+  it('reuses native text primitives and shared actions without offering nested branches', () => {
+    const setThreadReply = vi.fn()
+    renderEntry(view({
+      thread: {
+        id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
+        root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
+      },
+      threadMessages: [{
+        id: 'thread-ai', threadId: 'thread', sequence: 0, role: 'ai', participantId: 'ai',
+        displayName: 'DeepSeek', text: '**结论**：使用 `MarkdownText`。', createdAt: Date.now(),
+      }],
+    }), { setThreadReply })
+
+    expect(screen.getByText('结论').tagName).toBe('STRONG')
+    expect(screen.getByText('MarkdownText').tagName).toBe('CODE')
+    expect(screen.getByRole('button', { name: '▣ 复制' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '↩ 回复' }))
+    expect(setThreadReply).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: 'thread-ai', displayName: 'DeepSeek',
+    }))
+    expect(screen.queryByRole('button', { name: '⑂ 分支' })).toBeNull()
+  })
+
+  it('shows the pending branch quote above the composer and can cancel it', () => {
+    const clearThreadReply = vi.fn()
+    renderEntry(view({
+      thread: {
+        id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
+        root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
+      },
+      threadReply: { messageId: 'thread-ai', displayName: 'DeepSeek', text: '上一条分支回复' },
+    }), { clearThreadReply })
+
+    expect(screen.getByText('回复 DeepSeek')).toBeTruthy()
+    expect(screen.getByText('上一条分支回复')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '取消引用' }))
+    expect(clearThreadReply).toHaveBeenCalledOnce()
+  })
+
   it('opens a target chooser for a merged multi-message forward', () => {
     const openForward = vi.fn()
     const forwardSelected = vi.fn(async () => true)
@@ -188,6 +227,7 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     composerError: undefined,
     thread: undefined,
     threadMessages: [],
+    threadReply: undefined,
     threadBusy: false,
     threadError: undefined,
     unreadCount: 0,
@@ -219,6 +259,8 @@ function renderEntry(
     retry={vi.fn(async () => undefined)}
     closeMembers={vi.fn()}
     closeThread={vi.fn()}
+    setThreadReply={vi.fn()}
+    clearThreadReply={vi.fn()}
     sendThreadMessage={vi.fn(async () => true)}
     enableSystemNotifications={vi.fn(async () => undefined)}
     dismissToast={vi.fn()}

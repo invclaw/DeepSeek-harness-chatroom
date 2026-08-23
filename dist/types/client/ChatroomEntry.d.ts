@@ -1,6 +1,6 @@
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots';
 import type { ChatroomClientStore, ChatroomView } from './store.js';
-import type { ChatroomForwardItem } from '../types.js';
+import type { ChatroomForwardItem, ChatroomReplyReference } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 interface ChatroomEntryInjected {
     useChatroom<T>(selector: (snapshot: ChatroomView) => T): T;
@@ -13,6 +13,8 @@ interface ChatroomEntryInjected {
     retry(): Promise<void>;
     closeMembers(): void;
     closeThread(): void;
+    setThreadReply(reply: ChatroomReplyReference): void;
+    clearThreadReply(): void;
     sendThreadMessage(text: string): Promise<boolean>;
     enableSystemNotifications(): Promise<void>;
     dismissToast(id: string): void;

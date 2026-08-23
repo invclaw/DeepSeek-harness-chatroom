@@ -268,10 +268,13 @@ describe('ChatroomClientStore', () => {
     expect(store.getSnapshot().threadPreviews).toMatchObject([{
       totalMessages: 1, recentMessages: [{ text: '分支消息' }],
     }])
+    store.setThreadReply({ messageId: 'branch-1', displayName: 'Bob', text: '分支消息' })
     await store.sendThreadMessage('@AI 总结')
     expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
       threadId: 'thread-id', text: '@AI 总结',
+      reply: { messageId: 'branch-1', displayName: 'Bob', text: '分支消息' },
     })
+    expect(store.getSnapshot().threadReply).toBeUndefined()
 
     FakeEventSource.instances[0]?.emit({
       type: 'notification',

@@ -133,8 +133,14 @@ describe('ChatroomRuntime', () => {
     await runtime.submitThread(opened.thread.id, bob, '先讨论，不叫 AI')
     expect(harness.agents[1]?.session.append).toHaveBeenCalledTimes(2)
     expect(harness.agents[1]?.followup).not.toHaveBeenCalled()
-    await runtime.submitThread(opened.thread.id, alice, '@AI 给出结论')
+    await runtime.submitThread(opened.thread.id, alice, '@AI 给出结论', {
+      messageId: 'branch-human-1', displayName: 'Bob', text: '先讨论，不叫 AI',
+    })
     expect(harness.agents[1]?.followup).toHaveBeenCalledOnce()
+    expect(harness.agents[1]?.followup.mock.calls[0]?.[0]?.content[0]).toMatchObject({
+      type: 'text',
+      text: expect.stringContaining('回复 Bob「先讨论，不叫 AI」'),
+    })
 
     runtime.handleSessionEvent(
       { id: opened.thread.sessionId } as unknown as Session,
@@ -154,6 +160,9 @@ describe('ChatroomRuntime', () => {
         ['human', '@AI 给出结论'],
         ['ai', '分支结论'],
       ])
+      expect(reopened.messages[1]?.reply).toEqual({
+        messageId: 'branch-human-1', displayName: 'Bob', text: '先讨论，不叫 AI',
+      })
     })
     const branchEvents = writes.filter(value => value.startsWith('data: '))
       .map(value => JSON.parse(value.slice('data: '.length)) as {

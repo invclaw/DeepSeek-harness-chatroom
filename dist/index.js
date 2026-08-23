@@ -159,6 +159,11 @@ var threadRootSchema = z2.object({
   text: z2.string().min(1),
   role: z2.union([z2.literal("human"), z2.literal("ai")])
 });
+var replySchema = z2.object({
+  messageId: z2.string().min(1),
+  displayName: z2.string().min(1),
+  text: z2.string().min(1)
+});
 var threadSchema = z2.object({
   id: z2.uuid(),
   roomId: z2.string().min(1),
@@ -176,6 +181,7 @@ var threadMessageSchema = z2.object({
   displayName: z2.string().min(1),
   avatarId: z2.string().refine(isChatroomAvatarId).optional(),
   text: z2.string().min(1),
+  reply: replySchema.optional(),
   createdAt: nonNegativeSafeInteger
 });
 var reactionSchema = z2.object({
@@ -616,7 +622,7 @@ var ChatroomRuntime = class {
     return await task;
   }
   /** Append one branch message and wake only that branch Agent on an AI mention. */
-  async submitThread(threadId, identity, text) {
+  async submitThread(threadId, identity, text, reply) {
     this.assertReady();
     const state = this.requireThreadState(threadId);
     const normalized = normalizeThreadText(text, this.config.maxMessageTextChars);
@@ -632,10 +638,11 @@ var ChatroomRuntime = class {
         displayName: identity.displayName,
         avatarId: identity.avatarId,
         text: normalized,
+        ...reply === void 0 ? {} : { reply },
         createdAt: Date.now()
       };
       await this.requireThreadMessages().put(record.id, record);
-      const identified = identifyPrompt([{ type: "text", text: normalized }], identity);
+      const identified = identifyPrompt([{ type: "text", text: normalized }], identity, reply);
       const message = createUserMessage({
         content: identified.map((part) => ({ type: "text", text: part.type === "text" ? part.text : "" })),
         source: { kind: "user" }
@@ -1156,6 +1163,7 @@ function publicThreadMessage(record) {
     participantId: record.participantId,
     displayName: record.displayName,
     text: record.text,
+    ...record.reply === void 0 ? {} : { reply: record.reply },
     createdAt: record.createdAt,
     ...record.avatarId === void 0 ? {} : { avatarId: record.avatarId }
   };
@@ -1457,11 +1465,13 @@ var ChatroomHttpController = class {
     const identity = this.requireIdentity(request, response);
     if (identity === void 0) return;
     const body = await readJson(request, this.config.maxMessageTextChars * 4 + 2048);
+    const reply = replyRequest(body.reply);
     const prompt = {
       threadId: fieldString(body, "threadId"),
-      text: fieldString(body, "text")
+      text: fieldString(body, "text"),
+      ...reply === void 0 ? {} : { reply }
     };
-    const result = await this.runtime.submitThread(prompt.threadId, identity, prompt.text);
+    const result = await this.runtime.submitThread(prompt.threadId, identity, prompt.text, prompt.reply);
     json(response, 200, result);
   }
   async handlePrompt(request, response) {

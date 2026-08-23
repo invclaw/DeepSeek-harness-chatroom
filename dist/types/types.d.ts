@@ -141,6 +141,7 @@ export interface ChatroomThreadMessage {
     readonly displayName: string;
     readonly avatarId?: ChatroomAvatarId;
     readonly text: string;
+    readonly reply?: ChatroomReplyReference;
     readonly createdAt: number;
 }
 /** Branch lookup or creation response. */
@@ -158,6 +159,7 @@ export interface ChatroomThreadPreview {
 export interface ChatroomThreadPromptRequest {
     readonly threadId: string;
     readonly text: string;
+    readonly reply?: ChatroomReplyReference;
 }
 /** Browser notification for a new human or AI message. */
 export interface ChatroomNotification {

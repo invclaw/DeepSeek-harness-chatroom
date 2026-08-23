@@ -17,6 +17,7 @@ export default {
   format: 'cjs',
   platform: 'browser',
   target: 'es2022',
+  minify: true,
   dts: false,
   sourcemap: true,
   clean: false,

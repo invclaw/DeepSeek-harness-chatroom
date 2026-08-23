@@ -81,6 +81,8 @@ export function apply(ctx: ClientContext): void {
       retry: store.retry,
       closeMembers: store.closeMembers,
       closeThread: store.closeThread,
+      setThreadReply: store.setThreadReply,
+      clearThreadReply: store.clearThreadReply,
       sendThreadMessage: store.sendThreadMessage,
       enableSystemNotifications: store.enableSystemNotifications,
       dismissToast: store.dismissToast,

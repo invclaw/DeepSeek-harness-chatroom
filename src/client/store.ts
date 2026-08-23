@@ -62,6 +62,7 @@ export interface ChatroomView {
   readonly composerError: string | undefined
   readonly thread: ChatroomThread | undefined
   readonly threadMessages: readonly ChatroomThreadMessage[]
+  readonly threadReply: ChatroomReplyReference | undefined
   readonly threadBusy: boolean
   readonly threadError: string | undefined
   readonly unreadCount: number
@@ -96,6 +97,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     composerError: undefined,
     thread: undefined,
     threadMessages: [],
+    threadReply: undefined,
     threadBusy: false,
     threadError: undefined,
     unreadCount: 0,
@@ -161,6 +163,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       membersOpen: true,
       thread: undefined,
       threadMessages: [],
+      threadReply: undefined,
       threadError: undefined,
     })
   }
@@ -204,6 +207,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         membersOpen: false,
         thread: undefined,
         threadMessages: [],
+        threadReply: undefined,
         selectionRoomId: undefined,
         selectedMessages: [],
         forwardOpen: false,
@@ -226,6 +230,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       membersOpen: false,
       thread: undefined,
       threadMessages: [],
+      threadReply: undefined,
       selectionRoomId: undefined,
       selectedMessages: [],
       forwardOpen: false,
@@ -459,7 +464,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   /** Create or reopen a branch rooted at one main-room message. */
   openThread = async (roomId: string, root: ChatroomThreadRoot): Promise<void> => {
-    this.set({ membersOpen: false, threadBusy: true, threadError: undefined })
+    this.set({ membersOpen: false, threadReply: undefined, threadBusy: true, threadError: undefined })
     try {
       const response = await requestJson<ChatroomThreadResponse>(`${CHATROOM_API_PREFIX}/threads/open`, {
         method: 'POST',
@@ -487,21 +492,38 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   /** Close the right-side branch panel. */
   closeThread = (): void => {
-    this.set({ thread: undefined, threadMessages: [], threadBusy: false, threadError: undefined })
+    this.set({
+      thread: undefined,
+      threadMessages: [],
+      threadReply: undefined,
+      threadBusy: false,
+      threadError: undefined,
+    })
+  }
+
+  /** Address the next branch message as a reply without opening a nested branch. */
+  setThreadReply = (reply: ChatroomReplyReference): void => {
+    if (this.snapshot.thread !== undefined) this.set({ threadReply: reply, threadError: undefined })
+  }
+
+  /** Cancel the pending branch reply. */
+  clearThreadReply = (): void => {
+    if (this.snapshot.threadReply !== undefined) this.set({ threadReply: undefined, threadError: undefined })
   }
 
   /** Send one human-first branch message. */
   sendThreadMessage = async (text: string): Promise<boolean> => {
     const thread = this.snapshot.thread
+    const reply = this.snapshot.threadReply
     if (thread === undefined || this.snapshot.threadBusy || text.trim() === '') return false
     this.set({ threadBusy: true, threadError: undefined })
     try {
       await requestJson<ChatroomPromptResponse>(`${CHATROOM_API_PREFIX}/threads/prompt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ threadId: thread.id, text }),
+        body: JSON.stringify({ threadId: thread.id, text, ...(reply === undefined ? {} : { reply }) }),
       })
-      this.set({ threadBusy: false, threadError: undefined })
+      this.set({ threadReply: undefined, threadBusy: false, threadError: undefined })
       return true
     } catch (error) {
       this.set({ threadBusy: false, threadError: errorMessage(error) })
@@ -546,6 +568,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       members: [],
       reactions: [],
       threadPreviews: [],
+      thread: undefined,
+      threadMessages: [],
+      threadReply: undefined,
       selectionRoomId: undefined,
       selectedMessages: [],
       forwardOpen: false,

@@ -112,6 +112,8 @@ describe('participant-specific native message projection', () => {
     expect(screen.queryByText(/发送了/u)).toBeNull()
     const row = screen.getByText('brief.pdf').closest('.dsh-chatroom-participant-message')!
     fireEvent.contextMenu(row, { clientX: 120, clientY: 80 })
+    expect(screen.getByRole('menuitem', { name: /复制/u })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: /回复/u })).toBeTruthy()
     fireEvent.click(screen.getByTitle('贴表情 👍'))
     expect(toggleReaction).toHaveBeenCalledWith('lobby', 'user:1', '👍')
 
@@ -263,6 +265,7 @@ function messageProps(
       composerError: undefined,
       thread: undefined,
       threadMessages: [],
+      threadReply: undefined,
       threadBusy: false,
       threadError: undefined,
       unreadCount: 0,

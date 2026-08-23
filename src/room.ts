@@ -484,7 +484,12 @@ export class ChatroomRuntime {
   }
 
   /** Append one branch message and wake only that branch Agent on an AI mention. */
-  async submitThread(threadId: string, identity: ChatroomIdentity, text: string): Promise<ChatroomPromptResponse> {
+  async submitThread(
+    threadId: string,
+    identity: ChatroomIdentity,
+    text: string,
+    reply?: ChatroomReplyReference,
+  ): Promise<ChatroomPromptResponse> {
     this.assertReady()
     const state = this.requireThreadState(threadId)
     const normalized = normalizeThreadText(text, this.config.maxMessageTextChars)
@@ -500,10 +505,11 @@ export class ChatroomRuntime {
         displayName: identity.displayName,
         avatarId: identity.avatarId,
         text: normalized,
+        ...(reply === undefined ? {} : { reply }),
         createdAt: Date.now(),
       }
       await this.requireThreadMessages().put(record.id, record)
-      const identified = identifyPrompt([{ type: 'text', text: normalized }], identity)
+      const identified = identifyPrompt([{ type: 'text', text: normalized }], identity, reply)
       const message = createUserMessage({
         content: identified.map(part => ({ type: 'text' as const, text: part.type === 'text' ? part.text : '' })),
         source: { kind: 'user' },
@@ -1105,6 +1111,7 @@ function publicThreadMessage(record: ThreadMessageRecord): ChatroomThreadMessage
     participantId: record.participantId,
     displayName: record.displayName,
     text: record.text,
+    ...(record.reply === undefined ? {} : { reply: record.reply }),
     createdAt: record.createdAt,
     ...(record.avatarId === undefined ? {} : { avatarId: record.avatarId }),
   }

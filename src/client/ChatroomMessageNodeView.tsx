@@ -14,6 +14,7 @@ import { participantMarker, projectFileText, projectForwardText, projectReplyTex
 import type { ChatroomReactionEmoji } from '../reactions.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
 import {
+  ChatroomInlineMessageActions,
   ChatroomMessageContextMenu,
   ChatroomReactionBar,
   ChatroomSelectionCheckbox,
@@ -140,15 +141,19 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
   const activeRoom = room.rooms.find(candidate => String(props.sessionId) === candidate.sessionId)!
   const message = messageTarget(props.node, projection)
   const target = replyTarget(message)
-  const tools = messageTools(props, room, activeRoom.id, message)
+  const onReply = room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, target) }
+  const onThread = room.identity === undefined
+    ? undefined
+    : () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) }
+  const tools = messageTools(props, room, activeRoom.id, message, message.text, onReply, onThread)
   const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, 'human')
   return <ParticipantMessage
     native={native}
     projection={projection}
     tools={tools}
     threadPreview={threadPreview}
-    onReply={room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, target) }}
-    onThread={room.identity === undefined ? undefined : () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) }}
+    onReply={onReply}
+    onThread={onThread}
   />
 })
 
@@ -166,15 +171,19 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
   const activeRoom = room.rooms.find(candidate => String(props.sessionId) === candidate.sessionId)!
   const message = messageTarget(props.node, projection)
   const target = replyTarget(message)
-  const tools = messageTools(props, room, activeRoom.id, message)
+  const onReply = room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, target) }
+  const onThread = room.identity === undefined
+    ? undefined
+    : () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) }
+  const tools = messageTools(props, room, activeRoom.id, message, message.text, onReply, onThread)
   const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, 'human')
   return <ParticipantMessage
     native={native}
     projection={projection}
     tools={tools}
     threadPreview={threadPreview}
-    onReply={room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, target) }}
-    onThread={room.identity === undefined ? undefined : () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) }}
+    onReply={onReply}
+    onThread={onThread}
   />
 })
 
@@ -219,12 +228,7 @@ function ParticipantMessage({
         {projection.forward !== undefined && <ForwardCard forward={projection.forward} />}
         <ChatroomReactionBar {...tools} />
         <ChatroomThreadActivity preview={threadPreview} open={onThread} />
-        {onReply !== undefined && onThread !== undefined && (
-          <div className="dsh-chatroom-message-actions">
-            <button className="dsh-chatroom-reply-button" type="button" onClick={onReply}>↩ 回复</button>
-            <button className="dsh-chatroom-reply-button" type="button" onClick={onThread}>⑂ 分支</button>
-          </div>
-        )}
+        <ChatroomInlineMessageActions onReply={onReply} onBranch={onThread} />
       </div>
       <ChatroomMessageContextMenu tools={tools} position={menu.position} close={menu.close} />
     </div>
@@ -286,6 +290,9 @@ function messageTools(
   room: ChatroomView,
   roomId: string,
   message: ChatroomForwardItem,
+  copyText: string,
+  onReply: (() => void) | undefined,
+  onBranch: (() => void) | undefined,
 ): ChatroomMessageToolsProps {
   return {
     roomId,
@@ -294,6 +301,9 @@ function messageTools(
     identity: room.identity,
     selecting: room.selectionRoomId === roomId,
     selected: room.selectionRoomId === roomId && room.selectedMessages.some(item => item.messageId === message.messageId),
+    copyText,
+    onReply,
+    onBranch,
     toggleReaction: props.toggleReaction,
     openForward: props.openForward,
     toggleSelection: props.toggleMessageSelection,

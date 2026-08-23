@@ -73,7 +73,7 @@ export declare class ChatroomRuntime {
     /** Create or reopen a branch rooted at one native room message. */
     openThread(roomId: string, identity: ChatroomIdentity, root: ChatroomThreadRoot): Promise<ChatroomThreadResponse>;
     /** Append one branch message and wake only that branch Agent on an AI mention. */
-    submitThread(threadId: string, identity: ChatroomIdentity, text: string): Promise<ChatroomPromptResponse>;
+    submitThread(threadId: string, identity: ChatroomIdentity, text: string, reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
     /** Project committed AI output into its parent room or branch stream. */
     handleSessionEvent(session: Session, event: SessionEvent): void;
     private createThread;

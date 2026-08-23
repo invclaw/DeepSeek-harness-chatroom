@@ -205,11 +205,13 @@ export class ChatroomHttpController {
     const identity = this.requireIdentity(request, response)
     if (identity === undefined) return
     const body = await readJson(request, this.config.maxMessageTextChars * 4 + 2_048)
+    const reply = replyRequest(body.reply)
     const prompt: ChatroomThreadPromptRequest = {
       threadId: fieldString(body, 'threadId'),
       text: fieldString(body, 'text'),
+      ...(reply === undefined ? {} : { reply }),
     }
-    const result = await this.runtime.submitThread(prompt.threadId, identity, prompt.text)
+    const result = await this.runtime.submitThread(prompt.threadId, identity, prompt.text, prompt.reply)
     json(response, 200, result)
   }
 

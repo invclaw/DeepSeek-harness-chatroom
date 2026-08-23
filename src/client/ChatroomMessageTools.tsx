@@ -2,6 +2,31 @@ import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { CHATROOM_REACTION_EMOJIS, type ChatroomReactionEmoji } from '../reactions.js'
 import type { ChatroomForwardItem, ChatroomIdentity, ChatroomReaction } from '../types.js'
 
+async function writeClipboard(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText !== undefined) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      return false
+    }
+  }
+  if (typeof document.execCommand !== 'function') return false
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.append(textarea)
+  textarea.select()
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    textarea.remove()
+  }
+}
+
 export interface ChatroomMessageToolsProps {
   readonly roomId: string
   readonly message: ChatroomForwardItem
@@ -9,9 +34,37 @@ export interface ChatroomMessageToolsProps {
   readonly identity: ChatroomIdentity | undefined
   readonly selecting: boolean
   readonly selected: boolean
+  readonly copyText?: string
+  readonly onReply?: (() => void) | undefined
+  readonly onBranch?: (() => void) | undefined
   toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>
   openForward(roomId: string, message: ChatroomForwardItem): void
   toggleSelection(roomId: string, message: ChatroomForwardItem): void
+}
+
+/** Capability-driven actions reused by main-room and branch message rows. */
+export function ChatroomInlineMessageActions({
+  copyText,
+  onReply,
+  onBranch,
+}: Pick<ChatroomMessageToolsProps, 'copyText' | 'onReply' | 'onBranch'>): JSX.Element | null {
+  const [copied, setCopied] = useState(false)
+  if (copyText === undefined && onReply === undefined && onBranch === undefined) return null
+  const copy = (): void => {
+    if (copyText === undefined || copied) return
+    void writeClipboard(copyText).then((written) => {
+      if (!written) return
+      setCopied(true)
+      globalThis.setTimeout(() => { setCopied(false) }, 1_000)
+    })
+  }
+  return (
+    <div className="dsh-chatroom-message-actions">
+      {copyText !== undefined && <button type="button" onClick={copy}>{copied ? '✓ 已复制' : '▣ 复制'}</button>}
+      {onReply !== undefined && <button type="button" onClick={onReply}>↩ 回复</button>}
+      {onBranch !== undefined && <button type="button" onClick={onBranch}>⑂ 分支</button>}
+    </div>
+  )
 }
 
 /** Checkbox shown on every message while the room is in multi-select mode. */
@@ -55,7 +108,7 @@ export function useChatroomMessageMenu(): {
       event.stopPropagation()
       setPosition({
         x: Math.max(8, Math.min(event.clientX, globalThis.innerWidth - 248)),
-        y: Math.max(8, Math.min(event.clientY, globalThis.innerHeight - 168)),
+        y: Math.max(8, Math.min(event.clientY, globalThis.innerHeight - 248)),
       })
     },
     close: () => { setPosition(undefined) },
@@ -95,6 +148,7 @@ export function ChatroomMessageContextMenu({
   close(): void
 }): JSX.Element | null {
   if (position === undefined || tools.identity === undefined) return null
+  const copyText = tools.copyText
   return (
     <div
       className="dsh-chatroom-context-menu"
@@ -112,6 +166,16 @@ export function ChatroomMessageContextMenu({
           >{emoji}</button>
         ))}
       </div>
+      {copyText !== undefined && (
+        <button type="button" role="menuitem" onClick={() => { void writeClipboard(copyText); close() }}>
+          <span aria-hidden>▣</span> 复制
+        </button>
+      )}
+      {tools.onReply !== undefined && (
+        <button type="button" role="menuitem" onClick={() => { tools.onReply?.(); close() }}>
+          <span aria-hidden>↩</span> 回复
+        </button>
+      )}
       <button type="button" role="menuitem" onClick={() => { tools.openForward(tools.roomId, tools.message); close() }}>
         <span aria-hidden>↗</span> 转发
       </button>
