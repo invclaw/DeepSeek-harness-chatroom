@@ -44,12 +44,33 @@ export interface ChatroomMessageToolsProps {
 
 /** Capability-driven actions reused by main-room and branch message rows. */
 export function ChatroomInlineMessageActions({
-  copyText,
-  onReply,
-  onBranch,
-}: Pick<ChatroomMessageToolsProps, 'copyText' | 'onReply' | 'onBranch'>): JSX.Element | null {
+  tools,
+  nativeCopy = false,
+  nativeLike = false,
+}: {
+  readonly tools: ChatroomMessageToolsProps
+  readonly nativeCopy?: boolean
+  readonly nativeLike?: boolean
+}): JSX.Element | null {
   const [copied, setCopied] = useState(false)
-  if (copyText === undefined && onReply === undefined && onBranch === undefined) return null
+  const [reactionsOpen, setReactionsOpen] = useState(false)
+  const copyText = tools.copyText
+  const canAct = tools.identity !== undefined
+  const liked = tools.reactions.some(reaction => reaction.messageId === tools.message.messageId
+    && reaction.emoji === '👍'
+    && reaction.participantIds.includes(tools.identity?.participantId ?? ''))
+  useEffect(() => {
+    if (!reactionsOpen) return
+    const close = () => { setReactionsOpen(false) }
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('pointerdown', close)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [reactionsOpen])
+  if ((copyText === undefined || nativeCopy) && !canAct) return null
   const copy = (): void => {
     if (copyText === undefined || copied) return
     void writeClipboard(copyText).then((written) => {
@@ -60,9 +81,41 @@ export function ChatroomInlineMessageActions({
   }
   return (
     <div className="dsh-chatroom-message-actions">
-      {copyText !== undefined && <button type="button" onClick={copy}>{copied ? '✓ 已复制' : '▣ 复制'}</button>}
-      {onReply !== undefined && <button type="button" onClick={onReply}>↩ 回复</button>}
-      {onBranch !== undefined && <button type="button" onClick={onBranch}>⑂ 分支</button>}
+      {copyText !== undefined && !nativeCopy && <button type="button" onClick={copy}>{copied ? '✓ 已复制' : '▣ 复制'}</button>}
+      {tools.onReply !== undefined && <button type="button" onClick={tools.onReply}>↩ 回复</button>}
+      {canAct && !nativeLike && (
+        <button
+          type="button"
+          aria-label={liked ? '取消点赞' : '点赞'}
+          aria-pressed={liked}
+          onClick={() => { void tools.toggleReaction(tools.roomId, tools.message.messageId, '👍') }}
+        >{liked ? '👍 已赞' : '👍 点赞'}</button>
+      )}
+      {canAct && (
+        <span className="dsh-chatroom-inline-reaction-control">
+          <button type="button" aria-label="贴表情" aria-expanded={reactionsOpen} onClick={() => { setReactionsOpen(open => !open) }}>☺ 表情</button>
+          {reactionsOpen && (
+            <span className="dsh-chatroom-inline-reactions" role="menu" aria-label="选择表情" onPointerDown={event => { event.stopPropagation() }}>
+              {CHATROOM_REACTION_EMOJIS.map(emoji => (
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-label={`贴表情 ${emoji}`}
+                  title={`贴表情 ${emoji}`}
+                  key={emoji}
+                  onClick={() => {
+                    void tools.toggleReaction(tools.roomId, tools.message.messageId, emoji)
+                    setReactionsOpen(false)
+                  }}
+                >{emoji}</button>
+              ))}
+            </span>
+          )}
+        </span>
+      )}
+      {canAct && <button type="button" onClick={() => { tools.openForward(tools.roomId, tools.message) }}>↗ 转发</button>}
+      {canAct && <button type="button" onClick={() => { tools.toggleSelection(tools.roomId, tools.message) }}>{tools.selected ? '✓ 取消选择' : '☑ 多选'}</button>}
+      {tools.onBranch !== undefined && <button type="button" onClick={tools.onBranch}>⑂ 分支</button>}
     </div>
   )
 }

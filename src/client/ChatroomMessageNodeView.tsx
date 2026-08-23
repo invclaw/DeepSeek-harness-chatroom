@@ -228,7 +228,7 @@ function ParticipantMessage({
         {projection.forward !== undefined && <ForwardCard forward={projection.forward} />}
         <ChatroomReactionBar {...tools} />
         <ChatroomThreadActivity preview={threadPreview} open={onThread} />
-        <ChatroomInlineMessageActions onReply={onReply} onBranch={onThread} />
+        <ChatroomInlineMessageActions tools={tools} nativeCopy />
       </div>
       <ChatroomMessageContextMenu tools={tools} position={menu.position} close={menu.close} />
     </div>

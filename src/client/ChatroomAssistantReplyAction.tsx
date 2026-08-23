@@ -3,6 +3,7 @@ import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatroomForwardItem, ChatroomReplyReference, ChatroomThreadRoot } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
 import {
+  ChatroomInlineMessageActions,
   ChatroomMessageContextMenu,
   ChatroomReactionBar,
   ChatroomSelectionCheckbox,
@@ -81,20 +82,7 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
       <ChatroomSelectionCheckbox tools={tools} />
       <div className="dsh-chatroom-assistant-actions">
         <ChatroomReactionBar {...tools} />
-        <button
-          className="dsh-chatroom-assistant-reply"
-          type="button"
-          title={`回复 ${room.aiDisplayName}`}
-          aria-label={`回复 ${room.aiDisplayName}`}
-          onClick={() => { props.setReply(room.id, reply) }}
-        >↩</button>
-        <button
-          className="dsh-chatroom-assistant-reply"
-          type="button"
-          title="发起分支"
-          aria-label="发起分支"
-          onClick={() => { void props.openThread(room.id, { ...reply, role: 'ai' }) }}
-        >⑂</button>
+        <ChatroomInlineMessageActions tools={tools} nativeCopy nativeLike />
       </div>
       <ChatroomThreadActivity
         preview={threadPreview}

@@ -326,7 +326,7 @@ function ThreadMessage({
             : <div className="dsh-chatroom-thread-literal-text">{message.text}</div>}
         </div>
         <ChatroomReactionBar {...tools} />
-        <ChatroomInlineMessageActions copyText={message.text} onReply={onReply} />
+        <ChatroomInlineMessageActions tools={tools} />
       </div>
       <ChatroomMessageContextMenu tools={tools} position={menu.position} close={menu.close} />
     </article>

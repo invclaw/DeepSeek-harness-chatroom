@@ -389,7 +389,6 @@ export const CHATROOM_STYLES = `
   white-space: nowrap;
 }
 
-.dsh-chatroom-reply-button,
 .dsh-chatroom-message-actions > button {
   border: 0;
   background: transparent;
@@ -401,27 +400,39 @@ export const CHATROOM_STYLES = `
   opacity: .72;
 }
 
-.dsh-chatroom-reply-button:hover,
 .dsh-chatroom-message-actions > button:hover { color: var(--brand-primary, #4f7cff); opacity: 1; }
-.dsh-chatroom-message-actions, .dsh-chatroom-assistant-actions { display: inline-flex; align-items: center; gap: 2px; }
-.dsh-chatroom-assistant-tools { display: flex; flex-direction: column; align-items: flex-start; }
-
-.dsh-chatroom-assistant-reply {
-  display: inline-grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
+.dsh-chatroom-message-actions, .dsh-chatroom-assistant-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.dsh-chatroom-message-actions { position: relative; }
+.dsh-chatroom-inline-reaction-control { position: relative; display: inline-flex; }
+.dsh-chatroom-inline-reaction-control > button {
   border: 0;
-  border-radius: 6px;
   background: transparent;
   color: var(--text-secondary, #7b8491);
-  padding: 0;
+  padding: 3px 4px;
   font: inherit;
-  font-size: 16px;
+  font-size: 12px;
   cursor: pointer;
+  opacity: .72;
 }
-
-.dsh-chatroom-assistant-reply:hover { background: var(--bg-secondary, #f3f4f6); color: var(--brand-primary, #4f7cff); }
+.dsh-chatroom-inline-reaction-control > button:hover { color: var(--brand-primary, #4f7cff); opacity: 1; }
+.dsh-chatroom-inline-reactions {
+  position: absolute;
+  z-index: 12;
+  bottom: calc(100% + 5px);
+  left: 0;
+  display: inline-flex;
+  gap: 2px;
+  border: 1px solid var(--border-primary, #e5e7eb);
+  border-radius: 12px;
+  background: var(--bg-primary, #fff);
+  padding: 5px;
+  box-shadow: 0 12px 30px rgb(15 23 42 / 18%);
+}
+.dsh-chatroom-inline-reactions > button { display: grid; place-items: center; width: 31px; height: 31px; border: 0; border-radius: 8px; background: transparent; font-size: 17px; cursor: pointer; }
+.dsh-chatroom-inline-reactions > button:hover { background: var(--bg-secondary, #f3f4f6); transform: scale(1.06); }
+.dsh-chatroom-participant-message[data-dsh-chatroom-own="true"] .dsh-chatroom-inline-reactions,
+.dsh-chatroom-thread-message[data-own="true"] .dsh-chatroom-inline-reactions { right: 0; left: auto; }
+.dsh-chatroom-assistant-tools { display: flex; flex-direction: column; align-items: flex-start; }
 
 .dsh-chatroom-thread-activity {
   display: flex;

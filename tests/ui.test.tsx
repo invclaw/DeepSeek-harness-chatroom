@@ -141,6 +141,9 @@ describe('native chatroom integration', () => {
 
   it('reuses native text primitives and shared actions without offering nested branches', () => {
     const setThreadReply = vi.fn()
+    const toggleReaction = vi.fn(async () => undefined)
+    const openForward = vi.fn()
+    const toggleMessageSelection = vi.fn()
     renderEntry(view({
       thread: {
         id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
@@ -150,7 +153,7 @@ describe('native chatroom integration', () => {
         id: 'thread-ai', threadId: 'thread', sequence: 0, role: 'ai', participantId: 'ai',
         displayName: 'DeepSeek', text: '**结论**：使用 `MarkdownText`。\n\n<script>alert(1)</script>', createdAt: Date.now(),
       }],
-    }), { setThreadReply })
+    }), { setThreadReply, toggleReaction, openForward, toggleMessageSelection })
 
     expect(screen.getByText('结论').tagName).toBe('STRONG')
     expect(screen.getByText('MarkdownText').tagName).toBe('CODE')
@@ -160,6 +163,15 @@ describe('native chatroom integration', () => {
     expect(setThreadReply).toHaveBeenCalledWith(expect.objectContaining({
       messageId: 'thread-ai', displayName: 'DeepSeek',
     }))
+    fireEvent.click(screen.getByRole('button', { name: '点赞' }))
+    expect(toggleReaction).toHaveBeenCalledWith('lobby', 'thread-ai', '👍')
+    fireEvent.click(screen.getByRole('button', { name: '贴表情' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '贴表情 🎉' }))
+    expect(toggleReaction).toHaveBeenCalledWith('lobby', 'thread-ai', '🎉')
+    fireEvent.click(screen.getByRole('button', { name: '↗ 转发' }))
+    expect(openForward).toHaveBeenCalledWith('lobby', expect.objectContaining({ messageId: 'thread-ai' }))
+    fireEvent.click(screen.getByRole('button', { name: '☑ 多选' }))
+    expect(toggleMessageSelection).toHaveBeenCalledWith('lobby', expect.objectContaining({ messageId: 'thread-ai' }))
     expect(screen.queryByRole('button', { name: '⑂ 分支' })).toBeNull()
   })
 
