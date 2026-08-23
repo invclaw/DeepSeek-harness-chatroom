@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   branchFrameFromLocation,
   branchFrameUrl,
   restoreParentSessionSelection,
+  stageBranchFrameSession,
 } from '../src/client/branch-frame.js'
 import { CHATROOM_STYLES } from '../src/client/styles.js'
 
@@ -42,6 +43,22 @@ describe('native branch frame isolation', () => {
     expect(JSON.parse(localStorage.getItem('dsh.sessions.current')!)).toEqual({
       sessionId: 'chatroom-v1-parent',
     })
+  })
+
+  it('waits for asynchronous native navigation before staging the branch', () => {
+    const frame = {
+      threadId: 'thread', roomId: 'room', sessionId: 'branch-session', parentSessionId: 'parent-session',
+    }
+    const open = vi.fn()
+    expect(stageBranchFrameSession(frame, {
+      current: 'parent-session', byId: { 'branch-session': {} },
+    }, open)).toBe(false)
+    expect(open).toHaveBeenCalledWith('branch-session')
+
+    expect(stageBranchFrameSession(frame, {
+      current: 'branch-session', byId: { 'branch-session': {} },
+    }, open)).toBe(true)
+    expect(open).toHaveBeenCalledOnce()
   })
 
   it('collapses native message actions in every active shared Session', () => {

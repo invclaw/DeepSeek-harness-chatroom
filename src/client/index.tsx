@@ -21,7 +21,9 @@ import { ChatroomClientStore } from './store.js'
 import { CHATROOM_STYLES } from './styles.js'
 import {
   branchFrameFromLocation,
+  notifyBranchFrameReady,
   restoreParentSessionSelection,
+  stageBranchFrameSession,
 } from './branch-frame.js'
 
 export const inject = ['connection', 'inputTriggers', 'sessions', 'settingsScope', 'slots']
@@ -63,11 +65,14 @@ export function apply(ctx: ClientContext): void {
     const stageBranch = () => {
       if (branchFrame === undefined || branchStaged) return
       const list = sessions.list.getSnapshot()
-      const sessionId = branchFrame.sessionId as SessionId
-      if (list.byId[sessionId] === undefined) return
+      const staged = stageBranchFrameSession(branchFrame, {
+        current: list.current === undefined ? undefined : String(list.current),
+        byId: list.byId,
+      }, sessionId => { sessions.open(sessionId as SessionId) })
+      if (!staged) return
       branchStaged = true
-      if (list.current !== sessionId) sessions.open(sessionId)
       restoreParentSessionSelection(branchFrame.parentSessionId)
+      notifyBranchFrameReady(branchFrame)
     }
     const syncSession = () => {
       stageBranch()

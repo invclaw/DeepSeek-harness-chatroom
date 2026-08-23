@@ -5,6 +5,12 @@ const THREAD_ID = 'dsh-chatroom-thread'
 const THREAD_SESSION = 'dsh-chatroom-thread-session'
 const ROOM_ID = 'dsh-chatroom-room'
 const PARENT_SESSION = 'dsh-chatroom-parent-session'
+export const BRANCH_FRAME_READY = 'dsh-chatroom-branch-ready'
+
+interface BranchSessionList {
+  readonly current?: string | undefined
+  readonly byId: Readonly<Record<string, unknown>>
+}
 
 /** Parse an isolated native branch-frame address. */
 export function branchFrameFromLocation(location: Pick<Location, 'search'>): ChatroomBranchFrame | undefined {
@@ -40,4 +46,24 @@ export function restoreParentSessionSelection(parentSessionId: string): void {
   } catch {
     // Browser storage can be unavailable; the two live runtimes still retain independent in-memory selections.
   }
+}
+
+/** Advance branch selection without treating an asynchronous open request as complete. */
+export function stageBranchFrameSession(
+  frame: ChatroomBranchFrame,
+  list: BranchSessionList,
+  open: (sessionId: string) => void,
+): boolean {
+  if (list.byId[frame.sessionId] === undefined) return false
+  if (list.current !== frame.sessionId) {
+    open(frame.sessionId)
+    return false
+  }
+  return true
+}
+
+/** Notify the parent panel after the native runtime selects the branch Session. */
+export function notifyBranchFrameReady(frame: ChatroomBranchFrame): void {
+  if (globalThis.parent === globalThis.window) return
+  globalThis.parent.postMessage({ type: BRANCH_FRAME_READY, threadId: frame.threadId }, globalThis.location.origin)
 }

@@ -86,6 +86,7 @@ export function ChatroomInlineMessageActions({
           onClick={() => { void tools.toggleReaction(tools.roomId, tools.message.messageId, '👍') }}
         >👍 <span className="dsh-chatroom-action-label">{liked ? '已赞' : '点赞'}</span></button>
       )}
+      {tools.onBranch !== undefined && <button type="button" aria-label="分支" onClick={tools.onBranch}>⑂ <span className="dsh-chatroom-action-label">分支</span></button>}
       {canAct && <button type="button" aria-label="转发" onClick={() => { tools.openForward(tools.roomId, tools.message) }}>↗ <span className="dsh-chatroom-action-label">转发</span></button>}
       {(canAct || copyText !== undefined || tools.onBranch !== undefined) && (
         <span className="dsh-chatroom-inline-reaction-control">
@@ -108,7 +109,6 @@ export function ChatroomInlineMessageActions({
               </span>}
               {copyText !== undefined && <button type="button" role="menuitem" onClick={() => { copy(); setOverflowOpen(false) }}>{copied ? '✓ 已复制' : '▣ 复制'}</button>}
               {canAct && <button type="button" role="menuitem" onClick={() => { tools.toggleSelection(tools.roomId, tools.message); setOverflowOpen(false) }}>{tools.selected ? '✓ 取消选择' : '☑ 多选'}</button>}
-              {tools.onBranch !== undefined && <button type="button" role="menuitem" onClick={() => { tools.onBranch?.(); setOverflowOpen(false) }}>⑂ 分支</button>}
             </span>
           )}
         </span>

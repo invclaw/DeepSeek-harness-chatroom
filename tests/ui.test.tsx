@@ -119,6 +119,7 @@ describe('native chatroom integration', () => {
     expect(frameUrl.searchParams.get('dsh-chatroom-thread')).toBe('thread')
     expect(frameUrl.searchParams.get('dsh-chatroom-thread-session')).toBe('chatroom-thread-v1-thread')
     expect(frameUrl.searchParams.get('dsh-chatroom-parent-session')).toBe('chatroom-v1-lobby')
+    expect(screen.getByText('正在加载分支…')).toBeTruthy()
 
     fireEvent.change(screen.getByRole('textbox', { name: '群聊名称' }), { target: { value: '新群名' } })
     fireEvent.click(screen.getByRole('button', { name: '保存名称' }))

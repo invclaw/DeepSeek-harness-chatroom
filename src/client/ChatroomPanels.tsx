@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { chatroomAvatar } from '../avatars.js'
 import type {
   ChatroomForwardItem,
@@ -6,7 +6,7 @@ import type {
   ChatroomReplyReference,
 } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
-import { branchFrameUrl } from './branch-frame.js'
+import { BRANCH_FRAME_READY, branchFrameUrl } from './branch-frame.js'
 import type { ChatroomView } from './store.js'
 
 interface ChatroomPanelsProps {
@@ -156,6 +156,26 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
 function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
   const thread = props.room.thread!
   const parentSessionId = props.room.room?.sessionId
+  const frameRef = useRef<HTMLIFrameElement>(null)
+  const [attempt, setAttempt] = useState(0)
+  const [ready, setReady] = useState(false)
+  const [timedOut, setTimedOut] = useState(false)
+  useEffect(() => {
+    setReady(false)
+    setTimedOut(false)
+    const receive = (event: MessageEvent) => {
+      if (event.origin !== globalThis.location.origin || event.source !== frameRef.current?.contentWindow) return
+      if (!isBranchReadyMessage(event.data, thread.id)) return
+      setReady(true)
+      setTimedOut(false)
+    }
+    globalThis.addEventListener('message', receive)
+    const timer = globalThis.setTimeout(() => { setTimedOut(true) }, 8_000)
+    return () => {
+      globalThis.removeEventListener('message', receive)
+      globalThis.clearTimeout(timer)
+    }
+  }, [attempt, thread.id])
   return (
     <aside className="dsh-chatroom-thread-panel" data-testid="chatroom-thread-panel" aria-label="分支回复">
       <header>
@@ -164,14 +184,29 @@ function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
       </header>
       {parentSessionId === undefined
         ? <div className="dsh-chatroom-thread-frame-error">无法确定父群聊会话。</div>
-        : <iframe
-          className="dsh-chatroom-thread-frame"
-          title={`分支回复：${thread.root.text}`}
-          src={branchFrameUrl(thread, parentSessionId)}
-        />}
+        : <div className="dsh-chatroom-thread-frame-shell">
+          <iframe
+            className="dsh-chatroom-thread-frame"
+            key={`${thread.id}:${attempt}`}
+            ref={frameRef}
+            title={`分支回复：${thread.root.text}`}
+            src={branchFrameUrl(thread, parentSessionId)}
+          />
+          {!ready && <div className="dsh-chatroom-thread-frame-status" role="status">
+            {timedOut
+              ? <><strong>分支加载超时</strong><button type="button" onClick={() => { setAttempt(value => value + 1) }}>重新加载</button></>
+              : <span>正在加载分支…</span>}
+          </div>}
+        </div>}
       {props.room.threadError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.threadError}</div>}
     </aside>
   )
+}
+
+function isBranchReadyMessage(value: unknown, threadId: string): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const message = value as { type?: unknown; threadId?: unknown }
+  return message.type === BRANCH_FRAME_READY && message.threadId === threadId
 }
 
 function formatRelative(time: number): string {

@@ -51,7 +51,7 @@ describe('participant-specific native message projection', () => {
     expect(screen.getByText('Bob').className).toBe('dsh-chatroom-display-name')
     expect(screen.getByTestId('native').textContent).toBe('加入前可读')
     expect(screen.queryByRole('button', { name: '↩ 回复' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '⑂ 分支' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '分支' })).toBeNull()
   })
 
   it('puts the participant name above a native bubble that contains only the message', () => {
@@ -92,12 +92,13 @@ describe('participant-specific native message projection', () => {
     expect(screen.getByTestId('native').textContent).toBe('请查收')
     expect(screen.getByRole('button', { name: '回复' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '点赞' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '分支' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '转发' })).toBeTruthy()
     expect(screen.queryByRole('menuitem', { name: '▣ 复制' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '更多消息操作' }))
     expect(screen.getByRole('menuitem', { name: '▣ 复制' })).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: '☑ 多选' })).toBeTruthy()
-    expect(screen.getByRole('menuitem', { name: '⑂ 分支' })).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: '⑂ 分支' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '回复' }))
     expect(setReply).toHaveBeenCalledWith('lobby', expect.objectContaining({ displayName: 'Bob', text: '请查收' }))
   })
