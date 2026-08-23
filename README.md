@@ -28,7 +28,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.9.1 replaces the custom branch transcript with an isolated native Harness Session, giving branches the same Agent, model, permission, interaction, trajectory, attachment, and recovery capabilities as the main conversation while suppressing nested branch creation. It also adds owner/administrator management, source-verified lossless forwarding, and compact desktop/mobile message actions with only reply, like, and forward kept visible.
+Version 0.9.2 replaces the custom branch transcript with an isolated native Harness Session, giving branches the same Agent, model, permission, interaction, trajectory, attachment, and recovery capabilities as the main conversation while suppressing nested branch creation. It also adds owner/administrator management, source-verified lossless forwarding, and compact desktop/mobile message actions with only reply, like, and forward kept visible.
 
 ## Requirements
 

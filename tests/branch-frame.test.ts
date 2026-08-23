@@ -44,9 +44,9 @@ describe('native branch frame isolation', () => {
     })
   })
 
-  it('removes the native nested-branch action from an isolated branch frame', () => {
+  it('collapses native message actions in every active shared Session', () => {
     expect(CHATROOM_STYLES).toContain(
-      'html[data-dsh-chatroom-branch-frame] [data-time-hover-root] > :last-child > button { display: none !important; }',
+      'html[data-dsh-chatroom-active] [data-time-hover-root] > :last-child > button { display: none !important; }',
     )
   })
 })
