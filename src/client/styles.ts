@@ -816,6 +816,10 @@ html[data-dsh-chatroom-branch-frame] [data-dsh-chatroom-branch-shell] {
 html[data-dsh-chatroom-branch-frame] [data-dsh-chatroom-branch-shell] > :first-child,
 html[data-dsh-chatroom-branch-frame] [data-dsh-chatroom-branch-shell] > :nth-child(3),
 html[data-dsh-chatroom-branch-frame] [data-dsh-chatroom-branch-shell] > [data-side] { display: none !important; }
+html[data-dsh-chatroom-branch-frame] [data-dsh-chatroom-branch-shell] > :nth-child(2) {
+  grid-column: 2 !important;
+  min-width: 0;
+}
 
 @media (max-width: 640px) {
   .dsh-chatroom-avatar-grid { grid-template-columns: repeat(4, 1fr); }

@@ -88,5 +88,9 @@ describe('native branch frame isolation', () => {
     expect(CHATROOM_STYLES).toContain(
       'html[data-dsh-chatroom-active] [data-time-hover-root] > :last-child > button { display: none !important; }',
     )
+    expect(CHATROOM_STYLES).toContain(
+      'html[data-dsh-chatroom-branch-frame] [data-dsh-chatroom-branch-shell] > :nth-child(2)',
+    )
+    expect(CHATROOM_STYLES).toContain('grid-column: 2 !important;')
   })
 })
