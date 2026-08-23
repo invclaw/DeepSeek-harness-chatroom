@@ -6,6 +6,7 @@ import type { ClientContext, ISessions, SessionId } from '@deepseek-ai/dsh-clien
 import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { ChatroomEntry } from './ChatroomEntry.js'
 import { ChatroomAssistantReplyAction } from './ChatroomAssistantReplyAction.js'
 import { ChatroomComposerDock, ChatroomFileAction } from './ChatroomComposer.js'
@@ -19,7 +20,7 @@ import { RoomIdentityAction } from './RoomIdentityAction.js'
 import { ChatroomClientStore } from './store.js'
 import { CHATROOM_STYLES } from './styles.js'
 
-export const inject = ['connection', 'inputTriggers', 'sessions', 'slots']
+export const inject = ['connection', 'inputTriggers', 'sessions', 'settingsScope', 'slots']
 
 /** Add room identity and navigation around the existing Harness conversation UI. */
 export function apply(ctx: ClientContext): void {
@@ -43,6 +44,7 @@ export function apply(ctx: ClientContext): void {
     style.textContent = CHATROOM_STYLES
     document.head.append(style)
     const restoreConfiguration = installRemoteConfigurationApi(connection)
+    const restoreSettingsMirror = activateRemoteSettingsMirror(ctx.get('settingsScope'))
     const restorePrompt = installNativePromptIdentity(connection.api, store)
     const syncSession = () => {
       store.resumeOpen()
@@ -54,6 +56,7 @@ export function apply(ctx: ClientContext): void {
     return () => {
       unsubscribeSessions()
       restorePrompt()
+      restoreSettingsMirror()
       restoreConfiguration()
       store.stop()
       style.remove()
@@ -170,6 +173,39 @@ export function apply(ctx: ClientContext): void {
       inject: () => chatroomMessageInjection(store, nativeMessageView),
     }, ChatroomSteeringMessageNodeView),
   ))
+}
+
+interface RemoteSettingsMirror {
+  persistence: 'host' | 'memory'
+  load(): Promise<void>
+}
+
+interface SettingsScopeWithDescribe {
+  describe(): RemoteSettingsMirror
+}
+
+/** Let RC8's shared settings mirror use the authenticated plugin carrier in a remote browser. */
+export function activateRemoteSettingsMirror(settingsScope: unknown): () => void {
+  if (!hasSettingsDescribe(settingsScope)) return () => undefined
+  const mirror = settingsScope.describe()
+  if (!isRemoteSettingsMirror(mirror) || mirror.persistence !== 'memory') return () => undefined
+  mirror.persistence = 'host'
+  void mirror.load()
+  return () => {
+    if (mirror.persistence === 'host') mirror.persistence = 'memory'
+  }
+}
+
+function hasSettingsDescribe(value: unknown): value is SettingsScopeWithDescribe {
+  return value !== null && typeof value === 'object'
+    && typeof (value as Record<string, unknown>).describe === 'function'
+}
+
+function isRemoteSettingsMirror(value: unknown): value is RemoteSettingsMirror {
+  return value !== null && typeof value === 'object'
+    && ((value as Record<string, unknown>).persistence === 'host'
+      || (value as Record<string, unknown>).persistence === 'memory')
+    && typeof (value as Record<string, unknown>).load === 'function'
 }
 
 /** Mount one wrapper only after its native renderer exists, independent of client-plugin load order. */

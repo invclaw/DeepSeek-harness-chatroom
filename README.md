@@ -26,7 +26,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.7.4 adds a chatroom-administrator-protected model-configuration carrier for remote RC7 Web deployments. Harness's native configuration plane remains loopback-only; the plugin forwards only the `settings`, `credentials`, and model-discovery methods required by the Models page to allowlisted identities, without exposing Host files, Sessions, or any other API. The 0.7.3 branch mentions, text-model image-history compatibility, and native-renderer load-order fix remain intact.
+Version 0.7.5 adds a chatroom-administrator-protected model-configuration carrier for remote RC7 Web deployments and activates the shared Settings mirror that RC7's current dependency tree otherwise leaves in memory mode. Harness's native configuration plane remains loopback-only; the plugin forwards only the `settings`, `credentials`, and model-discovery methods required by the Models page to allowlisted identities, without exposing Host files, Sessions, or any other API. The 0.7.3 branch mentions, text-model image-history compatibility, and native-renderer load-order fix remain intact.
 
 ## Requirements
 

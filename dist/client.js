@@ -3147,6 +3147,7 @@ window.__ModuleLoader__.load({
 			"connection",
 			"inputTriggers",
 			"sessions",
+			"settingsScope",
 			"slots"
 		];
 		/** Add room identity and navigation around the existing Harness conversation UI. */
@@ -3171,6 +3172,7 @@ window.__ModuleLoader__.load({
 				style.textContent = CHATROOM_STYLES;
 				document.head.append(style);
 				const restoreConfiguration = installRemoteConfigurationApi(connection);
+				const restoreSettingsMirror = activateRemoteSettingsMirror(ctx.get("settingsScope"));
 				const restorePrompt = installNativePromptIdentity(connection.api, store);
 				const syncSession = () => {
 					store.resumeOpen();
@@ -3182,6 +3184,7 @@ window.__ModuleLoader__.load({
 				return () => {
 					unsubscribeSessions();
 					restorePrompt();
+					restoreSettingsMirror();
 					restoreConfiguration();
 					store.stop();
 					style.remove();
@@ -3277,6 +3280,23 @@ window.__ModuleLoader__.load({
 				inject: () => chatroomMessageInjection(store, nativeMessageView)
 			}, ChatroomSteeringMessageNodeView)));
 		}
+		/** Let RC8's shared settings mirror use the authenticated plugin carrier in a remote browser. */
+		function activateRemoteSettingsMirror(settingsScope) {
+			if (!hasSettingsDescribe(settingsScope)) return () => void 0;
+			const mirror = settingsScope.describe();
+			if (!isRemoteSettingsMirror(mirror) || mirror.persistence !== "memory") return () => void 0;
+			mirror.persistence = "host";
+			mirror.load();
+			return () => {
+				if (mirror.persistence === "host") mirror.persistence = "memory";
+			};
+		}
+		function hasSettingsDescribe(value) {
+			return value !== null && typeof value === "object" && typeof value.describe === "function";
+		}
+		function isRemoteSettingsMirror(value) {
+			return value !== null && typeof value === "object" && (value.persistence === "host" || value.persistence === "memory") && typeof value.load === "function";
+		}
 		/** Mount one wrapper only after its native renderer exists, independent of client-plugin load order. */
 		function mountAfterNativeMessageView(readNative, subscribe, mount) {
 			let mountedNative;
@@ -3357,6 +3377,7 @@ window.__ModuleLoader__.load({
 			apply
 		};
 		//#endregion
+		exports.activateRemoteSettingsMirror = activateRemoteSettingsMirror;
 		exports.apply = apply;
 		exports.createChatroomAiSource = createChatroomAiSource;
 		exports.default = client_default;

@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-chatroom",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Multi-user AI chatroom plugin for DeepSeek Harness Web",
   "type": "module",
   "main": "dist/index.js",
@@ -34,7 +34,8 @@
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-input-trigger",
-        "@deepseek-ai/dsh-client-ui-layout"
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-settings"
       ]
     }
   },
@@ -80,6 +81,7 @@
     "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.0-rc.7",
     "@deepseek-ai/dsh-client-ui-input-trigger": ">=0.1.0-rc.7",
     "@deepseek-ai/dsh-client-ui-layout": ">=0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.0-rc.7",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.7",
     "@deepseek-ai/dsh-host-apiproxy": ">=0.1.0-rc.7",
     "@deepseek-ai/dsh-host-webserver": ">=0.1.0-rc.7",
@@ -102,6 +104,7 @@
     "@deepseek-ai/dsh-client-ui-conversation": "0.1.0-rc.7",
     "@deepseek-ai/dsh-client-ui-input-trigger": "0.1.0-rc.7",
     "@deepseek-ai/dsh-client-ui-layout": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.0-rc.7",
     "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.7",
     "@deepseek-ai/dsh-host-apiproxy": "0.1.0-rc.7",
     "@deepseek-ai/dsh-host-webserver": "0.1.0-rc.7",

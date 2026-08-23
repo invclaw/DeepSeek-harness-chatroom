@@ -5,6 +5,8 @@ import { ChatroomClientStore } from './store.js';
 export declare const inject: string[];
 /** Add room identity and navigation around the existing Harness conversation UI. */
 export declare function apply(ctx: ClientContext): void;
+/** Let RC8's shared settings mirror use the authenticated plugin carrier in a remote browser. */
+export declare function activateRemoteSettingsMirror(settingsScope: unknown): () => void;
 /** Mount one wrapper only after its native renderer exists, independent of client-plugin load order. */
 export declare function mountAfterNativeMessageView<T>(readNative: () => T | undefined, subscribe: (listener: () => void) => () => void, mount: (native: T) => () => void): () => void;
 /** Build the room-scoped AI and member source contributed to RC7's native @ menu. */
