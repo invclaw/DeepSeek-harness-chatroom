@@ -805,6 +805,7 @@ export const CHATROOM_STYLES = `
 .dsh-chatroom-forward-empty { border-radius: 10px; background: var(--bg-secondary, #f3f4f6); padding: 18px; color: var(--text-secondary, #6b7280); text-align: center; }
 
 html[data-dsh-chatroom-branch-frame] [data-shell-overlay] { display: none !important; }
+html[data-dsh-chatroom-branch-frame] [data-time-hover-root] > :last-child > button { display: none !important; }
 html[data-dsh-chatroom-branch-frame] [data-dsh-chatroom-branch-shell] {
   grid-template-columns: 0 minmax(0, 1fr) 0 !important;
 }

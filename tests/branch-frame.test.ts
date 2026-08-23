@@ -6,6 +6,7 @@ import {
   branchFrameUrl,
   restoreParentSessionSelection,
 } from '../src/client/branch-frame.js'
+import { CHATROOM_STYLES } from '../src/client/styles.js'
 
 beforeEach(() => {
   history.replaceState({}, '', '/private-entry/?keep=1#old')
@@ -41,5 +42,11 @@ describe('native branch frame isolation', () => {
     expect(JSON.parse(localStorage.getItem('dsh.sessions.current')!)).toEqual({
       sessionId: 'chatroom-v1-parent',
     })
+  })
+
+  it('removes the native nested-branch action from an isolated branch frame', () => {
+    expect(CHATROOM_STYLES).toContain(
+      'html[data-dsh-chatroom-branch-frame] [data-time-hover-root] > :last-child > button { display: none !important; }',
+    )
   })
 })
