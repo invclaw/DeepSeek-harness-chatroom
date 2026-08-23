@@ -262,6 +262,88 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
+  it('rebuilds an image branch root from its durable source event', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const image = await sharp({ create: { width: 8, height: 6, channels: 3, background: '#336699' } }).png().toBuffer()
+    await runtime.submit('lobby', alice, [{
+      type: 'image', name: 'diagram.png', mediaType: 'image/png', data: image.toString('base64'),
+    }], 'queue')
+    const sourceMessage = harness.agents[0]?.session.append.mock.calls[0]?.[1]
+    Object.assign(harness.agents[0]!.session, {
+      events: [{ type: 'user/message', seq: 7, time: 123_456, data: sourceMessage }],
+    })
+
+    const opened = await runtime.openThread('lobby', alice, {
+      messageId: 'user:7',
+      sourceSessionId: 'chatroom-v1-lobby',
+      sourceSeq: 7,
+      role: 'human',
+      displayName: '伪造昵称',
+      text: '伪造内容',
+    })
+
+    expect(opened.thread.root).toMatchObject({ displayName: 'Alice', text: '图片消息' })
+    const seed = harness.agents[1]?.session.append.mock.calls[0]?.[1]
+    expect(seed?.content).toEqual([
+      { type: 'text', text: '这是群聊分支的主题消息。Alice：' },
+      { type: 'image', attachment: expect.objectContaining({ attachmentId: 'attachment-0', name: 'diagram.png' }) },
+    ])
+    await runtime.openThread('lobby', alice, opened.thread.root)
+    expect(harness.agents[1]?.session.append).toHaveBeenCalledOnce()
+    await runtime.stop()
+  })
+
+  it('backfills media once when reopening a pre-0.9.9 branch', async () => {
+    const harness = fakeHarness()
+    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const first = new ChatroomRuntime(harness.ctx, config())
+    await first.start()
+    const legacy = await first.openThread('lobby', alice, {
+      messageId: 'user:7', role: 'human', displayName: 'Alice', text: '图片消息',
+    })
+    await first.stop()
+    const threads = harness.tables.get('threads')
+    const stored = threads?.get(legacy.thread.id) as Record<string, unknown> | undefined
+    if (threads === undefined || stored === undefined) throw new Error('thread fixture missing')
+    await threads.put(legacy.thread.id, { ...stored, rootContentVersion: undefined })
+
+    const second = new ChatroomRuntime(harness.ctx, config())
+    await second.start()
+    Object.assign(harness.agents[2]!.session, {
+      events: [{
+        type: 'user/message', seq: 7, time: 123_456,
+        data: {
+          role: 'user',
+          content: [
+            { type: 'text', text: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：' },
+            {
+              type: 'image',
+              attachment: {
+                attachmentId: 'attachment-legacy', mediaType: 'image/png', bytes: 100,
+                width: 8, height: 6, name: 'legacy.png',
+              },
+            },
+          ],
+          source: { kind: 'user' },
+        },
+      }],
+    })
+    const root = {
+      messageId: 'user:7', sourceSessionId: 'chatroom-v1-lobby', sourceSeq: 7,
+      role: 'human' as const, displayName: 'Alice', text: '图片消息',
+    }
+    await second.openThread('lobby', alice, root)
+    await second.openThread('lobby', alice, root)
+    expect(harness.agents[3]?.session.append).toHaveBeenCalledOnce()
+    expect(harness.agents[3]?.session.append.mock.calls[0]?.[1]?.content).toContainEqual({
+      type: 'image', attachment: expect.objectContaining({ attachmentId: 'attachment-legacy' }),
+    })
+    await second.stop()
+  })
+
   it('forwards selected messages as one native card without waking AI', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
@@ -362,6 +444,7 @@ function fakeHarness(): {
   }>
   attached: string[]
   savedImages: ReturnType<typeof vi.fn>
+  tables: Map<string, MemoryTable<string, unknown>>
 } {
   const tables = new Map<string, MemoryTable<string, unknown>>()
   const agents: Array<Agent & {
@@ -434,7 +517,7 @@ function fakeHarness(): {
     },
     llm: { resolveModelInfo: vi.fn(async () => ({ inputModalities: ['text', 'image'] })) },
   } as unknown as Context
-  return { ctx, agents, attached, savedImages }
+  return { ctx, agents, attached, savedImages, tables }
 }
 
 class MemoryTable<K extends string, V> implements KvTable<K, V> {

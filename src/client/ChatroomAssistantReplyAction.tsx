@@ -84,6 +84,12 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
       return parts
     }, []),
   }
+  const threadRoot: ChatroomThreadRoot = {
+    ...reply,
+    role: 'ai',
+    sourceSessionId: message.sourceSessionId!,
+    sourceSeq: message.sourceSeq!,
+  }
   const tools: ChatroomMessageToolsProps = {
     roomId: room.id,
     message,
@@ -93,7 +99,7 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
     selected,
     copyText: text || 'AI 回复',
     onReply: () => { props.setReply(room.id, reply) },
-    onBranch: target?.kind === 'thread' ? undefined : () => { void props.openThread(room.id, { ...reply, role: 'ai' }) },
+    onBranch: target?.kind === 'thread' ? undefined : () => { void props.openThread(room.id, threadRoot) },
     toggleReaction: props.toggleReaction,
     openForward: props.openForward,
     toggleSelection: props.toggleMessageSelection,
@@ -109,7 +115,7 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
       </div>
       {target?.kind !== 'thread' && <ChatroomThreadActivity
         preview={threadPreview}
-        open={() => { void props.openThread(room.id, { ...reply, role: 'ai' }) }}
+        open={() => { void props.openThread(room.id, threadRoot) }}
       />}
       <ChatroomMessageContextMenu tools={tools} position={menu.position} close={menu.close} />
     </div>

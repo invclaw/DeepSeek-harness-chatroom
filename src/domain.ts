@@ -67,6 +67,7 @@ export interface ThreadRecord {
   readonly sessionId: string
   readonly createdAt: number
   readonly createdBy: string
+  readonly rootContentVersion?: 1
 }
 
 export interface ThreadMessageRecord {
@@ -160,6 +161,8 @@ const threadRootSchema = z.object({
   displayName: z.string().min(1),
   text: z.string().min(1),
   role: z.union([z.literal('human'), z.literal('ai')]),
+  sourceSessionId: z.string().min(1).optional(),
+  sourceSeq: nonNegativeSafeInteger.optional(),
 })
 
 const replySchema = z.object({
@@ -175,6 +178,7 @@ const threadSchema = z.object({
   sessionId: z.string().min(1),
   createdAt: nonNegativeSafeInteger,
   createdBy: z.string().min(1),
+  rootContentVersion: z.literal(1).optional(),
 }) as z.ZodType<ThreadRecord>
 
 const threadMessageSchema = z.object({

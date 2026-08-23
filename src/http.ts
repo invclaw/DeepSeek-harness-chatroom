@@ -660,7 +660,20 @@ function threadRootRequest(value: unknown): ChatroomThreadRoot {
   }
   const role = (value as Record<string, unknown>).role
   if (role !== 'human' && role !== 'ai') throw new ChatroomInputError('分支主题角色无效。')
-  return { ...reply, role }
+  const request = value as Record<string, unknown>
+  if ((request.sourceSessionId === undefined) !== (request.sourceSeq === undefined)
+    || (request.sourceSessionId !== undefined && typeof request.sourceSessionId !== 'string')
+    || (request.sourceSeq !== undefined && typeof request.sourceSeq !== 'number')) {
+    throw new ChatroomInputError('分支主题来源消息不完整。')
+  }
+  return {
+    ...reply,
+    role,
+    ...(request.sourceSessionId === undefined ? {} : {
+      sourceSessionId: request.sourceSessionId,
+      sourceSeq: request.sourceSeq as number,
+    }),
+  }
 }
 
 function isImageMediaType(value: unknown): value is Extract<ChatroomPromptContentPart, { type: 'image' }>['mediaType'] {

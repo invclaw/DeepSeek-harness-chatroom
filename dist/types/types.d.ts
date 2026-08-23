@@ -168,6 +168,8 @@ export interface ChatroomForwardRequest {
 /** Root message used to create or reopen a branch conversation. */
 export interface ChatroomThreadRoot extends ChatroomReplyReference {
     readonly role: ChatroomMessageRole;
+    readonly sourceSessionId?: string;
+    readonly sourceSeq?: number;
 }
 /** Public branch metadata. */
 export interface ChatroomThread {

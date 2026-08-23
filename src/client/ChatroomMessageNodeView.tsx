@@ -148,10 +148,11 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
   const activeRoom = sessionTarget.room
   const message = messageTarget(String(props.sessionId), props.node, projection)
   const reply = replyTarget(message)
+  const threadRoot = threadRootTarget(message)
   const onReply = room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, reply) }
   const onThread = room.identity === undefined || sessionTarget.kind === 'thread'
     ? undefined
-    : () => { void props.openThread(activeRoom.id, { ...reply, role: 'human' }) }
+    : () => { void props.openThread(activeRoom.id, threadRoot) }
   const tools = messageTools(props, room, activeRoom.id, message, message.text, onReply, onThread)
   const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, 'human')
   return <ParticipantMessage
@@ -181,10 +182,11 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
   const activeRoom = sessionTarget.room
   const message = messageTarget(String(props.sessionId), props.node, projection)
   const reply = replyTarget(message)
+  const threadRoot = threadRootTarget(message)
   const onReply = room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, reply) }
   const onThread = room.identity === undefined || sessionTarget.kind === 'thread'
     ? undefined
-    : () => { void props.openThread(activeRoom.id, { ...reply, role: 'human' }) }
+    : () => { void props.openThread(activeRoom.id, threadRoot) }
   const tools = messageTools(props, room, activeRoom.id, message, message.text, onReply, onThread)
   const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, 'human')
   return <ParticipantMessage
@@ -331,6 +333,20 @@ function messageTarget(
     ],
     ...(projection.reply === undefined ? {} : { reply: projection.reply }),
     ...(projection.forward === undefined ? {} : { forward: projection.forward }),
+  }
+}
+
+function threadRootTarget(message: ChatroomForwardItem): ChatroomThreadRoot {
+  if (message.sourceSessionId === undefined || message.sourceSeq === undefined) {
+    throw new Error('chatroom branch target lost its source coordinates')
+  }
+  return {
+    messageId: message.messageId,
+    displayName: message.displayName,
+    text: message.text,
+    role: message.role,
+    sourceSessionId: message.sourceSessionId,
+    sourceSeq: message.sourceSeq,
   }
 }
 

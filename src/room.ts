@@ -27,6 +27,7 @@ import {
   identifyFileText,
   identifyForwardText,
   identifyPrompt,
+  identifyReplyText,
   mentionsAi,
   participantMarker,
   projectFileText,
@@ -83,10 +84,16 @@ interface RoomState {
 }
 
 interface ThreadState {
-  readonly record: ThreadRecord
+  record: ThreadRecord
   binding: AgentBinding | undefined
   activation: Promise<AgentBinding> | undefined
   admission: Promise<void>
+}
+
+interface ResolvedThreadRoot {
+  readonly root: ChatroomThreadRoot
+  readonly content: ContentBlock[]
+  readonly hasMedia: boolean
 }
 
 /** Runtime validation failure safe to return to a browser. */
@@ -612,9 +619,16 @@ export class ChatroomRuntime {
         record.roomId === roomId
         && record.root.messageId === normalized.messageId
         && record.root.role === normalized.role)?.[1]
-      const state = existing === undefined
-        ? await this.createThread(roomId, identity, normalized)
-        : this.requireThreadState(existing.id)
+      let state: ThreadState
+      if (existing?.rootContentVersion === 1) {
+        state = this.requireThreadState(existing.id)
+      } else {
+        const resolved = await this.resolveThreadRoot(roomId, normalized)
+        state = existing === undefined
+          ? await this.createThread(roomId, identity, resolved)
+          : this.requireThreadState(existing.id)
+        if (existing !== undefined) await this.upgradeThreadRoot(state, resolved)
+      }
       await this.ensureThread(state.record.id)
       return {
         thread: publicThread(state.record),
@@ -747,9 +761,10 @@ export class ChatroomRuntime {
   private async createThread(
     roomId: string,
     identity: ChatroomIdentity,
-    root: ChatroomThreadRoot,
+    resolved: ResolvedThreadRoot,
   ): Promise<ThreadState> {
     const id = randomUUID()
+    const { root } = resolved
     const record: ThreadRecord = {
       id,
       roomId,
@@ -757,6 +772,7 @@ export class ChatroomRuntime {
       sessionId: `chatroom-thread-v1-${id}`,
       createdAt: Date.now(),
       createdBy: identity.participantId,
+      ...(root.sourceSessionId === undefined ? {} : { rootContentVersion: 1 }),
     }
     await this.requireThreads().put(id, record)
     const state = newThreadState(record)
@@ -764,13 +780,7 @@ export class ChatroomRuntime {
     try {
       const binding = await this.ensureThread(id)
       this.ctx.sessionTitle.rename(binding.agent.session, `分支：${[...root.text].slice(0, 40).join('')}`)
-      const seed = createUserMessage({
-        content: [{
-          type: 'text',
-          text: `这是群聊分支的主题消息。${root.displayName}：${root.text}`,
-        }],
-        source: { kind: 'user' },
-      })
+      const seed = createUserMessage({ content: resolved.content, source: { kind: 'user' } })
       binding.agent.session.append('user/message', seed, { surfaceOp: 'append' })
       return state
     } catch (error) {
@@ -778,6 +788,49 @@ export class ChatroomRuntime {
       await this.requireThreads().delete(id)
       throw error
     }
+  }
+
+  private async resolveThreadRoot(roomId: string, root: ChatroomThreadRoot): Promise<ResolvedThreadRoot> {
+    if (root.sourceSessionId === undefined || root.sourceSeq === undefined) {
+      return { root, content: fallbackThreadRootContent(root), hasMedia: false }
+    }
+    const item = await this.resolveForwardItem(roomId, {
+      ...root,
+      sourceSessionId: root.sourceSessionId,
+      sourceSeq: root.sourceSeq,
+      createdAt: 0,
+    })
+    const authoritative: ChatroomThreadRoot = {
+      messageId: root.messageId,
+      displayName: item.displayName,
+      text: item.text,
+      role: item.role,
+      sourceSessionId: root.sourceSessionId,
+      sourceSeq: root.sourceSeq,
+    }
+    return {
+      root: authoritative,
+      content: authoritativeThreadRootContent(authoritative, item),
+      hasMedia: item.content?.some(part => part.type === 'image' || part.type === 'file') ?? false,
+    }
+  }
+
+  private async upgradeThreadRoot(state: ThreadState, resolved: ResolvedThreadRoot): Promise<void> {
+    if (state.record.rootContentVersion === 1 || resolved.root.sourceSessionId === undefined) return
+    const record: ThreadRecord = {
+      ...state.record,
+      root: resolved.root,
+      rootContentVersion: 1,
+    }
+    if (resolved.hasMedia) {
+      const binding = await this.ensureThread(record.id)
+      binding.agent.session.append('user/message', createUserMessage({
+        content: resolved.content,
+        source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+    }
+    await this.requireThreads().put(record.id, record)
+    state.record = record
   }
 
   private async ensureThread(threadId: string): Promise<AgentBinding> {
@@ -1343,12 +1396,56 @@ function normalizeThreadRoot(root: ChatroomThreadRoot): ChatroomThreadRoot {
   const text = root.text.trim().replace(/\s+/gu, ' ')
   if (messageId === '' || displayName === '' || text === '') throw new ChatroomInputError('分支主题消息无效。')
   if (root.role !== 'human' && root.role !== 'ai') throw new ChatroomInputError('分支主题角色无效。')
+  const sourceSessionId = root.sourceSessionId?.trim()
+  if ((sourceSessionId === undefined) !== (root.sourceSeq === undefined)) {
+    throw new ChatroomInputError('分支主题来源消息不完整。')
+  }
+  if (sourceSessionId !== undefined && (sourceSessionId === '' || [...sourceSessionId].length > 240 || /\p{Cc}/u.test(sourceSessionId))) {
+    throw new ChatroomInputError('分支主题来源会话无效。')
+  }
+  if (root.sourceSeq !== undefined && (!Number.isSafeInteger(root.sourceSeq) || root.sourceSeq < 0)) {
+    throw new ChatroomInputError('分支主题来源序号无效。')
+  }
   return {
     messageId: [...messageId].slice(0, 200).join(''),
     displayName: [...displayName].slice(0, 80).join(''),
     text: [...text].slice(0, 500).join(''),
     role: root.role,
+    ...(sourceSessionId === undefined ? {} : { sourceSessionId, sourceSeq: root.sourceSeq! }),
   }
+}
+
+function fallbackThreadRootContent(root: ChatroomThreadRoot): ContentBlock[] {
+  return [{
+    type: 'text',
+    text: `这是群聊分支的主题消息。${root.displayName}：${root.text}`,
+  }]
+}
+
+function authoritativeThreadRootContent(
+  root: ChatroomThreadRoot,
+  item: ChatroomForwardItem,
+): ContentBlock[] {
+  const content = item.content ?? []
+  let metadata = ''
+  if (item.reply !== undefined) metadata += identifyReplyText('', item.reply)
+  if (item.forward !== undefined) metadata += identifyForwardText(item.forward)
+  const blocks: ContentBlock[] = [{
+    type: 'text',
+    text: `这是群聊分支的主题消息。${root.displayName}：${metadata}`,
+  }]
+  for (const part of content) {
+    if (part.type === 'text') {
+      blocks.push({ type: 'text', text: part.text })
+      continue
+    }
+    if (part.type === 'file') {
+      blocks.push({ type: 'text', text: identifyFileText(part.file) })
+      continue
+    }
+    blocks.push({ type: 'image', attachment: part.image as ImageAttachmentRef })
+  }
+  return blocks.length === 1 && metadata === '' ? fallbackThreadRootContent(root) : blocks
 }
 
 function normalizeThreadText(value: string, maxChars: number): string {

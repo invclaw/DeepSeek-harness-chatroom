@@ -199,7 +199,10 @@ describe('participant-specific native message projection', () => {
   it('shows every message checkbox in selection mode and the latest three branch replies', () => {
     const toggleMessageSelection = vi.fn()
     const openThread = vi.fn(async () => undefined)
-    const root = { messageId: 'user:1', displayName: 'Bob', text: '主题', role: 'human' as const }
+    const root = {
+      messageId: 'user:1', displayName: 'Bob', text: '主题', role: 'human' as const,
+      sourceSessionId: 'chatroom-v1-lobby', sourceSeq: 1,
+    }
     const thread = { id: 'thread', roomId: 'lobby', sessionId: 'thread-session', root, createdAt: 1 }
     const recentMessages = [1, 2, 3].map(sequence => ({
       id: `reply-${sequence}`,
@@ -234,7 +237,10 @@ describe('participant-specific native message projection', () => {
   it('adds the same selection checkbox and branch activity to AI messages', () => {
     const toggleMessageSelection = vi.fn()
     const openThread = vi.fn(async () => undefined)
-    const root = { messageId: 'assistant:2', displayName: 'DeepSeek', text: 'AI 结论', role: 'ai' as const }
+    const root = {
+      messageId: 'assistant:2', displayName: 'DeepSeek', text: 'AI 结论', role: 'ai' as const,
+      sourceSessionId: 'chatroom-v1-lobby', sourceSeq: 2,
+    }
     const thread = { id: 'ai-thread', roomId: 'lobby', sessionId: 'ai-thread-session', root, createdAt: 1 }
     const useChatroom = messageProps(userNode(identifyChatroomText('参考', bob)), alice, () => null, {
       selectionRoomId: 'lobby',
@@ -252,7 +258,7 @@ describe('participant-specific native message projection', () => {
       messageId: 'assistant:2',
       useChatroom,
       useSession: (selector: (snapshot: unknown) => unknown) => selector({
-        nodes: [{ kind: 'assistant', messageId: 'assistant:2', blocks: [{ kind: 'text', text: 'AI 结论' }], time: 2 }],
+        nodes: [{ kind: 'assistant', messageId: 'assistant:2', seq: 2, blocks: [{ kind: 'text', text: 'AI 结论' }], time: 2 }],
       }),
       setReply: vi.fn(),
       openThread,

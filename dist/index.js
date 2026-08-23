@@ -159,7 +159,9 @@ var threadRootSchema = z2.object({
   messageId: z2.string().min(1),
   displayName: z2.string().min(1),
   text: z2.string().min(1),
-  role: z2.union([z2.literal("human"), z2.literal("ai")])
+  role: z2.union([z2.literal("human"), z2.literal("ai")]),
+  sourceSessionId: z2.string().min(1).optional(),
+  sourceSeq: nonNegativeSafeInteger.optional()
 });
 var replySchema = z2.object({
   messageId: z2.string().min(1),
@@ -172,7 +174,8 @@ var threadSchema = z2.object({
   root: threadRootSchema,
   sessionId: z2.string().min(1),
   createdAt: nonNegativeSafeInteger,
-  createdBy: z2.string().min(1)
+  createdBy: z2.string().min(1),
+  rootContentVersion: z2.literal(1).optional()
 });
 var threadMessageSchema = z2.object({
   id: z2.uuid(),
@@ -806,7 +809,14 @@ var ChatroomRuntime = class {
     const task = room.admission.then(async () => {
       await this.touchMember(roomId, identity);
       const existing = [...this.requireThreads().entries()].find(([, record]) => record.roomId === roomId && record.root.messageId === normalized.messageId && record.root.role === normalized.role)?.[1];
-      const state = existing === void 0 ? await this.createThread(roomId, identity, normalized) : this.requireThreadState(existing.id);
+      let state;
+      if (existing?.rootContentVersion === 1) {
+        state = this.requireThreadState(existing.id);
+      } else {
+        const resolved = await this.resolveThreadRoot(roomId, normalized);
+        state = existing === void 0 ? await this.createThread(roomId, identity, resolved) : this.requireThreadState(existing.id);
+        if (existing !== void 0) await this.upgradeThreadRoot(state, resolved);
+      }
       await this.ensureThread(state.record.id);
       return {
         thread: publicThread(state.record),
@@ -911,15 +921,17 @@ var ChatroomRuntime = class {
       createdAt: event.time
     });
   }
-  async createThread(roomId, identity, root) {
+  async createThread(roomId, identity, resolved) {
     const id = randomUUID();
+    const { root } = resolved;
     const record = {
       id,
       roomId,
       root,
       sessionId: `chatroom-thread-v1-${id}`,
       createdAt: Date.now(),
-      createdBy: identity.participantId
+      createdBy: identity.participantId,
+      ...root.sourceSessionId === void 0 ? {} : { rootContentVersion: 1 }
     };
     await this.requireThreads().put(id, record);
     const state = newThreadState(record);
@@ -927,13 +939,7 @@ var ChatroomRuntime = class {
     try {
       const binding = await this.ensureThread(id);
       this.ctx.sessionTitle.rename(binding.agent.session, `\u5206\u652F\uFF1A${[...root.text].slice(0, 40).join("")}`);
-      const seed = createUserMessage({
-        content: [{
-          type: "text",
-          text: `\u8FD9\u662F\u7FA4\u804A\u5206\u652F\u7684\u4E3B\u9898\u6D88\u606F\u3002${root.displayName}\uFF1A${root.text}`
-        }],
-        source: { kind: "user" }
-      });
+      const seed = createUserMessage({ content: resolved.content, source: { kind: "user" } });
       binding.agent.session.append("user/message", seed, { surfaceOp: "append" });
       return state;
     } catch (error) {
@@ -941,6 +947,47 @@ var ChatroomRuntime = class {
       await this.requireThreads().delete(id);
       throw error;
     }
+  }
+  async resolveThreadRoot(roomId, root) {
+    if (root.sourceSessionId === void 0 || root.sourceSeq === void 0) {
+      return { root, content: fallbackThreadRootContent(root), hasMedia: false };
+    }
+    const item = await this.resolveForwardItem(roomId, {
+      ...root,
+      sourceSessionId: root.sourceSessionId,
+      sourceSeq: root.sourceSeq,
+      createdAt: 0
+    });
+    const authoritative = {
+      messageId: root.messageId,
+      displayName: item.displayName,
+      text: item.text,
+      role: item.role,
+      sourceSessionId: root.sourceSessionId,
+      sourceSeq: root.sourceSeq
+    };
+    return {
+      root: authoritative,
+      content: authoritativeThreadRootContent(authoritative, item),
+      hasMedia: item.content?.some((part) => part.type === "image" || part.type === "file") ?? false
+    };
+  }
+  async upgradeThreadRoot(state, resolved) {
+    if (state.record.rootContentVersion === 1 || resolved.root.sourceSessionId === void 0) return;
+    const record = {
+      ...state.record,
+      root: resolved.root,
+      rootContentVersion: 1
+    };
+    if (resolved.hasMedia) {
+      const binding = await this.ensureThread(record.id);
+      binding.agent.session.append("user/message", createUserMessage({
+        content: resolved.content,
+        source: { kind: "user" }
+      }), { surfaceOp: "append" });
+    }
+    await this.requireThreads().put(record.id, record);
+    state.record = record;
   }
   async ensureThread(threadId) {
     const state = this.requireThreadState(threadId);
@@ -1424,12 +1471,51 @@ function normalizeThreadRoot(root) {
   const text = root.text.trim().replace(/\s+/gu, " ");
   if (messageId === "" || displayName === "" || text === "") throw new ChatroomInputError("\u5206\u652F\u4E3B\u9898\u6D88\u606F\u65E0\u6548\u3002");
   if (root.role !== "human" && root.role !== "ai") throw new ChatroomInputError("\u5206\u652F\u4E3B\u9898\u89D2\u8272\u65E0\u6548\u3002");
+  const sourceSessionId = root.sourceSessionId?.trim();
+  if (sourceSessionId === void 0 !== (root.sourceSeq === void 0)) {
+    throw new ChatroomInputError("\u5206\u652F\u4E3B\u9898\u6765\u6E90\u6D88\u606F\u4E0D\u5B8C\u6574\u3002");
+  }
+  if (sourceSessionId !== void 0 && (sourceSessionId === "" || [...sourceSessionId].length > 240 || /\p{Cc}/u.test(sourceSessionId))) {
+    throw new ChatroomInputError("\u5206\u652F\u4E3B\u9898\u6765\u6E90\u4F1A\u8BDD\u65E0\u6548\u3002");
+  }
+  if (root.sourceSeq !== void 0 && (!Number.isSafeInteger(root.sourceSeq) || root.sourceSeq < 0)) {
+    throw new ChatroomInputError("\u5206\u652F\u4E3B\u9898\u6765\u6E90\u5E8F\u53F7\u65E0\u6548\u3002");
+  }
   return {
     messageId: [...messageId].slice(0, 200).join(""),
     displayName: [...displayName].slice(0, 80).join(""),
     text: [...text].slice(0, 500).join(""),
-    role: root.role
+    role: root.role,
+    ...sourceSessionId === void 0 ? {} : { sourceSessionId, sourceSeq: root.sourceSeq }
   };
+}
+function fallbackThreadRootContent(root) {
+  return [{
+    type: "text",
+    text: `\u8FD9\u662F\u7FA4\u804A\u5206\u652F\u7684\u4E3B\u9898\u6D88\u606F\u3002${root.displayName}\uFF1A${root.text}`
+  }];
+}
+function authoritativeThreadRootContent(root, item) {
+  const content = item.content ?? [];
+  let metadata = "";
+  if (item.reply !== void 0) metadata += identifyReplyText("", item.reply);
+  if (item.forward !== void 0) metadata += identifyForwardText(item.forward);
+  const blocks = [{
+    type: "text",
+    text: `\u8FD9\u662F\u7FA4\u804A\u5206\u652F\u7684\u4E3B\u9898\u6D88\u606F\u3002${root.displayName}\uFF1A${metadata}`
+  }];
+  for (const part of content) {
+    if (part.type === "text") {
+      blocks.push({ type: "text", text: part.text });
+      continue;
+    }
+    if (part.type === "file") {
+      blocks.push({ type: "text", text: identifyFileText(part.file) });
+      continue;
+    }
+    blocks.push({ type: "image", attachment: part.image });
+  }
+  return blocks.length === 1 && metadata === "" ? fallbackThreadRootContent(root) : blocks;
 }
 function normalizeThreadText(value, maxChars) {
   const normalized = value.trim();
@@ -2184,7 +2270,18 @@ function threadRootRequest(value) {
   }
   const role = value.role;
   if (role !== "human" && role !== "ai") throw new ChatroomInputError("\u5206\u652F\u4E3B\u9898\u89D2\u8272\u65E0\u6548\u3002");
-  return { ...reply, role };
+  const request = value;
+  if (request.sourceSessionId === void 0 !== (request.sourceSeq === void 0) || request.sourceSessionId !== void 0 && typeof request.sourceSessionId !== "string" || request.sourceSeq !== void 0 && typeof request.sourceSeq !== "number") {
+    throw new ChatroomInputError("\u5206\u652F\u4E3B\u9898\u6765\u6E90\u6D88\u606F\u4E0D\u5B8C\u6574\u3002");
+  }
+  return {
+    ...reply,
+    role,
+    ...request.sourceSessionId === void 0 ? {} : {
+      sourceSessionId: request.sourceSessionId,
+      sourceSeq: request.sourceSeq
+    }
+  };
 }
 function isImageMediaType(value) {
   return value === "image/png" || value === "image/jpeg" || value === "image/webp" || value === "image/gif";

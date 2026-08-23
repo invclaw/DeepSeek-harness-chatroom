@@ -55,6 +55,7 @@ export interface ThreadRecord {
     readonly sessionId: string;
     readonly createdAt: number;
     readonly createdBy: string;
+    readonly rootContentVersion?: 1;
 }
 export interface ThreadMessageRecord {
     readonly id: string;

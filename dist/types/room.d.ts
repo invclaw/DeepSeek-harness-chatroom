@@ -91,6 +91,8 @@ export declare class ChatroomRuntime {
     /** Project committed AI output into its parent room or branch stream. */
     handleSessionEvent(session: Session, event: SessionEvent): void;
     private createThread;
+    private resolveThreadRoot;
+    private upgradeThreadRoot;
     private ensureThread;
     private recordThreadAssistant;
     private messagesForThread;
