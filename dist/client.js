@@ -241,11 +241,48 @@ window.__ModuleLoader__.load({
 		}
 		function ThreadPanel(props) {
 			const [text, setText] = (0, react.useState)("");
+			const [mention, setMention] = (0, react.useState)();
+			const [mentionIndex, setMentionIndex] = (0, react.useState)(0);
 			const endRef = (0, react.useRef)(null);
+			const textareaRef = (0, react.useRef)(null);
 			const thread = props.room.thread;
+			const mentionCandidates = (0, react.useMemo)(() => {
+				return [...[...new Set(["AI", props.room.room?.aiDisplayName].filter((name) => name !== void 0))].map((name) => ({
+					name,
+					description: "提及后在本分支触发 AI",
+					ai: true
+				})), ...props.room.members.filter((member) => member.participantId !== props.room.identity?.participantId).map((member) => ({
+					name: member.displayName,
+					description: member.online ? "在线成员" : "群成员",
+					ai: false
+				}))].filter((candidate, index, all) => all.findIndex((item) => item.name === candidate.name) === index);
+			}, [
+				props.room.identity?.participantId,
+				props.room.members,
+				props.room.room?.aiDisplayName
+			]);
+			const visibleMentions = mention === void 0 ? [] : mentionCandidates.filter((candidate) => candidate.name.toLocaleLowerCase().includes(mention.query.toLocaleLowerCase()));
 			(0, react.useEffect)(() => {
 				if (typeof endRef.current?.scrollIntoView === "function") endRef.current.scrollIntoView({ block: "end" });
 			}, [props.room.threadMessages.length]);
+			(0, react.useEffect)(() => {
+				setMentionIndex(0);
+			}, [mention?.query]);
+			const updateMention = (value, cursor) => {
+				setMention(activeThreadMention(value, cursor));
+			};
+			const pickMention = (name) => {
+				if (mention === void 0) return;
+				const cursor = textareaRef.current?.selectionStart ?? text.length;
+				const next = `${text.slice(0, mention.start)}@${name} ${text.slice(cursor)}`;
+				const nextCursor = mention.start + name.length + 2;
+				setText(next);
+				setMention(void 0);
+				queueMicrotask(() => {
+					textareaRef.current?.focus();
+					textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
+				});
+			};
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("aside", {
 				className: "dsh-chatroom-thread-panel",
 				"data-testid": "chatroom-thread-panel",
@@ -303,23 +340,76 @@ window.__ModuleLoader__.load({
 								if (sent) setText("");
 							});
 						},
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("textarea", {
-							rows: 3,
-							placeholder: "回复分支；输入 @AI 让 AI 在本分支回答",
-							value: text,
-							onChange: (event) => {
-								setText(event.target.value);
-							},
-							onKeyDown: (event) => {
-								if (event.key !== "Enter" || event.shiftKey) return;
-								event.preventDefault();
-								event.currentTarget.form?.requestSubmit();
-							}
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							type: "submit",
-							disabled: props.room.threadBusy || text.trim() === "",
-							children: "发送"
-						})]
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("textarea", {
+								ref: textareaRef,
+								rows: 3,
+								placeholder: "回复分支；输入 @AI 让 AI 在本分支回答",
+								value: text,
+								"aria-expanded": visibleMentions.length > 0,
+								"aria-controls": "dsh-chatroom-thread-mentions",
+								onChange: (event) => {
+									setText(event.target.value);
+									updateMention(event.target.value, event.target.selectionStart);
+								},
+								onClick: (event) => {
+									updateMention(event.currentTarget.value, event.currentTarget.selectionStart);
+								},
+								onKeyDown: (event) => {
+									if (visibleMentions.length > 0) {
+										if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+											event.preventDefault();
+											const direction = event.key === "ArrowDown" ? 1 : -1;
+											setMentionIndex((current) => (current + direction + visibleMentions.length) % visibleMentions.length);
+											return;
+										}
+										if (event.key === "Escape") {
+											event.preventDefault();
+											setMention(void 0);
+											return;
+										}
+										if (event.key === "Tab") {
+											event.preventDefault();
+											pickMention(visibleMentions[mentionIndex]?.name ?? visibleMentions[0].name);
+											return;
+										}
+									}
+									if (event.key !== "Enter" || event.shiftKey) return;
+									if (visibleMentions.length > 0 && mention?.query === "") {
+										event.preventDefault();
+										pickMention(visibleMentions[mentionIndex]?.name ?? visibleMentions[0].name);
+										return;
+									}
+									event.preventDefault();
+									event.currentTarget.form?.requestSubmit();
+								}
+							}),
+							visibleMentions.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								className: "dsh-chatroom-thread-mentions",
+								id: "dsh-chatroom-thread-mentions",
+								role: "listbox",
+								"aria-label": "提及成员",
+								children: visibleMentions.map((candidate, index) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+									type: "button",
+									role: "option",
+									"aria-label": candidate.name,
+									"aria-selected": index === mentionIndex,
+									"data-active": index === mentionIndex,
+									onMouseDown: (event) => {
+										event.preventDefault();
+									},
+									onClick: () => {
+										pickMention(candidate.name);
+									},
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("i", { children: candidate.ai ? "✦" : "●" }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: candidate.name }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("small", { children: candidate.description })] })]
+								}, candidate.name))
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "submit",
+								disabled: props.room.threadBusy || text.trim() === "",
+								children: "发送"
+							})
+						]
 					}),
 					props.room.threadError !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: "dsh-chatroom-error",
@@ -328,6 +418,15 @@ window.__ModuleLoader__.load({
 					})
 				]
 			});
+		}
+		function activeThreadMention(text, cursor) {
+			const prefix = text.slice(0, cursor);
+			const match = /(?:^|\s)@([^\s@]*)$/u.exec(prefix);
+			if (match === null) return void 0;
+			return {
+				start: prefix.length - match[1].length - 1,
+				query: match[1]
+			};
 		}
 		function formatRelative(time) {
 			const minutes = Math.max(0, Math.floor((Date.now() - time) / 6e4));
@@ -2779,11 +2878,18 @@ window.__ModuleLoader__.load({
 .dsh-chatroom-thread-message p { margin: 0; border-radius: 5px 15px 15px; background: var(--bg-secondary, #f3f4f6); padding: 9px 12px; font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .dsh-chatroom-thread-message[data-own="true"] p { border-radius: 15px 5px 15px 15px; background: color-mix(in srgb, var(--brand-primary, #4f7cff) 15%, var(--bg-primary, #fff)); }
 .dsh-chatroom-thread-message[data-role="ai"] p { border: 1px solid color-mix(in srgb, var(--brand-primary, #4f7cff) 25%, transparent); background: color-mix(in srgb, var(--brand-primary, #4f7cff) 6%, var(--bg-primary, #fff)); }
-.dsh-chatroom-thread-composer { display: grid; grid-template-columns: 1fr auto; gap: 8px; border-top: 1px solid var(--border-primary, #e5e7eb); padding: 12px 14px; }
+.dsh-chatroom-thread-composer { position: relative; display: grid; grid-template-columns: 1fr auto; gap: 8px; border-top: 1px solid var(--border-primary, #e5e7eb); padding: 12px 14px; }
 .dsh-chatroom-thread-composer textarea { resize: none; border: 1px solid var(--border-primary, #d1d5db); border-radius: 12px; background: var(--bg-primary, #fff); color: var(--text-primary, #111827); padding: 10px 11px; font: inherit; outline: none; }
 .dsh-chatroom-thread-composer textarea:focus { border-color: var(--brand-primary, #4f7cff); }
 .dsh-chatroom-thread-composer button { align-self: end; border: 0; border-radius: 10px; background: var(--brand-primary, #4f7cff); color: #fff; padding: 10px 14px; font: inherit; font-weight: 600; cursor: pointer; }
 .dsh-chatroom-thread-composer button:disabled { opacity: .45; cursor: not-allowed; }
+.dsh-chatroom-thread-mentions { position: absolute; right: 14px; bottom: calc(100% - 4px); left: 14px; z-index: 2; overflow: hidden; border: 1px solid var(--border-primary, #e5e7eb); border-radius: 12px; background: var(--bg-primary, #fff); box-shadow: 0 12px 32px rgb(15 23 42 / 16%); }
+.dsh-chatroom-thread-mentions > button { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; border-radius: 0; background: transparent; color: var(--text-primary, #111827); padding: 9px 11px; text-align: left; cursor: pointer; }
+.dsh-chatroom-thread-mentions > button[data-active="true"], .dsh-chatroom-thread-mentions > button:hover { background: var(--bg-secondary, #f3f4f6); }
+.dsh-chatroom-thread-mentions i { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; background: color-mix(in srgb, var(--brand-primary, #4f7cff) 12%, transparent); color: var(--brand-primary, #4f7cff); font-style: normal; }
+.dsh-chatroom-thread-mentions span { display: grid; gap: 1px; }
+.dsh-chatroom-thread-mentions strong { font-size: 13px; }
+.dsh-chatroom-thread-mentions small { color: var(--text-secondary, #6b7280); font-size: 11px; }
 .dsh-chatroom-thread-panel > .dsh-chatroom-error { margin: 0; padding: 0 16px 12px; }
 
 .dsh-chatroom-file-card {

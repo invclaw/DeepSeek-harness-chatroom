@@ -13,6 +13,7 @@ import type {} from '@deepseek-ai/dsh-session-title'
 import type {} from '@deepseek-ai/dsh-storage-domain'
 import { Config, type Config as ChatroomConfig, validateConfig } from './config.js'
 import { ChatroomHttpController } from './http.js'
+import { textCompatibleStream } from './model-history.js'
 import { CHATROOM_API_PREFIXES } from './routes.js'
 import { ChatroomRuntime } from './room.js'
 
@@ -62,6 +63,13 @@ export function apply(ctx: Context, config: ChatroomConfig): void {
   ctx.effect(() => ctx.on('session/event', (session, event) => {
     runtime.handleSessionEvent(session, event)
   }), 'deepseek-harness-chatroom.session-events')
+  ctx.effect(() => ctx.on('llm/stream', (options, next) => textCompatibleStream(
+    options,
+    next,
+    sessionId => runtime.ownsSession(sessionId),
+    (provider, model, signal) => ctx.llm.resolveModelInfo(provider, model, signal),
+    request => ctx.llm.stream(request),
+  )), 'deepseek-harness-chatroom.model-history')
 }
 
 export default { name, inject, Config, apply }

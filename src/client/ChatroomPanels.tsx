@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { chatroomAvatar, fallbackAvatarId } from '../avatars.js'
 import type { ChatroomNotification } from '../types.js'
 import type { ChatroomView } from './store.js'
@@ -125,11 +125,43 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
 
 function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
   const [text, setText] = useState('')
+  const [mention, setMention] = useState<ThreadMention | undefined>()
+  const [mentionIndex, setMentionIndex] = useState(0)
   const endRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const thread = props.room.thread!
+  const mentionCandidates = useMemo(() => {
+    const aiNames = [...new Set(['AI', props.room.room?.aiDisplayName].filter((name): name is string => name !== undefined))]
+    return [
+      ...aiNames.map(name => ({ name, description: '提及后在本分支触发 AI', ai: true })),
+      ...props.room.members
+        .filter(member => member.participantId !== props.room.identity?.participantId)
+        .map(member => ({ name: member.displayName, description: member.online ? '在线成员' : '群成员', ai: false })),
+    ].filter((candidate, index, all) => all.findIndex(item => item.name === candidate.name) === index)
+  }, [props.room.identity?.participantId, props.room.members, props.room.room?.aiDisplayName])
+  const visibleMentions = mention === undefined
+    ? []
+    : mentionCandidates.filter(candidate => candidate.name.toLocaleLowerCase().includes(mention.query.toLocaleLowerCase()))
   useEffect(() => {
     if (typeof endRef.current?.scrollIntoView === 'function') endRef.current.scrollIntoView({ block: 'end' })
   }, [props.room.threadMessages.length])
+  useEffect(() => { setMentionIndex(0) }, [mention?.query])
+
+  const updateMention = (value: string, cursor: number): void => {
+    setMention(activeThreadMention(value, cursor))
+  }
+  const pickMention = (name: string): void => {
+    if (mention === undefined) return
+    const cursor = textareaRef.current?.selectionStart ?? text.length
+    const next = `${text.slice(0, mention.start)}@${name} ${text.slice(cursor)}`
+    const nextCursor = mention.start + name.length + 2
+    setText(next)
+    setMention(undefined)
+    queueMicrotask(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(nextCursor, nextCursor)
+    })
+  }
   return (
     <aside className="dsh-chatroom-thread-panel" data-testid="chatroom-thread-panel" aria-label="分支回复">
       <header>
@@ -162,21 +194,79 @@ function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
         void props.sendThreadMessage(submitted).then((sent) => { if (sent) setText('') })
       }}>
         <textarea
+          ref={textareaRef}
           rows={3}
           placeholder="回复分支；输入 @AI 让 AI 在本分支回答"
           value={text}
-          onChange={event => { setText(event.target.value) }}
+          aria-expanded={visibleMentions.length > 0}
+          aria-controls="dsh-chatroom-thread-mentions"
+          onChange={event => {
+            setText(event.target.value)
+            updateMention(event.target.value, event.target.selectionStart)
+          }}
+          onClick={event => { updateMention(event.currentTarget.value, event.currentTarget.selectionStart) }}
           onKeyDown={event => {
+            if (visibleMentions.length > 0) {
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault()
+                const direction = event.key === 'ArrowDown' ? 1 : -1
+                setMentionIndex(current => (current + direction + visibleMentions.length) % visibleMentions.length)
+                return
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                setMention(undefined)
+                return
+              }
+              if (event.key === 'Tab') {
+                event.preventDefault()
+                pickMention(visibleMentions[mentionIndex]?.name ?? visibleMentions[0]!.name)
+                return
+              }
+            }
             if (event.key !== 'Enter' || event.shiftKey) return
+            if (visibleMentions.length > 0 && mention?.query === '') {
+              event.preventDefault()
+              pickMention(visibleMentions[mentionIndex]?.name ?? visibleMentions[0]!.name)
+              return
+            }
             event.preventDefault()
             event.currentTarget.form?.requestSubmit()
           }}
         />
+        {visibleMentions.length > 0 && <div className="dsh-chatroom-thread-mentions" id="dsh-chatroom-thread-mentions" role="listbox" aria-label="提及成员">
+          {visibleMentions.map((candidate, index) => (
+            <button
+              type="button"
+              role="option"
+              aria-label={candidate.name}
+              aria-selected={index === mentionIndex}
+              data-active={index === mentionIndex}
+              key={candidate.name}
+              onMouseDown={event => { event.preventDefault() }}
+              onClick={() => { pickMention(candidate.name) }}
+            >
+              <i>{candidate.ai ? '✦' : '●'}</i><span><strong>{candidate.name}</strong><small>{candidate.description}</small></span>
+            </button>
+          ))}
+        </div>}
         <button type="submit" disabled={props.room.threadBusy || text.trim() === ''}>发送</button>
       </form>
       {props.room.threadError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.threadError}</div>}
     </aside>
   )
+}
+
+interface ThreadMention {
+  readonly start: number
+  readonly query: string
+}
+
+function activeThreadMention(text: string, cursor: number): ThreadMention | undefined {
+  const prefix = text.slice(0, cursor)
+  const match = /(?:^|\s)@([^\s@]*)$/u.exec(prefix)
+  if (match === null) return undefined
+  return { start: prefix.length - match[1]!.length - 1, query: match[1]! }
 }
 
 function formatRelative(time: number): string {

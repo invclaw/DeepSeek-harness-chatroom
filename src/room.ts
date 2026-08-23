@@ -134,6 +134,12 @@ export class ChatroomRuntime {
     return this.ready && !this.stopping
   }
 
+  /** Whether one model request belongs to a room or branch Session owned by this runtime. */
+  ownsSession(sessionId: string): boolean {
+    return [...this.states.values()].some(state => state.record.sessionId === sessionId)
+      || [...this.threadStates.values()].some(state => state.record.sessionId === sessionId)
+  }
+
   /** Open storage, seed the original room, and acquire its Session without blocking Harness startup. */
   async start(): Promise<void> {
     const domain = await this.ctx.storageDomain.open(chatroomDomainSpec)

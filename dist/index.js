@@ -297,6 +297,10 @@ var ChatroomRuntime = class {
   get isReady() {
     return this.ready && !this.stopping;
   }
+  /** Whether one model request belongs to a room or branch Session owned by this runtime. */
+  ownsSession(sessionId) {
+    return [...this.states.values()].some((state) => state.record.sessionId === sessionId) || [...this.threadStates.values()].some((state) => state.record.sessionId === sessionId);
+  }
   /** Open storage, seed the original room, and acquire its Session without blocking Harness startup. */
   async start() {
     const domain = await this.ctx.storageDomain.open(chatroomDomainSpec);
@@ -1728,6 +1732,48 @@ function smallRequestLimit(config) {
   return Math.max(config.maxDisplayNameChars, config.maxRoomTitleChars) * 4 + 1024;
 }
 
+// src/model-history.ts
+import { freezeMessage } from "@deepseek-ai/dsh-llm";
+var OMITTED_IMAGE_TEXT = "[\u5386\u53F2\u56FE\u7247\u5DF2\u4FDD\u7559\u5728\u7FA4\u804A\u4E2D\uFF0C\u4F46\u672A\u53D1\u9001\u7ED9\u5F53\u524D\u6587\u672C\u6A21\u578B\u3002]";
+function textCompatibleMessages(messages) {
+  return messages.map((message) => {
+    const content = textCompatibleContent(message.content);
+    return content === message.content ? message : freezeMessage({ ...message, content });
+  });
+}
+function messagesContainImages(messages) {
+  return messages.some((message) => contentContainsImages(message.content));
+}
+function textCompatibleStream(options, next, ownsSession, resolveModelInfo, stream) {
+  if (options.sessionId === void 0 || !ownsSession(String(options.sessionId)) || !messagesContainImages(options.messages)) return next();
+  return (async function* () {
+    const model = await resolveModelInfo(options.provider, options.model, options.signal);
+    if (model.inputModalities === void 0 || model.inputModalities.includes("image")) {
+      yield* next();
+      return;
+    }
+    yield* stream({ ...options, messages: textCompatibleMessages(options.messages) });
+  })();
+}
+function textCompatibleContent(content) {
+  let changed = false;
+  const compatible = content.map((block) => {
+    if (block.type === "image") {
+      changed = true;
+      return { type: "text", text: OMITTED_IMAGE_TEXT };
+    }
+    if (block.type !== "tool-result") return block;
+    const nested = textCompatibleContent(block.content);
+    if (nested === block.content) return block;
+    changed = true;
+    return { ...block, content: nested };
+  });
+  return changed ? compatible : content;
+}
+function contentContainsImages(content) {
+  return content.some((block) => block.type === "image" || block.type === "tool-result" && contentContainsImages(block.content));
+}
+
 // src/index.ts
 var name = "deepseek-harness-chatroom";
 var inject = [
@@ -1769,6 +1815,13 @@ function apply(ctx, config) {
   ctx.effect(() => ctx.on("session/event", (session, event) => {
     runtime.handleSessionEvent(session, event);
   }), "deepseek-harness-chatroom.session-events");
+  ctx.effect(() => ctx.on("llm/stream", (options, next) => textCompatibleStream(
+    options,
+    next,
+    (sessionId) => runtime.ownsSession(sessionId),
+    (provider, model, signal) => ctx.llm.resolveModelInfo(provider, model, signal),
+    (request) => ctx.llm.stream(request)
+  )), "deepseek-harness-chatroom.model-history");
 }
 var index_default = { name, inject, Config, apply };
 export {

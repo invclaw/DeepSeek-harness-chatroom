@@ -18,13 +18,14 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Current identity and online count in the native Session header, with direct access to the shared-room directory
 - Durable room membership with a group-management panel, member avatars, online state, and recent activity
 - In-page message toasts, unread title badges, and opt-in browser system notifications across rooms
-- Persistent branch replies in a right-side panel; every branch owns a separate Harness Session, and `@AI` answers stay inside that branch
+- Persistent branch replies in a right-side panel with AI/member `@` candidates; every branch owns a separate Harness Session, and `@AI` answers stay inside that branch
+- Images remain visible and durable in room and branch history; when a selected model is text-only, only that model request receives deterministic text markers in place of historical images
 - Quiet root-message branch activity with the total reply count and latest three replies, updated live without opening the branch panel
 - Durable message reactions plus a right-click menu for reactions, forwarding, and multi-select; selection mode adds checkboxes to every human and AI message before merged forwarding
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.7.1 makes branch activity and batch selection visible in the main conversation. Every active branch projects its total reply count and latest three replies beside the root message. Entering multi-select adds a left-side checkbox to every forwardable human and AI message; deselecting everything keeps the mode active until the user explicitly cancels it.
+Version 0.7.2 adds AI/member mention candidates to the branch composer and lets text-only models safely continue after images appear in room or inherited branch history. Images stay in the native Session and chat UI; replacement happens only in model requests owned by this plugin and does not affect other Harness Sessions.
 
 ## Requirements
 
@@ -113,10 +114,11 @@ A display name is presentation, not authentication. Every participant who can re
 7. Insert an emoji through **Emoji**, then send a pure image and a pure file. Only the media or download card must render, without a "sent a..." text bubble; the other browser must download the original file bytes.
 8. Run `/new`, approval and question interactions, and stop/queue/steer flows through their native Harness paths.
 9. Open **Group management** in the Session header. Both participants must appear with the correct avatar and online state. Enable system notifications from this explicit user action, hide the tab, and verify that a new peer message creates a system alert and unread title badge.
-10. Select **Branch** below a human or AI message and send four replies. Close the panel and verify that the root message shows the total count and latest three replies. Send `@AI summarize`; its answer must stay in that branch and update the compact activity summary.
+10. Select **Branch** below a human or AI message. Typing `@` must list AI and current room members. Send four replies, close the panel, and verify that the root message shows the total count and latest three replies. Send `@AI summarize`; its answer must stay in that branch and update the compact activity summary.
 11. Right-click any human or AI message and choose **Multi-select**. Every human and AI message must receive a left-side checkbox. Select several directly and merge them into **Project two**, then verify one expandable history card in the target room.
 12. Enter another shared room and confirm that display-name and avatar setup is not requested again.
-13. Reload and restart Harness. Identity, room directory, membership, reactions, branches, and every Session context must recover.
+13. With an image already in room history, switch to a text-only model and send `@AI summarize` in both the main room and a branch. Both must answer while the historical image remains visible.
+14. Reload and restart Harness. Identity, room directory, membership, reactions, branches, and every Session context must recover.
 
 The health endpoint is `/plugins/deepseek-harness-chatroom/api/health`; direct Harness Web deployments may also use `/chatroom/api/health`. A ready room returns:
 

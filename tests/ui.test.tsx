@@ -115,6 +115,30 @@ describe('native chatroom integration', () => {
     expect(sendThreadMessage).toHaveBeenCalledWith('@AI 总结')
   })
 
+  it('offers AI and room members from the branch mention menu', () => {
+    const sendThreadMessage = vi.fn(async () => true)
+    renderEntry(view({
+      thread: {
+        id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
+        root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
+      },
+      members: [
+        { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale', joinedAt: 1, lastSeenAt: 1, online: true },
+        { participantId: 'bob-id', displayName: 'Bob', avatarId: 'panda', joinedAt: 1, lastSeenAt: 1, online: true },
+      ],
+    }), { sendThreadMessage })
+    const composer = screen.getByPlaceholderText('回复分支；输入 @AI 让 AI 在本分支回答')
+
+    fireEvent.change(composer, { target: { value: '@', selectionStart: 1 } })
+    expect(screen.getByRole('option', { name: 'AI' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'Bob' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('option', { name: 'AI' }))
+    expect((composer as HTMLTextAreaElement).value).toBe('@AI ')
+    fireEvent.change(composer, { target: { value: '@AI 请总结', selectionStart: 7 } })
+    fireEvent.keyDown(composer, { key: 'Enter' })
+    expect(sendThreadMessage).toHaveBeenCalledWith('@AI 请总结')
+  })
+
   it('opens a target chooser for a merged multi-message forward', () => {
     const openForward = vi.fn()
     const forwardSelected = vi.fn(async () => true)

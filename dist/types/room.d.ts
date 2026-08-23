@@ -34,6 +34,8 @@ export declare class ChatroomRuntime {
     get maxPromptRequestBytes(): number;
     /** Whether identity persistence and the configured shared Session are ready. */
     get isReady(): boolean;
+    /** Whether one model request belongs to a room or branch Session owned by this runtime. */
+    ownsSession(sessionId: string): boolean;
     /** Open storage, seed the original room, and acquire its Session without blocking Harness startup. */
     start(): Promise<void>;
     /** Stop intake, close presence streams, and release every activated room. */
