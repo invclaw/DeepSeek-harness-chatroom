@@ -16,6 +16,8 @@ export interface Config {
     maxFilesPerMessage: number;
     maxMessageFileBytes: number;
     maxImageSidePixels: number;
+    settingsAdminParticipantIds: string[];
+    maxSettingsRequestBytes: number;
     sseHeartbeatMs: number;
 }
 export declare const Config: z<Config>;

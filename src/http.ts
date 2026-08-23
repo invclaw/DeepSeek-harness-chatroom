@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
+import { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
 import type { Config } from './config.js'
 import { cookieValue, expiredSessionCookie, sessionCookie } from './cookies.js'
 import { matchChatroomApi } from './routes.js'
@@ -20,6 +21,7 @@ import type {
 /** HTTP/SSE adapter for the browser client. */
 export class ChatroomHttpController {
   private readonly log
+  private readonly configurationApi
 
   constructor(
     ctx: Context,
@@ -27,6 +29,7 @@ export class ChatroomHttpController {
     private readonly config: Config,
   ) {
     this.log = ctx.logger('deepseek-harness-chatroom')
+    this.configurationApi = toFetchHandler(ctx.apiProxy)
   }
 
   /** Dispatch one request under a registered chatroom API prefix. */
@@ -88,6 +91,10 @@ export class ChatroomHttpController {
       }
       if (route.endpoint === '/notifications' && request.method === 'GET') {
         this.handleNotifications(request, response)
+        return
+      }
+      if (route.endpoint.startsWith('/configuration/')) {
+        await this.handleConfiguration(request, response, route.endpoint.slice('/configuration/'.length))
         return
       }
       json(response, 404, { error: '接口不存在。' } satisfies ChatroomErrorResponse)
@@ -321,6 +328,40 @@ export class ChatroomHttpController {
     })
   }
 
+  private async handleConfiguration(
+    request: IncomingMessage,
+    response: ServerResponse,
+    method: string,
+  ): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    if (!isRemoteConfigurationMethod(method)) {
+      json(response, 404, { error: '远程配置接口不存在。' } satisfies ChatroomErrorResponse)
+      return
+    }
+    assertSameOrigin(request)
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    if (!canManageRemoteSettings(this.config, identity.participantId)) {
+      json(response, 403, { error: '当前聊天室身份没有模型设置管理权限。' } satisfies ChatroomErrorResponse)
+      return
+    }
+    const body = await readJson(request, this.config.maxSettingsRequestBytes)
+    const controller = new AbortController()
+    request.once('aborted', () => controller.abort())
+    const upstream = await this.configurationApi.fetch(new Request(`http://chatroom.local/api/${method}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    }))
+    const payload = await upstream.json()
+    if (method === 'settings.describe') hideHostDocumentCapability(payload)
+    json(response, upstream.status, payload)
+  }
+
   private sessionPayload(identity: ChatroomSessionResponse['identity']): ChatroomSessionResponse {
     return { identity, rooms: this.runtime.rooms, room: this.runtime.room }
   }
@@ -336,6 +377,38 @@ export class ChatroomHttpController {
   private token(request: IncomingMessage): string | undefined {
     return cookieValue(request.headers.cookie, this.config.cookieName)
   }
+}
+
+const REMOTE_CONFIGURATION_METHODS = new Set([
+  'settings.describe',
+  'settings.update',
+  'settings.replace',
+  'settings.mutate',
+  'credentials.describe',
+  'credentials.set',
+  'credentials.unset',
+  'llm.discoverModels',
+])
+
+/** Whether the remote administrator bridge exposes one API Proxy method. */
+export function isRemoteConfigurationMethod(method: string): boolean {
+  return REMOTE_CONFIGURATION_METHODS.has(method)
+}
+
+/** Whether one authenticated chatroom identity may use the remote model-settings bridge. */
+export function canManageRemoteSettings(config: Config, participantId: string): boolean {
+  return config.settingsAdminParticipantIds.includes(participantId)
+}
+
+function hideHostDocumentCapability(payload: unknown): void {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return
+  const result = (payload as Record<string, unknown>).result
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) return
+  const resultRecord = result as Record<string, unknown>
+  if (resultRecord.ok !== true) return
+  const value = resultRecord.value
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return
+  ;(value as Record<string, unknown>).hasDocument = false
 }
 
 function json(response: ServerResponse, status: number, payload: unknown): void {

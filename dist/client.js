@@ -2292,6 +2292,83 @@ window.__ModuleLoader__.load({
 			};
 		}
 		//#endregion
+		//#region src/client/remote-configuration.ts
+		/** Route the RC7 configuration plane through the authenticated chatroom API for remote browsers. */
+		function installRemoteConfigurationApi(connection) {
+			if (connection.isLoopback) return () => void 0;
+			const api = connection.api;
+			const originalSettings = api.settings;
+			const originalCredentials = api.credentials;
+			const originalLlm = api.llm;
+			const settings = {
+				describe: (payload, signal) => remoteCall("settings.describe", payload, signal),
+				openDocument: originalSettings.openDocument,
+				update: (payload, signal) => remoteCall("settings.update", payload, signal),
+				replace: (payload, signal) => remoteCall("settings.replace", payload, signal),
+				mutate: (payload, signal) => remoteCall("settings.mutate", payload, signal)
+			};
+			const credentials = {
+				describe: (payload, signal) => remoteCall("credentials.describe", payload, signal),
+				set: (payload, signal) => remoteCall("credentials.set", payload, signal),
+				unset: (payload, signal) => remoteCall("credentials.unset", payload, signal)
+			};
+			const llm = {
+				...originalLlm,
+				discoverModels: (payload, signal) => remoteCall("llm.discoverModels", payload, signal)
+			};
+			api.settings = settings;
+			api.credentials = credentials;
+			api.llm = llm;
+			return () => {
+				if (api.settings === settings) api.settings = originalSettings;
+				if (api.credentials === credentials) api.credentials = originalCredentials;
+				if (api.llm === llm) api.llm = originalLlm;
+			};
+		}
+		async function remoteCall(method, payload, signal) {
+			const rpcId = crypto.randomUUID();
+			const response = await fetch(`${CHATROOM_API_PREFIX}/configuration/${method}`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					type: "client-request",
+					rpcId,
+					method,
+					payload
+				}),
+				credentials: "same-origin",
+				...signal === void 0 ? {} : { signal }
+			});
+			if (!response.ok) throw new Error(await configurationError(response));
+			const envelope = configurationEnvelope(await response.json());
+			if (envelope.rpcId !== rpcId) throw new Error(`远程模型设置响应编号不匹配：发送 ${rpcId}，收到 ${String(envelope.rpcId)}`);
+			return {
+				rpcId: envelope.rpcId,
+				result: envelope.result
+			};
+		}
+		function configurationEnvelope(value) {
+			if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("远程模型设置响应格式无效。");
+			const envelope = value;
+			if (envelope.type !== "server-response" || typeof envelope.rpcId !== "string" || envelope.result === null || typeof envelope.result !== "object" || Array.isArray(envelope.result)) throw new Error("远程模型设置响应格式无效。");
+			const result = envelope.result;
+			if (result.ok !== true && result.ok !== false) throw new Error("远程模型设置响应格式无效。");
+			return {
+				rpcId: envelope.rpcId,
+				result
+			};
+		}
+		async function configurationError(response) {
+			try {
+				const payload = await response.json();
+				if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
+					const error = payload.error;
+					if (typeof error === "string" && error !== "") return error;
+				}
+			} catch {}
+			return `远程模型设置请求失败：HTTP ${response.status}`;
+		}
+		//#endregion
 		//#region src/client/RoomIdentityAction.tsx
 		/** Show the current room identity and presence inside the native session header. */
 		function RoomIdentityAction(props) {
@@ -3093,6 +3170,7 @@ window.__ModuleLoader__.load({
 				style.dataset.dshChatroomStyles = "";
 				style.textContent = CHATROOM_STYLES;
 				document.head.append(style);
+				const restoreConfiguration = installRemoteConfigurationApi(connection);
 				const restorePrompt = installNativePromptIdentity(connection.api, store);
 				const syncSession = () => {
 					store.resumeOpen();
@@ -3104,6 +3182,7 @@ window.__ModuleLoader__.load({
 				return () => {
 					unsubscribeSessions();
 					restorePrompt();
+					restoreConfiguration();
 					store.stop();
 					style.remove();
 				};

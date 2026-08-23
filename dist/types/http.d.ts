@@ -7,6 +7,7 @@ export declare class ChatroomHttpController {
     private readonly runtime;
     private readonly config;
     private readonly log;
+    private readonly configurationApi;
     constructor(ctx: Context, runtime: ChatroomRuntime, config: Config);
     /** Dispatch one request under a registered chatroom API prefix. */
     handle(request: IncomingMessage, response: ServerResponse): Promise<void>;
@@ -21,8 +22,13 @@ export declare class ChatroomHttpController {
     private handleFile;
     private handleEvents;
     private handleNotifications;
+    private handleConfiguration;
     private sessionPayload;
     private requireIdentity;
     private token;
 }
+/** Whether the remote administrator bridge exposes one API Proxy method. */
+export declare function isRemoteConfigurationMethod(method: string): boolean;
+/** Whether one authenticated chatroom identity may use the remote model-settings bridge. */
+export declare function canManageRemoteSettings(config: Config, participantId: string): boolean;
 //# sourceMappingURL=http.d.ts.map

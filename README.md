@@ -12,6 +12,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - RC7's native `@` menu lists AI and current room members together; only `@AI` or the configured AI name wakes the Agent
 - Harness's native live channel synchronizes messages, replies, and execution state
 - Native sidebar, Conversation/Trajectory tabs, reasoning and tool flow, Session log, model selection, and composer
+- Remote deployments can allowlist chatroom participant IDs for the native Models settings page; the bridge exposes only model-configuration methods and keeps Host file opening and every unrelated privileged API disabled
 - Emoji insertion, reply quotes, and authenticated room-file upload/download cards; pure image and file messages render directly without placeholder text bubbles
 - Oversized images are resized before entering Harness's durable attachment store; stop/queue/steer behavior, slash commands, approvals, and question interactions stay native
 - Participant names added on the Host before Session admission, so every browser and the model see the same identity
@@ -25,7 +26,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.7.3 adds AI/member mention candidates to the branch composer and lets text-only models safely continue after images appear in room or inherited branch history. Images stay in the native Session and chat UI; replacement happens only in model requests owned by this plugin and does not affect other Harness Sessions. Native message enhancement now waits for Harness renderers, so reinstalling the plugin in a different client load order still reuses the native bubbles.
+Version 0.7.4 adds a chatroom-administrator-protected model-configuration carrier for remote RC7 Web deployments. Harness's native configuration plane remains loopback-only; the plugin forwards only the `settings`, `credentials`, and model-discovery methods required by the Models page to allowlisted identities, without exposing Host files, Sessions, or any other API. The 0.7.3 branch mentions, text-model image-history compatibility, and native-renderer load-order fix remain intact.
 
 ## Requirements
 
@@ -67,6 +68,7 @@ Installation adds this row to the Web profile:
     sessionId: chatroom-v1-lobby
     cwd: !!js process.env.DSH_CHATROOM_CWD ?? process.cwd()
     agentPreset: standard
+    settingsAdminParticipantIds: !!js (process.env.DSH_CHATROOM_SETTINGS_ADMIN_IDS ?? '').split(',').map(value => value.trim()).filter(Boolean)
 ```
 
 Override it in the Web profile's `cordis.patch.yml` when needed:
@@ -90,8 +92,13 @@ Override it in the Web profile's `cordis.patch.yml` when needed:
     maxFilesPerMessage: 5
     maxMessageFileBytes: 52428800
     maxImageSidePixels: 4096
+    settingsAdminParticipantIds:
+      - participant-id-of-an-administrator
+    maxSettingsRequestBytes: 1048576
     sseHeartbeatMs: 15000
 ```
+
+`settingsAdminParticipantIds` defaults to an empty list, so remote browsers cannot read or modify Harness configuration. Production deployments may supply the allowlist through the comma-separated `DSH_CHATROOM_SETTINGS_ADMIN_IDS` environment variable. The current identity's `participantId` is available in the authenticated `/plugins/deepseek-harness-chatroom/api/session` response. Changing a display name or avatar preserves that ID; resetting the chatroom identity creates a new ID and requires an allowlist update. A remote Models request must also carry the valid HttpOnly chatroom cookie and pass the same-origin check.
 
 `sessionId` remains the persistent Session for the pre-upgrade lobby. Rooms created in the UI receive independent Sessions and contexts. Every branch also receives an independent persistent Session. Room files, membership, reactions, branch metadata, and branch messages live in the same `chatroom` storage domain, and downloads require a valid chatroom cookie. Merged-forward cards persist as native Session messages. The additive tables keep domain version zero, so existing identities and lobby data open without migration.
 
@@ -101,7 +108,7 @@ The API route is registered immediately and reports `503` until identity storage
 
 The browser receives a random 256-bit token in an `HttpOnly`, `SameSite=Strict` cookie scoped to the chatroom API. The server stores only its SHA-256 digest. Reloading the page or restarting Harness restores the identity until the cookie expires or the user changes identity from the shared-room directory.
 
-A display name is presentation, not authentication. Every participant who can reach the room can submit input to the configured Agent preset and may use its tools. Use a restricted preset and narrow `cwd` for rooms exposed beyond a trusted team.
+A display name is presentation, not authentication. Remote Models authorization compares the opaque `participantId` resolved by the server from the HttpOnly cookie and never trusts the editable display name. The configuration carrier retains API Proxy schema validation, secret redaction, and revision-conflict checks; credentials are write-only and never returned, while `settings.openDocument`, Sessions, filesystem methods, and every other privileged API are absent from the allowlist. Every participant who can reach the room can still submit input to the configured Agent preset and may use its tools. Use a restricted preset and narrow `cwd` for rooms exposed beyond a trusted team.
 
 ## Verify
 
@@ -119,6 +126,7 @@ A display name is presentation, not authentication. Every participant who can re
 12. Enter another shared room and confirm that display-name and avatar setup is not requested again.
 13. With an image already in room history, switch to a text-only model and send `@AI summarize` in both the main room and a branch. Both must answer while the historical image remains visible.
 14. Reload and restart Harness. Identity, room directory, membership, reactions, branches, and every Session context must recover.
+15. Add the current identity's `participantId` to `DSH_CHATROOM_SETTINGS_ADMIN_IDS`, then open **Settings → Models** from the remote URL. The provider directory and editor cards must load; a second identity that is not allowlisted must receive an authorization error.
 
 The health endpoint is `/plugins/deepseek-harness-chatroom/api/health`; direct Harness Web deployments may also use `/chatroom/api/health`. A ready room returns:
 

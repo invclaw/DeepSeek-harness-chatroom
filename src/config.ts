@@ -18,6 +18,8 @@ export interface Config {
   maxFilesPerMessage: number
   maxMessageFileBytes: number
   maxImageSidePixels: number
+  settingsAdminParticipantIds: string[]
+  maxSettingsRequestBytes: number
   sseHeartbeatMs: number
 }
 
@@ -37,6 +39,8 @@ export const Config: z<Config> = z.object({
   maxFilesPerMessage: z.number().step(1).min(1).max(20).default(5),
   maxMessageFileBytes: z.number().step(1).min(1).max(200 * 1024 * 1024).default(50 * 1024 * 1024),
   maxImageSidePixels: z.number().step(1).min(512).max(16_384).default(4_096),
+  settingsAdminParticipantIds: z.array(z.string().min(1).max(128)).default([]),
+  maxSettingsRequestBytes: z.number().step(1).min(1_024).max(8 * 1024 * 1024).default(1024 * 1024),
   sseHeartbeatMs: z.number().step(1).min(5_000).max(120_000).default(15_000),
 })
 

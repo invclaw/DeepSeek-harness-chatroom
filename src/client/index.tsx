@@ -14,6 +14,7 @@ import {
   ChatroomUserMessageNodeView,
 } from './ChatroomMessageNodeView.js'
 import { installNativePromptIdentity } from './native-prompt.js'
+import { installRemoteConfigurationApi } from './remote-configuration.js'
 import { RoomIdentityAction } from './RoomIdentityAction.js'
 import { ChatroomClientStore } from './store.js'
 import { CHATROOM_STYLES } from './styles.js'
@@ -41,6 +42,7 @@ export function apply(ctx: ClientContext): void {
     style.dataset.dshChatroomStyles = ''
     style.textContent = CHATROOM_STYLES
     document.head.append(style)
+    const restoreConfiguration = installRemoteConfigurationApi(connection)
     const restorePrompt = installNativePromptIdentity(connection.api, store)
     const syncSession = () => {
       store.resumeOpen()
@@ -52,6 +54,7 @@ export function apply(ctx: ClientContext): void {
     return () => {
       unsubscribeSessions()
       restorePrompt()
+      restoreConfiguration()
       store.stop()
       style.remove()
     }

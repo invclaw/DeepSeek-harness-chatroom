@@ -17,6 +17,8 @@ var Config = z.object({
   maxFilesPerMessage: z.number().step(1).min(1).max(20).default(5),
   maxMessageFileBytes: z.number().step(1).min(1).max(200 * 1024 * 1024).default(50 * 1024 * 1024),
   maxImageSidePixels: z.number().step(1).min(512).max(16384).default(4096),
+  settingsAdminParticipantIds: z.array(z.string().min(1).max(128)).default([]),
+  maxSettingsRequestBytes: z.number().step(1).min(1024).max(8 * 1024 * 1024).default(1024 * 1024),
   sseHeartbeatMs: z.number().step(1).min(5e3).max(12e4).default(15e3)
 });
 function validateConfig(config) {
@@ -27,6 +29,9 @@ function validateConfig(config) {
     throw new Error("chatroom: maxMessageFileBytes must be greater than or equal to maxFileBytes");
   }
 }
+
+// src/http.ts
+import { toFetchHandler } from "@deepseek-ai/dsh-host-apiproxy";
 
 // src/cookies.ts
 function cookieValue(header, name2) {
@@ -1278,10 +1283,12 @@ var ChatroomHttpController = class {
     this.runtime = runtime;
     this.config = config;
     this.log = ctx.logger("deepseek-harness-chatroom");
+    this.configurationApi = toFetchHandler(ctx.apiProxy);
   }
   runtime;
   config;
   log;
+  configurationApi;
   /** Dispatch one request under a registered chatroom API prefix. */
   async handle(request, response) {
     try {
@@ -1341,6 +1348,10 @@ var ChatroomHttpController = class {
       }
       if (route.endpoint === "/notifications" && request.method === "GET") {
         this.handleNotifications(request, response);
+        return;
+      }
+      if (route.endpoint.startsWith("/configuration/")) {
+        await this.handleConfiguration(request, response, route.endpoint.slice("/configuration/".length));
         return;
       }
       json(response, 404, { error: "\u63A5\u53E3\u4E0D\u5B58\u5728\u3002" });
@@ -1558,6 +1569,35 @@ var ChatroomHttpController = class {
       unsubscribe();
     });
   }
+  async handleConfiguration(request, response, method) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    if (!isRemoteConfigurationMethod(method)) {
+      json(response, 404, { error: "\u8FDC\u7A0B\u914D\u7F6E\u63A5\u53E3\u4E0D\u5B58\u5728\u3002" });
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    if (!canManageRemoteSettings(this.config, identity.participantId)) {
+      json(response, 403, { error: "\u5F53\u524D\u804A\u5929\u5BA4\u8EAB\u4EFD\u6CA1\u6709\u6A21\u578B\u8BBE\u7F6E\u7BA1\u7406\u6743\u9650\u3002" });
+      return;
+    }
+    const body = await readJson(request, this.config.maxSettingsRequestBytes);
+    const controller = new AbortController();
+    request.once("aborted", () => controller.abort());
+    const upstream = await this.configurationApi.fetch(new Request(`http://chatroom.local/api/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    }));
+    const payload = await upstream.json();
+    if (method === "settings.describe") hideHostDocumentCapability(payload);
+    json(response, upstream.status, payload);
+  }
   sessionPayload(identity) {
     return { identity, rooms: this.runtime.rooms, room: this.runtime.room };
   }
@@ -1572,6 +1612,32 @@ var ChatroomHttpController = class {
     return cookieValue(request.headers.cookie, this.config.cookieName);
   }
 };
+var REMOTE_CONFIGURATION_METHODS = /* @__PURE__ */ new Set([
+  "settings.describe",
+  "settings.update",
+  "settings.replace",
+  "settings.mutate",
+  "credentials.describe",
+  "credentials.set",
+  "credentials.unset",
+  "llm.discoverModels"
+]);
+function isRemoteConfigurationMethod(method) {
+  return REMOTE_CONFIGURATION_METHODS.has(method);
+}
+function canManageRemoteSettings(config, participantId) {
+  return config.settingsAdminParticipantIds.includes(participantId);
+}
+function hideHostDocumentCapability(payload) {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return;
+  const result = payload.result;
+  if (result === null || typeof result !== "object" || Array.isArray(result)) return;
+  const resultRecord = result;
+  if (resultRecord.ok !== true) return;
+  const value = resultRecord.value;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return;
+  value.hasDocument = false;
+}
 function json(response, status, payload) {
   const body = JSON.stringify(payload);
   response.writeHead(status, {
@@ -1781,6 +1847,7 @@ var inject = [
   "agentPresets",
   "agents",
   "attachments",
+  "apiProxy",
   "llm",
   "sessionPersistence",
   "sessions",

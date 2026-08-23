@@ -5,6 +5,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-attachment'
+import type {} from '@deepseek-ai/dsh-host-apiproxy'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
@@ -23,6 +24,7 @@ export const inject = [
   'agentPresets',
   'agents',
   'attachments',
+  'apiProxy',
   'llm',
   'sessionPersistence',
   'sessions',

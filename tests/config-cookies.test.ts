@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { validateConfig, type Config } from '../src/config.js'
 import { cookieValue, expiredSessionCookie, sessionCookie } from '../src/cookies.js'
+import { canManageRemoteSettings, isRemoteConfigurationMethod } from '../src/http.js'
 import {
   CHATROOM_API_PREFIX,
   LEGACY_CHATROOM_API_PREFIX,
@@ -34,6 +35,21 @@ describe('chatroom configuration and identity cookie', () => {
     })
     expect(matchChatroomApi('/plugins/deepseek-harness-chatroom/client.js')).toBeUndefined()
   })
+
+  it('limits the authenticated remote configuration bridge to model settings methods', () => {
+    expect(isRemoteConfigurationMethod('settings.describe')).toBe(true)
+    expect(isRemoteConfigurationMethod('credentials.set')).toBe(true)
+    expect(isRemoteConfigurationMethod('llm.discoverModels')).toBe(true)
+    expect(isRemoteConfigurationMethod('settings.openDocument')).toBe(false)
+    expect(isRemoteConfigurationMethod('session.prompt')).toBe(false)
+  })
+
+  it('requires an exact participant-id administrator match', () => {
+    const config = { ...validConfig(), settingsAdminParticipantIds: ['admin-id'] }
+    expect(canManageRemoteSettings(config, 'admin-id')).toBe(true)
+    expect(canManageRemoteSettings(config, 'Admin-id')).toBe(false)
+    expect(canManageRemoteSettings(config, 'member-id')).toBe(false)
+  })
 })
 
 function validConfig(): Config {
@@ -43,6 +59,7 @@ function validConfig(): Config {
     maxDisplayNameChars: 24, maxRoomTitleChars: 80, maxMessageTextChars: 20_000,
     maxFileBytes: 20 * 1024 * 1024, maxFilesPerMessage: 5, maxMessageFileBytes: 50 * 1024 * 1024,
     maxImageSidePixels: 4_096,
+    settingsAdminParticipantIds: [], maxSettingsRequestBytes: 1024 * 1024,
     sseHeartbeatMs: 15_000,
   }
 }

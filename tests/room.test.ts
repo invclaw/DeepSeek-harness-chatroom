@@ -359,6 +359,8 @@ function config(): Config {
     maxFilesPerMessage: 5,
     maxMessageFileBytes: 50 * 1024 * 1024,
     maxImageSidePixels: 4_096,
+    settingsAdminParticipantIds: [],
+    maxSettingsRequestBytes: 1024 * 1024,
     sseHeartbeatMs: 15_000,
   }
 }
