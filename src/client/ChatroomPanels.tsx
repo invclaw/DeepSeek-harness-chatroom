@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { chatroomAvatar } from '../avatars.js'
 import type {
   ChatroomForwardItem,
@@ -11,6 +11,8 @@ import {
   branchFrameDocumentReady,
   branchFrameTitle,
   branchFrameUrl,
+  prepareBranchFrameSelection,
+  restoreParentSessionSelection,
 } from './branch-frame.js'
 import type { ChatroomView } from './store.js'
 
@@ -166,8 +168,21 @@ function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
   const frameRef = useRef<HTMLIFrameElement>(null)
   const [frameInstance] = useState(() => ++branchFrameInstance)
   const [attempt, setAttempt] = useState(0)
+  const [preparedAttempt, setPreparedAttempt] = useState(-1)
   const [ready, setReady] = useState(false)
   const [timedOut, setTimedOut] = useState(false)
+  useLayoutEffect(() => {
+    if (parentSessionId === undefined) return
+    prepareBranchFrameSelection(thread.sessionId)
+    setPreparedAttempt(attempt)
+    const fallback = globalThis.setTimeout(() => {
+      restoreParentSessionSelection(parentSessionId)
+    }, 30_000)
+    return () => {
+      globalThis.clearTimeout(fallback)
+      restoreParentSessionSelection(parentSessionId)
+    }
+  }, [attempt, parentSessionId, thread.sessionId])
   useEffect(() => {
     setReady(false)
     setTimedOut(false)
@@ -200,9 +215,8 @@ function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
     timer = globalThis.setTimeout(() => {
       if (settled) return
       globalThis.clearInterval(poll)
-      if (attempt === 0) setAttempt(1)
-      else setTimedOut(true)
-    }, attempt === 0 ? 8_000 : 12_000)
+      setTimedOut(true)
+    }, 30_000)
     probe()
     return () => {
       settled = true
@@ -220,17 +234,17 @@ function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
       {parentSessionId === undefined
         ? <div className="dsh-chatroom-thread-frame-error">无法确定父群聊会话。</div>
         : <div className="dsh-chatroom-thread-frame-shell">
-          <iframe
+          {preparedAttempt === attempt && <iframe
             className="dsh-chatroom-thread-frame"
             key={`${thread.id}:${attempt}`}
             ref={frameRef}
             title={`分支回复：${thread.root.text}`}
             src={branchFrameUrl(thread, parentSessionId, `${frameInstance}:${attempt}`)}
-          />
+          />}
           {!ready && <div className="dsh-chatroom-thread-frame-status" role="status">
             {timedOut
               ? <><strong>分支加载超时</strong><button type="button" onClick={() => { setAttempt(value => value + 1) }}>重新加载</button></>
-              : <span>{attempt === 0 ? '正在加载分支…' : '正在重新加载分支…'}</span>}
+              : <><span>{attempt === 0 ? '正在加载分支…' : '正在重新加载分支…'}</span><small>首次打开需要初始化原生 Harness 会话</small></>}
           </div>}
         </div>}
       {props.room.threadError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.threadError}</div>}

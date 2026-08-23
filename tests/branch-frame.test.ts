@@ -7,6 +7,7 @@ import {
   branchFrameTitle,
   branchFrameUrl,
   notifyBranchFrameReady,
+  prepareBranchFrameSelection,
   restoreParentSessionSelection,
   stageBranchFrameSession,
 } from '../src/client/branch-frame.js'
@@ -62,6 +63,10 @@ describe('native branch frame isolation', () => {
   it('rejects partial frame addresses and restores the parent selection', () => {
     expect(branchFrameFromLocation({ search: '?dsh-chatroom-thread=thread-id' } as Location)).toBeUndefined()
 
+    prepareBranchFrameSelection('chatroom-thread-v1-thread')
+    expect(JSON.parse(localStorage.getItem('dsh.sessions.current')!)).toEqual({
+      sessionId: 'chatroom-thread-v1-thread',
+    })
     restoreParentSessionSelection('chatroom-v1-parent')
     expect(JSON.parse(localStorage.getItem('dsh.sessions.current')!)).toEqual({
       sessionId: 'chatroom-v1-parent',

@@ -49,8 +49,17 @@ export function branchFrameTitle(rootText: string): string {
 
 /** Restore the parent's room selection after the child runtime stages its branch. */
 export function restoreParentSessionSelection(parentSessionId: string): void {
+  persistSessionSelection(parentSessionId)
+}
+
+/** Seed the isolated runtime so it opens the branch instead of replaying the parent first. */
+export function prepareBranchFrameSelection(sessionId: string): void {
+  persistSessionSelection(sessionId)
+}
+
+function persistSessionSelection(sessionId: string): void {
   try {
-    localStorage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: parentSessionId }))
+    localStorage.setItem('dsh.sessions.current', JSON.stringify({ sessionId }))
   } catch {
     // Browser storage can be unavailable; the two live runtimes still retain independent in-memory selections.
   }
