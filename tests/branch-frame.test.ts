@@ -114,4 +114,11 @@ describe('native branch frame isolation', () => {
     )
     expect(CHATROOM_STYLES).toContain('grid-column: 2 !important;')
   })
+
+  it('renders native mention chips with their literal sigil instead of the reference icon', () => {
+    expect(CHATROOM_STYLES).toContain(
+      '.dsh-chatroom-native-message [data-ref-chip][title^="@"] > svg',
+    )
+    expect(CHATROOM_STYLES).toContain('content: "@";')
+  })
 })

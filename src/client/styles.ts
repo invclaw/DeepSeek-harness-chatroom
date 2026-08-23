@@ -349,6 +349,14 @@ export const CHATROOM_STYLES = `
   width: 100%;
 }
 
+.dsh-chatroom-native-message [data-ref-chip][title^="@"] > svg {
+  display: none !important;
+}
+
+.dsh-chatroom-native-message [data-ref-chip][title^="@"]::before {
+  content: "@";
+}
+
 .dsh-chatroom-participant-message[data-dsh-chatroom-own="false"] .dsh-chatroom-native-message [data-time-hover-root] {
   align-items: flex-start !important;
   text-align: left;

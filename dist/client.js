@@ -399,6 +399,14 @@ ${e.slice(l,u)}`,l=Q(e,u);else if(_r(e,l,u)){var d=Q(e,u);if(d<r&&(gr(e,d,dr(e,d
   width: 100%;
 }
 
+.dsh-chatroom-native-message [data-ref-chip][title^="@"] > svg {
+  display: none !important;
+}
+
+.dsh-chatroom-native-message [data-ref-chip][title^="@"]::before {
+  content: "@";
+}
+
 .dsh-chatroom-participant-message[data-dsh-chatroom-own="false"] .dsh-chatroom-native-message [data-time-hover-root] {
   align-items: flex-start !important;
   text-align: left;

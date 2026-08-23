@@ -28,7 +28,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.9.9 reconstructs branch roots from their authenticated native Session events, so image and file roots retain their real content instead of becoming placeholder text. Existing media branches are backfilled once when reopened. Version 0.9.8 keeps one native Harness branch runtime alive and switches new branch Sessions inside it, so only the first branch pays the Web-client initialization cost. Exact Session ids and a safe truncated-title prefix guard the handoff, and pending files or reply metadata are cleared between branches.
+Version 0.9.10 renders chatroom mentions as literal `@name` text in native user bubbles instead of Harness reference icons, while retaining the native candidate menu and model-visible text. Version 0.9.9 reconstructs branch roots from their authenticated native Session events, so image and file roots retain their real content instead of becoming placeholder text. Existing media branches are backfilled once when reopened. Version 0.9.8 keeps one native Harness branch runtime alive and switches new branch Sessions inside it, so only the first branch pays the Web-client initialization cost. Exact Session ids and a safe truncated-title prefix guard the handoff, and pending files or reply metadata are cleared between branches.
 
 ## Requirements
 
