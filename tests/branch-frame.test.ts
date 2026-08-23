@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   branchFrameDocumentReady,
   branchFrameFromLocation,
-  branchFrameTitle,
   branchFrameUrl,
   notifyBranchFrameReady,
   prepareBranchFrameSelection,
@@ -43,21 +42,17 @@ describe('native branch frame isolation', () => {
     })
   })
 
-  it('waits for the intended native title and composer before exposing the frame', () => {
+  it('waits for the intended Session marker and native composer before exposing the frame', () => {
     const frame = {
       threadId: 'thread', roomId: 'room', sessionId: 'branch-session', parentSessionId: 'parent-session',
     }
-    const title = branchFrameTitle(`${'猫'.repeat(40)}不会进入标题`)
-    expect(title).toBe(`分支：${'猫'.repeat(40)}`)
-    document.body.innerHTML = `<main data-dsh-chatroom-branch-shell><nav>${title}</nav><section><header>父会话</header></section><aside></aside></main>`
+    document.body.innerHTML = '<main data-dsh-chatroom-branch-shell><nav></nav><section><header>被原生 UI 截断的分支标题</header></section><aside></aside></main>'
     notifyBranchFrameReady(frame)
-    expect(branchFrameDocumentReady(document, frame.sessionId, title)).toBe(false)
+    expect(branchFrameDocumentReady(document, frame.sessionId)).toBe(false)
 
     document.querySelector('section')!.insertAdjacentHTML('beforeend', '<textarea></textarea>')
-    expect(branchFrameDocumentReady(document, frame.sessionId, title)).toBe(false)
-    document.querySelector('header')!.textContent = title
-    expect(branchFrameDocumentReady(document, frame.sessionId, title)).toBe(true)
-    expect(branchFrameDocumentReady(document, 'another-session', title)).toBe(false)
+    expect(branchFrameDocumentReady(document, frame.sessionId)).toBe(true)
+    expect(branchFrameDocumentReady(document, 'another-session')).toBe(false)
   })
 
   it('rejects partial frame addresses and restores the parent selection', () => {

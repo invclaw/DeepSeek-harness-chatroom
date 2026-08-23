@@ -573,6 +573,7 @@ export const CHATROOM_STYLES = `
   color: var(--text-primary, #111827);
   box-shadow: -18px 0 48px rgb(15 23 42 / 12%);
 }
+.dsh-chatroom-thread-panel[data-open="false"] { display: none; }
 .dsh-chatroom-thread-frame-shell { position: relative; min-height: 0; }
 .dsh-chatroom-thread-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--bg-primary, #fff); }
 .dsh-chatroom-thread-frame-status { position: absolute; inset: 0; display: grid; place-content: center; gap: 12px; background: var(--bg-primary, #fff); color: var(--text-secondary, #6b7280); font-size: 13px; text-align: center; }

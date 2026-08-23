@@ -28,7 +28,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.9.6 replaces the custom branch transcript with an isolated native Harness Session, giving branches the same Agent, model, permission, interaction, trajectory, attachment, and recovery capabilities as the main conversation while suppressing nested branch creation. Branch loading preselects the target Session before the isolated runtime boots, waits for the intended native title and composer to render, preserves one initialization attempt instead of restarting it prematurely, exposes manual recovery after a genuine timeout, and pins the native conversation to the visible center grid column after its sibling columns are hidden. It also adds owner/administrator management, source-verified lossless forwarding, and compact desktop/mobile message actions with reply, like, branch, and forward kept visible.
+Version 0.9.7 recognizes a branch by its exact Session id and native composer instead of comparing the Harness-truncated title, so long AI replies cannot be misreported as a timeout after the branch is already ready. Closing a branch keeps its isolated Harness runtime mounted off-screen, making repeated opens immediate instead of cold-starting the whole native Web client again. Version 0.9.6 replaced the custom branch transcript with the isolated native Harness Session and added owner/administrator management, source-verified lossless forwarding, and compact desktop/mobile message actions.
 
 ## Requirements
 

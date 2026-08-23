@@ -111,7 +111,8 @@ describe('native chatroom integration', () => {
         root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
       },
     })
-    renderEntry(room, { renameRoom, setMemberRole, closeThread })
+    const overrides = { renameRoom, setMemberRole, closeThread }
+    const rendered = renderEntry(room, overrides)
     expect(screen.getByTestId('chatroom-members')).toBeTruthy()
     expect(screen.getByTestId('chatroom-thread-panel')).toBeTruthy()
     expect(screen.getByText('新消息')).toBeTruthy()
@@ -147,6 +148,13 @@ describe('native chatroom integration', () => {
     expect(setMemberRole).toHaveBeenCalledWith('bob-id', 'admin')
     fireEvent.click(screen.getByRole('button', { name: '关闭分支' }))
     expect(closeThread).toHaveBeenCalledOnce()
+
+    rendered.rerender(entry({ ...room, thread: undefined }, overrides))
+    expect(screen.getByTestId('chatroom-thread-panel').getAttribute('data-open')).toBe('false')
+    expect(screen.getByTitle('分支回复：主题消息')).toBe(frame)
+    rendered.rerender(entry(room, overrides))
+    expect(screen.getByTestId('chatroom-thread-panel').getAttribute('data-open')).toBe('true')
+    expect(screen.getByTitle('分支回复：主题消息')).toBe(frame)
   })
 
   it('does not mount a second chatroom shell inside the native branch frame', () => {
@@ -226,8 +234,15 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
 function renderEntry(
   room: ChatroomView,
   overrides: Partial<Parameters<typeof ChatroomEntry>[0]> = {},
-): void {
-  render(<ChatroomEntry
+): ReturnType<typeof render> {
+  return render(entry(room, overrides))
+}
+
+function entry(
+  room: ChatroomView,
+  overrides: Partial<Parameters<typeof ChatroomEntry>[0]> = {},
+): JSX.Element {
+  return <ChatroomEntry
     useSessions={vi.fn() as never}
     useWorkspaces={vi.fn() as never}
     useChatroom={selector => selector(room)}
@@ -252,5 +267,5 @@ function renderEntry(
     toggleMessageSelection={vi.fn()}
     clearMessageSelection={vi.fn()}
     {...overrides}
-  />)
+  />
 }

@@ -4,12 +4,12 @@ import type {
   ChatroomForwardItem,
   ChatroomNotification,
   ChatroomReplyReference,
+  ChatroomThread,
 } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
 import {
   BRANCH_FRAME_READY,
   branchFrameDocumentReady,
-  branchFrameTitle,
   branchFrameUrl,
   prepareBranchFrameSelection,
   restoreParentSessionSelection,
@@ -39,11 +39,22 @@ let branchFrameInstance = 0
 
 /** Persistent member management, branch conversation, and in-page alerts. */
 export function ChatroomPanels(props: ChatroomPanelsProps): JSX.Element {
+  const [retainedThread, setRetainedThread] = useState<ChatroomThread>()
+  const visibleThread = props.room.thread
+  const mountedThread = visibleThread ?? retainedThread
+  useEffect(() => {
+    if (visibleThread !== undefined) setRetainedThread(visibleThread)
+  }, [visibleThread])
   return (
     <>
       <ToastStack toasts={props.room.toasts} dismiss={props.dismissToast} />
       {props.room.membersOpen && <MemberPanel {...props} />}
-      {props.room.thread !== undefined && <ThreadPanel {...props} />}
+      {mountedThread !== undefined && <ThreadPanel
+        key={mountedThread.id}
+        {...props}
+        thread={mountedThread}
+        open={visibleThread?.id === mountedThread.id}
+      />}
       {props.room.selectionRoomId !== undefined && <SelectionBar {...props} />}
       {props.room.forwardOpen && <ForwardPanel {...props} />}
     </>
@@ -162,8 +173,11 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
   )
 }
 
-function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
-  const thread = props.room.thread!
+function ThreadPanel(props: ChatroomPanelsProps & {
+  readonly thread: ChatroomThread
+  readonly open: boolean
+}): JSX.Element {
+  const { thread } = props
   const parentSessionId = props.room.room?.sessionId
   const frameRef = useRef<HTMLIFrameElement>(null)
   const [frameInstance] = useState(() => ++branchFrameInstance)
@@ -184,6 +198,10 @@ function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
     }
   }, [attempt, parentSessionId, thread.sessionId])
   useEffect(() => {
+    if (props.open || parentSessionId === undefined) return
+    restoreParentSessionSelection(parentSessionId)
+  }, [parentSessionId, props.open])
+  useEffect(() => {
     setReady(false)
     setTimedOut(false)
     let settled = false
@@ -194,7 +212,7 @@ function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
       try {
         const document = frameRef.current?.contentDocument
         if (document === null || document === undefined
-          || !branchFrameDocumentReady(document, thread.sessionId, branchFrameTitle(thread.root.text))) return
+          || !branchFrameDocumentReady(document, thread.sessionId)) return
       } catch {
         // An incomplete same-origin iframe can withhold its document; the visible timeout owns recovery.
         return
@@ -226,7 +244,13 @@ function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
     }
   }, [attempt, thread.id, thread.root.text, thread.sessionId])
   return (
-    <aside className="dsh-chatroom-thread-panel" data-testid="chatroom-thread-panel" aria-label="分支回复">
+    <aside
+      className="dsh-chatroom-thread-panel"
+      data-testid="chatroom-thread-panel"
+      data-open={props.open}
+      aria-hidden={!props.open}
+      aria-label="分支回复"
+    >
       <header>
         <div><strong>分支回复</strong><small>{thread.root.displayName}：{thread.root.text}</small></div>
         <button aria-label="关闭分支" type="button" onClick={props.closeThread}>×</button>
@@ -244,7 +268,7 @@ function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
           {!ready && <div className="dsh-chatroom-thread-frame-status" role="status">
             {timedOut
               ? <><strong>分支加载超时</strong><button type="button" onClick={() => { setAttempt(value => value + 1) }}>重新加载</button></>
-              : <><span>{attempt === 0 ? '正在加载分支…' : '正在重新加载分支…'}</span><small>首次打开需要初始化原生 Harness 会话</small></>}
+              : <><span>{attempt === 0 ? '正在加载分支…' : '正在重新加载分支…'}</span><small>正在初始化原生 Harness 分支会话</small></>}
           </div>}
         </div>}
       {props.room.threadError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.threadError}</div>}

@@ -42,11 +42,6 @@ export function branchFrameUrl(thread: ChatroomThread, parentSessionId: string, 
   return url.toString()
 }
 
-/** Return the native Session title assigned to a branch root. */
-export function branchFrameTitle(rootText: string): string {
-  return `分支：${[...rootText].slice(0, 40).join('')}`
-}
-
 /** Restore the parent's room selection after the child runtime stages its branch. */
 export function restoreParentSessionSelection(parentSessionId: string): void {
   persistSessionSelection(parentSessionId)
@@ -95,12 +90,10 @@ export function markBranchFrameSessionReady(document: Document, sessionId: strin
 export function branchFrameDocumentReady(
   document: Document,
   sessionId: string,
-  title: string,
 ): boolean {
   const shell = document.querySelector('[data-dsh-chatroom-branch-shell]')
   const conversation = shell?.children.item(1)
   return document.documentElement.getAttribute(BRANCH_SESSION_READY) === sessionId
-    && (conversation?.textContent ?? '').includes(title)
     && conversation?.querySelector('textarea') !== null
 }
 
