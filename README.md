@@ -27,7 +27,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.8.0 widens the desktop branch panel to 720px and reuses the room message-action components for branch messages. AI branch replies render safe GFM Markdown; branch replies support copy, reply quotes, reactions, forwarding, and multi-select without exposing a nested-branch action. Reply metadata and model-readable quote context both persist. Version 0.7.5's remote Models allowlist carrier, branch mentions, and text-model image-history compatibility remain intact.
+Version 0.8.1 widens the desktop branch panel to 720px and reuses the room message-action components for branch messages. AI branch replies render safe GFM Markdown through a browser-only renderer; the build rejects Node built-in imports that the Harness browser loader cannot provide. Branch replies support copy, reply quotes, reactions, forwarding, and multi-select without exposing a nested-branch action. Reply metadata and model-readable quote context both persist. Version 0.7.5's remote Models allowlist carrier, branch mentions, and text-model image-history compatibility remain intact.
 
 ## Requirements
 

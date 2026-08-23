@@ -148,12 +148,13 @@ describe('native chatroom integration', () => {
       },
       threadMessages: [{
         id: 'thread-ai', threadId: 'thread', sequence: 0, role: 'ai', participantId: 'ai',
-        displayName: 'DeepSeek', text: '**结论**：使用 `MarkdownText`。', createdAt: Date.now(),
+        displayName: 'DeepSeek', text: '**结论**：使用 `MarkdownText`。\n\n<script>alert(1)</script>', createdAt: Date.now(),
       }],
     }), { setThreadReply })
 
     expect(screen.getByText('结论').tagName).toBe('STRONG')
     expect(screen.getByText('MarkdownText').tagName).toBe('CODE')
+    expect(document.querySelector('script')).toBeNull()
     expect(screen.getByRole('button', { name: '▣ 复制' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '↩ 回复' }))
     expect(setThreadReply).toHaveBeenCalledWith(expect.objectContaining({
