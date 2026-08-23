@@ -13,12 +13,14 @@ import type {
   ChatroomReaction,
   ChatroomReplyReference,
   ChatroomRoomResponse,
+  ChatroomRoomManageResponse,
   ChatroomServerEvent,
   ChatroomSessionResponse,
   ChatroomThread,
   ChatroomThreadMessage,
   ChatroomThreadPreview,
   ChatroomThreadResponse,
+  ChatroomThreadPromptRequest,
   ChatroomThreadRoot,
 } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
@@ -41,8 +43,22 @@ export interface ChatroomComposition {
   readonly reply: ChatroomReplyReference | undefined
 }
 
+/** Query-carried context for the isolated native Harness branch frame. */
+export interface ChatroomBranchFrame {
+  readonly threadId: string
+  readonly sessionId: string
+  readonly roomId: string
+  readonly parentSessionId: string
+}
+
+/** Agent submission target resolved from a native Harness Session id. */
+export type ChatroomAgentTarget =
+  | { readonly kind: 'room'; readonly room: ChatroomInfo }
+  | { readonly kind: 'thread'; readonly room: ChatroomInfo; readonly threadId: string }
+
 /** Browser identity, room directory, selection, and presence around native Harness Sessions. */
 export interface ChatroomView {
+  readonly branchFrame?: ChatroomBranchFrame | undefined
   readonly open: boolean
   readonly phase: ChatroomPhase
   readonly connection: ChatroomConnection
@@ -54,6 +70,8 @@ export interface ChatroomView {
   readonly reactions: readonly ChatroomReaction[]
   readonly threadPreviews: readonly ChatroomThreadPreview[]
   readonly membersOpen: boolean
+  readonly managementBusy?: boolean
+  readonly managementError?: string | undefined
   readonly error: string | undefined
   readonly composerRoomId: string | undefined
   readonly pendingFiles: readonly PendingChatroomFile[]
@@ -78,6 +96,7 @@ export interface ChatroomView {
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
 export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private snapshot: ChatroomView = {
+    branchFrame: undefined,
     open: false,
     phase: 'loading',
     connection: 'offline',
@@ -89,6 +108,8 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     reactions: [],
     threadPreviews: [],
     membersOpen: false,
+    managementBusy: false,
+    managementError: undefined,
     error: undefined,
     composerRoomId: undefined,
     pendingFiles: [],
@@ -119,14 +140,34 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private pendingFileSequence = 0
   private originalTitle: string | undefined
 
-  constructor(private readonly openSession: (sessionId: string) => boolean = () => false) {}
+  constructor(
+    private readonly openSession: (sessionId: string) => boolean = () => false,
+    branchFrame?: ChatroomBranchFrame,
+  ) {
+    if (branchFrame !== undefined) this.snapshot = { ...this.snapshot, branchFrame }
+  }
 
   /** Current immutable room projection. */
   getSnapshot = (): ChatroomView => this.snapshot
 
   /** Resolve room metadata for any native Session in the shared directory. */
   roomForSession(sessionId: string): ChatroomInfo | undefined {
-    return this.snapshot.rooms.find(room => room.sessionId === sessionId)
+    const direct = this.snapshot.rooms.find(room => room.sessionId === sessionId)
+    if (direct !== undefined) return direct
+    const frame = this.snapshot.branchFrame
+    return frame?.sessionId === sessionId
+      ? this.snapshot.rooms.find(room => room.id === frame.roomId)
+      : undefined
+  }
+
+  /** Resolve whether one native Session submits to a room or one branch. */
+  agentTargetForSession(sessionId: string): ChatroomAgentTarget | undefined {
+    const room = this.roomForSession(sessionId)
+    if (room === undefined) return undefined
+    const frame = this.snapshot.branchFrame
+    return frame?.sessionId === sessionId
+      ? { kind: 'thread', room, threadId: frame.threadId }
+      : { kind: 'room', room }
   }
 
   /** Subscribe to room projection changes. */
@@ -170,7 +211,45 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   /** Close group management without changing the active room. */
   closeMembers = (): void => {
-    this.set({ membersOpen: false })
+    this.set({ membersOpen: false, managementError: undefined })
+  }
+
+  /** Rename the active room through the server-enforced management endpoint. */
+  renameRoom = async (title: string): Promise<boolean> => {
+    const room = this.snapshot.room
+    if (room === undefined || this.snapshot.managementBusy) return false
+    this.set({ managementBusy: true, managementError: undefined })
+    try {
+      const result = await requestJson<ChatroomRoomManageResponse>(`${CHATROOM_API_PREFIX}/rooms/manage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId: room.id, action: 'rename', title }),
+      })
+      this.applyRoomManagement(result)
+      return true
+    } catch (error) {
+      this.set({ managementBusy: false, managementError: errorMessage(error) })
+      return false
+    }
+  }
+
+  /** Promote or demote one member through the owner-only management endpoint. */
+  setMemberRole = async (participantId: string, role: 'admin' | 'member'): Promise<boolean> => {
+    const room = this.snapshot.room
+    if (room === undefined || this.snapshot.managementBusy) return false
+    this.set({ managementBusy: true, managementError: undefined })
+    try {
+      const result = await requestJson<ChatroomRoomManageResponse>(`${CHATROOM_API_PREFIX}/rooms/manage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId: room.id, action: 'set-role', participantId, role }),
+      })
+      this.applyRoomManagement(result)
+      return true
+    } catch (error) {
+      this.set({ managementBusy: false, managementError: errorMessage(error) })
+      return false
+    }
   }
 
   /** Close only the additive room dialog. */
@@ -420,12 +499,22 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.set({ composerBusy: true, composerError: undefined })
     try {
       const content = await serializePendingFiles(composition.files)
-      await submitRoomPrompt({
-        roomId,
-        mode: 'queue',
-        content,
-        ...(composition.reply === undefined ? {} : { reply: composition.reply }),
-      })
+      const frame = this.snapshot.branchFrame
+      if (frame?.roomId === roomId) {
+        await submitThreadPrompt({
+          threadId: frame.threadId,
+          mode: 'queue',
+          content,
+          ...(composition.reply === undefined ? {} : { reply: composition.reply }),
+        })
+      } else {
+        await submitRoomPrompt({
+          roomId,
+          mode: 'queue',
+          content,
+          ...(composition.reply === undefined ? {} : { reply: composition.reply }),
+        })
+      }
       this.completeComposition(composition)
     } catch (error) {
       this.set({ composerBusy: false, composerError: errorMessage(error) })
@@ -521,7 +610,12 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       await requestJson<ChatroomPromptResponse>(`${CHATROOM_API_PREFIX}/threads/prompt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ threadId: thread.id, text, ...(reply === undefined ? {} : { reply }) }),
+        body: JSON.stringify({
+          threadId: thread.id,
+          mode: 'queue',
+          content: [{ type: 'text', text }],
+          ...(reply === undefined ? {} : { reply }),
+        }),
       })
       this.set({ threadReply: undefined, threadBusy: false, threadError: undefined })
       return true
@@ -696,6 +790,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       case 'reaction':
         this.replaceReaction(event.reaction)
         return
+      case 'room-updated':
+        this.applyRoomManagement({ room: event.room, members: event.members })
+        return
     }
   }
 
@@ -704,6 +801,16 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     const without = this.snapshot.reactions.filter(item =>
       item.messageId !== reaction.messageId || item.emoji !== reaction.emoji)
     this.set({ reactions: reaction.participantIds.length === 0 ? without : [...without, reaction] })
+  }
+
+  private applyRoomManagement(result: ChatroomRoomManageResponse): void {
+    const rooms = this.snapshot.rooms.map(room => room.id === result.room.id ? result.room : room)
+    this.set({
+      rooms,
+      ...(this.snapshot.room?.id === result.room.id ? { room: result.room, members: result.members } : {}),
+      managementBusy: false,
+      managementError: undefined,
+    })
   }
 
   private receiveNotification(notification: ChatroomNotification): void {
@@ -763,6 +870,19 @@ export async function submitRoomPrompt(
   signal?: AbortSignal,
 ): Promise<ChatroomPromptResponse> {
   return await requestJson<ChatroomPromptResponse>(`${CHATROOM_API_PREFIX}/prompt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+    ...(signal === undefined ? {} : { signal }),
+  })
+}
+
+/** Submit one native composer payload through branch human-first admission. */
+export async function submitThreadPrompt(
+  request: ChatroomThreadPromptRequest,
+  signal?: AbortSignal,
+): Promise<ChatroomPromptResponse> {
+  return await requestJson<ChatroomPromptResponse>(`${CHATROOM_API_PREFIX}/threads/prompt`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),

@@ -6,6 +6,7 @@ import type {
   ChatroomForwardBundle,
   ChatroomForwardItem,
   ChatroomIdentity,
+  ChatroomImageReference,
   ChatroomReplyReference,
   ChatroomThreadPreview,
   ChatroomThreadRoot,
@@ -22,7 +23,9 @@ import {
   type ChatroomMessageToolsProps,
 } from './ChatroomMessageTools.js'
 import { ChatroomThreadActivity } from './ChatroomThreadActivity.js'
+import { ChatroomMarkdown } from './ChatroomMarkdown.js'
 import type { ChatroomView } from './store.js'
+import type { ChatroomAgentTarget } from './store.js'
 
 type ParticipantNode = ChatNode<'user' | 'steering'>
 
@@ -31,6 +34,7 @@ export { identifyChatroomText } from '../message.js'
 interface ChatroomMessageNodeInjected<Kind extends 'user' | 'steering'> {
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
   nativeMessageView: ComponentType<ChatNodeViewProps<Kind>>
+  resolveTarget?(sessionId: string): ChatroomAgentTarget | undefined
   setReply(roomId: string, reply: ChatroomReplyReference): void
   openThread(roomId: string, root: ChatroomThreadRoot): Promise<void>
   toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>
@@ -133,18 +137,21 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
 ) {
   const room = props.useChatroom(snapshot => snapshot)
   const NativeView = props.nativeMessageView
-  if (!room.rooms.some(candidate => String(props.sessionId) === candidate.sessionId)) {
+  const directRoom = room.rooms.find(candidate => String(props.sessionId) === candidate.sessionId)
+  const sessionTarget = props.resolveTarget?.(String(props.sessionId))
+    ?? (directRoom === undefined ? undefined : { kind: 'room' as const, room: directRoom })
+  if (sessionTarget === undefined) {
     return <NativeView {...props} />
   }
   const projection = projectChatroomMessage(props.node, room.identity)
   const native = <NativeView {...props} node={projection.node as ChatNode<'user'>} />
-  const activeRoom = room.rooms.find(candidate => String(props.sessionId) === candidate.sessionId)!
-  const message = messageTarget(props.node, projection)
-  const target = replyTarget(message)
-  const onReply = room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, target) }
-  const onThread = room.identity === undefined
+  const activeRoom = sessionTarget.room
+  const message = messageTarget(String(props.sessionId), props.node, projection)
+  const reply = replyTarget(message)
+  const onReply = room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, reply) }
+  const onThread = room.identity === undefined || sessionTarget.kind === 'thread'
     ? undefined
-    : () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) }
+    : () => { void props.openThread(activeRoom.id, { ...reply, role: 'human' }) }
   const tools = messageTools(props, room, activeRoom.id, message, message.text, onReply, onThread)
   const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, 'human')
   return <ParticipantMessage
@@ -163,18 +170,21 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
 ) {
   const room = props.useChatroom(snapshot => snapshot)
   const NativeView = props.nativeMessageView
-  if (!room.rooms.some(candidate => String(props.sessionId) === candidate.sessionId)) {
+  const directRoom = room.rooms.find(candidate => String(props.sessionId) === candidate.sessionId)
+  const sessionTarget = props.resolveTarget?.(String(props.sessionId))
+    ?? (directRoom === undefined ? undefined : { kind: 'room' as const, room: directRoom })
+  if (sessionTarget === undefined) {
     return <NativeView {...props} />
   }
   const projection = projectChatroomMessage(props.node, room.identity)
   const native = <NativeView {...props} node={projection.node as ChatNode<'steering'>} />
-  const activeRoom = room.rooms.find(candidate => String(props.sessionId) === candidate.sessionId)!
-  const message = messageTarget(props.node, projection)
-  const target = replyTarget(message)
-  const onReply = room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, target) }
-  const onThread = room.identity === undefined
+  const activeRoom = sessionTarget.room
+  const message = messageTarget(String(props.sessionId), props.node, projection)
+  const reply = replyTarget(message)
+  const onReply = room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, reply) }
+  const onThread = room.identity === undefined || sessionTarget.kind === 'thread'
     ? undefined
-    : () => { void props.openThread(activeRoom.id, { ...target, role: 'human' }) }
+    : () => { void props.openThread(activeRoom.id, { ...reply, role: 'human' }) }
   const tools = messageTools(props, room, activeRoom.id, message, message.text, onReply, onThread)
   const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, 'human')
   return <ParticipantMessage
@@ -228,7 +238,7 @@ function ParticipantMessage({
         {projection.forward !== undefined && <ForwardCard forward={projection.forward} />}
         <ChatroomReactionBar {...tools} />
         <ChatroomThreadActivity preview={threadPreview} open={onThread} />
-        <ChatroomInlineMessageActions tools={tools} nativeCopy />
+        <ChatroomInlineMessageActions tools={tools} />
       </div>
       <ChatroomMessageContextMenu tools={tools} position={menu.position} close={menu.close} />
     </div>
@@ -252,7 +262,7 @@ function FileCard({ file }: { file: ChatroomFileReference }): JSX.Element {
   )
 }
 
-function ForwardCard({ forward }: { forward: ChatroomForwardBundle }): JSX.Element {
+function ForwardCard({ forward, depth = 0 }: { forward: ChatroomForwardBundle; depth?: number }): JSX.Element {
   return (
     <details className="dsh-chatroom-forward-card">
       <summary><strong>合并转发 · {forward.items.length} 条消息</strong><small>来自 {forward.sourceRoomTitle}</small></summary>
@@ -260,7 +270,21 @@ function ForwardCard({ forward }: { forward: ChatroomForwardBundle }): JSX.Eleme
         {forward.items.map(item => (
           <article key={item.messageId}>
             <strong>{item.displayName}<time>{formatTime(item.createdAt)}</time></strong>
-            <p>{item.text}</p>
+            {item.reply !== undefined && <div className="dsh-chatroom-forward-reply"><b>回复 {item.reply.displayName}</b><span>{item.reply.text}</span></div>}
+            {(item.content ?? [{ type: 'text' as const, text: item.text, markdown: item.role === 'ai' }]).map((part, index) => {
+              if (part.type === 'text') return part.markdown
+                ? <ChatroomMarkdown key={index} text={part.text} />
+                : <p className="dsh-chatroom-forward-text" key={index}>{part.text}</p>
+              if (part.type === 'file') return <FileCard file={part.file} key={`${part.file.id}:${index}`} />
+              const href = imageHref(forward.sourceRoomId, item, part.image)
+              return href === undefined
+                ? <span className="dsh-chatroom-forward-image-error" key={`${part.image.attachmentId}:${index}`}>图片来源不可用</span>
+                : <img className="dsh-chatroom-forward-image" key={`${part.image.attachmentId}:${index}`} src={href} alt={part.image.name ?? '转发图片'} />
+            })}
+            {item.forward !== undefined && depth < 1 && <ForwardCard forward={item.forward} depth={depth + 1} />}
+            {item.reactions !== undefined && item.reactions.length > 0 && <div className="dsh-chatroom-forward-reactions">
+              {item.reactions.map(reaction => <span key={reaction.emoji}>{reaction.emoji} {reaction.count}</span>)}
+            </div>}
           </article>
         ))}
       </div>
@@ -268,16 +292,45 @@ function ForwardCard({ forward }: { forward: ChatroomForwardBundle }): JSX.Eleme
   )
 }
 
-function messageTarget(node: ParticipantNode, projection: ReturnType<typeof projectChatroomMessage>): ChatroomForwardItem {
+function imageHref(
+  sourceRoomId: string,
+  item: ChatroomForwardItem,
+  image: ChatroomImageReference,
+): string | undefined {
+  if (item.sourceSessionId === undefined || item.sourceSeq === undefined) return undefined
+  return `${CHATROOM_API_PREFIX}/images/${encodeURIComponent(JSON.stringify({
+    sourceRoomId,
+    sourceSessionId: item.sourceSessionId,
+    sourceSeq: item.sourceSeq,
+    image,
+  }))}`
+}
+
+function messageTarget(
+  sessionId: string,
+  node: ParticipantNode,
+  projection: ReturnType<typeof projectChatroomMessage>,
+): ChatroomForwardItem {
   const fileText = projection.files.length === 0 ? '' : projection.files.map(file => file.name).join('、')
   const forwardText = projection.forward === undefined ? '' : `合并转发 ${projection.forward.items.length} 条消息`
   const text = (projection.text.trim() || fileText || forwardText || '图片消息').replace(/\s+/gu, ' ')
   return {
     messageId: `${node.kind}:${node.data.seq}`,
+    sourceSessionId: sessionId,
+    sourceSeq: node.data.seq,
     role: 'human',
     displayName: projection.displayName ?? '参与者',
     text: [...text].slice(0, 120).join(''),
     createdAt: node.data.time,
+    content: [
+      ...(projection.text.trim() === '' ? [] : [{ type: 'text' as const, text: projection.text, markdown: false }]),
+      ...projection.node.data.content.flatMap(block => block.type === 'image'
+        ? [{ type: 'image' as const, image: { ...block.attachment, attachmentId: String(block.attachment.attachmentId) } }]
+        : []),
+      ...projection.files.map(file => ({ type: 'file' as const, file })),
+    ],
+    ...(projection.reply === undefined ? {} : { reply: projection.reply }),
+    ...(projection.forward === undefined ? {} : { forward: projection.forward }),
   }
 }
 

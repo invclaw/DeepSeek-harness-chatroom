@@ -84,13 +84,22 @@ describe('native chatroom integration', () => {
     expect(openRoom).toHaveBeenCalledOnce()
   })
 
-  it('renders member management, unread alerts, and branch replies as additive panels', () => {
-    const sendThreadMessage = vi.fn(async () => true)
+  it('renders room management, unread alerts, and an isolated native branch frame', () => {
+    const renameRoom = vi.fn(async () => true)
+    const setMemberRole = vi.fn(async () => true)
+    const closeThread = vi.fn()
     const room = view({
       membersOpen: true,
-      members: [{
-        participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale', joinedAt: 1, lastSeenAt: Date.now(), online: true,
-      }],
+      members: [
+        {
+          participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale', role: 'owner',
+          joinedAt: 1, lastSeenAt: Date.now(), online: true,
+        },
+        {
+          participantId: 'bob-id', displayName: 'Bob', avatarId: 'panda', role: 'member',
+          joinedAt: 1, lastSeenAt: Date.now(), online: true,
+        },
+      ],
       unreadCount: 3,
       toasts: [{
         id: 'notice', roomId: 'lobby', roomTitle: 'AI 聊天室', participantId: 'bob-id', displayName: 'Bob',
@@ -100,95 +109,34 @@ describe('native chatroom integration', () => {
         id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
         root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
       },
-      threadMessages: [{
-        id: 'thread-message', threadId: 'thread', sequence: 0, role: 'human', participantId: 'bob-id',
-        displayName: 'Bob', avatarId: 'panda', text: '分支内容', createdAt: Date.now(),
-      }],
     })
-    renderEntry(room, { sendThreadMessage })
+    renderEntry(room, { renameRoom, setMemberRole, closeThread })
     expect(screen.getByTestId('chatroom-members')).toBeTruthy()
     expect(screen.getByTestId('chatroom-thread-panel')).toBeTruthy()
-    expect(screen.getByText('分支内容')).toBeTruthy()
     expect(screen.getByText('新消息')).toBeTruthy()
-    fireEvent.change(screen.getByPlaceholderText('回复分支；输入 @AI 让 AI 在本分支回答'), { target: { value: '@AI 总结' } })
-    fireEvent.click(screen.getByText('发送'))
-    expect(sendThreadMessage).toHaveBeenCalledWith('@AI 总结')
+    const frame = screen.getByTitle('分支回复：主题消息') as HTMLIFrameElement
+    const frameUrl = new URL(frame.src)
+    expect(frameUrl.searchParams.get('dsh-chatroom-thread')).toBe('thread')
+    expect(frameUrl.searchParams.get('dsh-chatroom-thread-session')).toBe('chatroom-thread-v1-thread')
+    expect(frameUrl.searchParams.get('dsh-chatroom-parent-session')).toBe('chatroom-v1-lobby')
+
+    fireEvent.change(screen.getByRole('textbox', { name: '群聊名称' }), { target: { value: '新群名' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存名称' }))
+    expect(renameRoom).toHaveBeenCalledWith('新群名')
+    fireEvent.click(screen.getByRole('button', { name: '设为管理员' }))
+    expect(setMemberRole).toHaveBeenCalledWith('bob-id', 'admin')
+    fireEvent.click(screen.getByRole('button', { name: '关闭分支' }))
+    expect(closeThread).toHaveBeenCalledOnce()
   })
 
-  it('offers AI and room members from the branch mention menu', () => {
-    const sendThreadMessage = vi.fn(async () => true)
+  it('does not mount a second chatroom shell inside the native branch frame', () => {
     renderEntry(view({
-      thread: {
-        id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
-        root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
+      branchFrame: {
+        threadId: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread',
+        parentSessionId: 'chatroom-v1-lobby',
       },
-      members: [
-        { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale', joinedAt: 1, lastSeenAt: 1, online: true },
-        { participantId: 'bob-id', displayName: 'Bob', avatarId: 'panda', joinedAt: 1, lastSeenAt: 1, online: true },
-      ],
-    }), { sendThreadMessage })
-    const composer = screen.getByPlaceholderText('回复分支；输入 @AI 让 AI 在本分支回答')
-
-    fireEvent.change(composer, { target: { value: '@', selectionStart: 1 } })
-    expect(screen.getByRole('option', { name: 'AI' })).toBeTruthy()
-    expect(screen.getByRole('option', { name: 'Bob' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('option', { name: 'AI' }))
-    expect((composer as HTMLTextAreaElement).value).toBe('@AI ')
-    fireEvent.change(composer, { target: { value: '@AI 请总结', selectionStart: 7 } })
-    fireEvent.keyDown(composer, { key: 'Enter' })
-    expect(sendThreadMessage).toHaveBeenCalledWith('@AI 请总结')
-  })
-
-  it('reuses native text primitives and shared actions without offering nested branches', () => {
-    const setThreadReply = vi.fn()
-    const toggleReaction = vi.fn(async () => undefined)
-    const openForward = vi.fn()
-    const toggleMessageSelection = vi.fn()
-    renderEntry(view({
-      thread: {
-        id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
-        root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
-      },
-      threadMessages: [{
-        id: 'thread-ai', threadId: 'thread', sequence: 0, role: 'ai', participantId: 'ai',
-        displayName: 'DeepSeek', text: '**结论**：使用 `MarkdownText`。\n\n<script>alert(1)</script>', createdAt: Date.now(),
-      }],
-    }), { setThreadReply, toggleReaction, openForward, toggleMessageSelection })
-
-    expect(screen.getByText('结论').tagName).toBe('STRONG')
-    expect(screen.getByText('MarkdownText').tagName).toBe('CODE')
-    expect(document.querySelector('script')).toBeNull()
-    expect(screen.getByRole('button', { name: '▣ 复制' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '↩ 回复' }))
-    expect(setThreadReply).toHaveBeenCalledWith(expect.objectContaining({
-      messageId: 'thread-ai', displayName: 'DeepSeek',
     }))
-    fireEvent.click(screen.getByRole('button', { name: '点赞' }))
-    expect(toggleReaction).toHaveBeenCalledWith('lobby', 'thread-ai', '👍')
-    fireEvent.click(screen.getByRole('button', { name: '贴表情' }))
-    fireEvent.click(screen.getByRole('menuitem', { name: '贴表情 🎉' }))
-    expect(toggleReaction).toHaveBeenCalledWith('lobby', 'thread-ai', '🎉')
-    fireEvent.click(screen.getByRole('button', { name: '↗ 转发' }))
-    expect(openForward).toHaveBeenCalledWith('lobby', expect.objectContaining({ messageId: 'thread-ai' }))
-    fireEvent.click(screen.getByRole('button', { name: '☑ 多选' }))
-    expect(toggleMessageSelection).toHaveBeenCalledWith('lobby', expect.objectContaining({ messageId: 'thread-ai' }))
-    expect(screen.queryByRole('button', { name: '⑂ 分支' })).toBeNull()
-  })
-
-  it('shows the pending branch quote above the composer and can cancel it', () => {
-    const clearThreadReply = vi.fn()
-    renderEntry(view({
-      thread: {
-        id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
-        root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
-      },
-      threadReply: { messageId: 'thread-ai', displayName: 'DeepSeek', text: '上一条分支回复' },
-    }), { clearThreadReply })
-
-    expect(screen.getByText('回复 DeepSeek')).toBeTruthy()
-    expect(screen.getByText('上一条分支回复')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '取消引用' }))
-    expect(clearThreadReply).toHaveBeenCalledOnce()
+    expect(document.body.firstElementChild?.firstChild).toBeNull()
   })
 
   it('opens a target chooser for a merged multi-message forward', () => {

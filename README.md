@@ -17,17 +17,18 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Oversized images are resized before entering Harness's durable attachment store; stop/queue/steer behavior, slash commands, approvals, and question interactions stay native
 - Participant names added on the Host before Session admission, so every browser and the model see the same identity
 - Current identity and online count in the native Session header, with direct access to the shared-room directory
-- Durable room membership with a group-management panel, member avatars, online state, and recent activity
+- Durable room membership with member avatars, online state, and recent activity; owners can rename rooms and manage administrators, while administrators can also rename rooms
 - In-page message toasts, unread title badges, and opt-in browser system notifications across rooms
-- Persistent branch replies in a wider right-side panel; AI replies render safe GFM Markdown, and branch messages reuse the room's avatar, bubble, reaction, copy, reply, forwarding, and selection components without allowing nested branches
-- AI/member `@` candidates inside the branch composer; every branch owns a separate Harness Session, `@AI` answers stay inside that branch, and reply references persist in branch context
+- Persistent branch replies in a right-side panel that loads the branch's complete native Harness Session UI, including Markdown, image/file upload, model and permission selectors, stop/queue/steer, slash commands, approvals, question interactions, Think/tool trajectory, failure details, and retries
+- Native AI/member `@` candidates inside the branch composer; every branch owns an independent Session, so `@AI` answers, quotes, and tool runs stay inside that branch while chatroom reactions, replies, forwarding, and selection remain available without nested chatroom branches
 - Images remain visible and durable in room and branch history; when a selected model is text-only, only that model request receives deterministic text markers in place of historical images
 - Quiet root-message branch activity with the total reply count and latest three replies, updated live without opening the branch panel
-- Durable message reactions plus a right-click menu for reactions, forwarding, and multi-select; selection mode adds checkboxes to every human and AI message before merged forwarding
+- Reply, like, and forward stay visible; copy, the full reaction picker, multi-select, and branch live in a clickable overflow menu as well as the context menu, with a full-width branch and bottom action menu on mobile
+- Durable message reactions and selection checkboxes for every human and AI message; merged forwarding is rebuilt from authoritative Session events and retains literal/Markdown text, images, files, quotes, nested forwards, and reaction counts
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.8.2 gives main-room and branch messages one capability-driven inline toolbar. Copy, reply, quick like, the full reaction picker, forwarding, and multi-select stay visible in both surfaces; only the nested-branch capability is omitted in a branch. Version 0.8.1's 720px panel, safe browser-only GFM renderer, browser-bundle gate, persistent reply metadata, and model-readable quote context remain intact. Version 0.7.5's remote Models allowlist carrier, branch mentions, and text-model image-history compatibility also remain intact.
+Version 0.9.0 replaces the custom branch transcript with an isolated native Harness Session, giving branches the same Agent, model, permission, interaction, trajectory, attachment, and recovery capabilities as the main conversation. It also adds owner/administrator management, source-verified lossless forwarding, and compact desktop/mobile message actions with only reply, like, and forward kept visible.
 
 ## Requirements
 
@@ -121,9 +122,9 @@ A display name is presentation, not authentication. Remote Models authorization 
 6. Select **Reply** below a human message. The composer must show the quote, and both browsers must render the same quote after sending.
 7. Insert an emoji through **Emoji**, then send a pure image and a pure file. Only the media or download card must render, without a "sent a..." text bubble; the other browser must download the original file bytes.
 8. Run `/new`, approval and question interactions, and stop/queue/steer flows through their native Harness paths.
-9. Open **Group management** in the Session header. Both participants must appear with the correct avatar and online state. Enable system notifications from this explicit user action, hide the tab, and verify that a new peer message creates a system alert and unread title badge.
-10. Select **Branch** below a human or AI message. The wider panel must list AI and current room members after typing `@`. Ask AI for bold text, a list, and code, then verify rendered Markdown. Copy, reply to, react to, forward, and multi-select a branch message; the quote must appear in the composer and persisted message, while no nested-branch action is available. After four messages, close the panel and verify the root summary's total and latest three replies; AI output must not enter the main room.
-11. Right-click any human or AI message and choose **Multi-select**. Every human and AI message must receive a left-side checkbox. Select several directly and merge them into **Project two**, then verify one expandable history card in the target room.
+9. Open **Group management** in the Session header. Verify both participants, rename the room as its owner, promote Bob, and rename it again as Bob; the title and roles must survive reload. Enable system notifications, hide the tab, and verify a peer message creates a system alert and unread title badge.
+10. Choose **Branch** from a human or AI message's overflow menu. The panel must contain the complete native Harness conversation. Verify model and permission selection, image/file upload, stop/steer, slash commands, approval/question interactions, Think/tool trajectory, and retry UI. Typing `@` must list AI and room members, while `@AI` output stays in the branch. Reply, react, forward, and multi-select a branch message; no nested chatroom branch action may appear. After four messages, close the panel and verify the root's total and latest three replies.
+11. Choose **Multi-select** from the overflow menu and confirm every human and AI message receives a checkbox. Select messages containing Markdown, quotes, images, files, and reactions, merge them into **Project two**, and verify the target card retains all of those fields.
 12. Enter another shared room and confirm that display-name and avatar setup is not requested again.
 13. With an image already in room history, switch to a text-only model and send `@AI summarize` in both the main room and a branch. Both must answer while the historical image remains visible.
 14. Reload and restart Harness. Identity, room directory, membership, reactions, branches, and every Session context must recover.

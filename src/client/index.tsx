@@ -19,6 +19,10 @@ import { installRemoteConfigurationApi } from './remote-configuration.js'
 import { RoomIdentityAction } from './RoomIdentityAction.js'
 import { ChatroomClientStore } from './store.js'
 import { CHATROOM_STYLES } from './styles.js'
+import {
+  branchFrameFromLocation,
+  restoreParentSessionSelection,
+} from './branch-frame.js'
 
 export const inject = ['connection', 'inputTriggers', 'sessions', 'settingsScope', 'slots']
 
@@ -30,6 +34,7 @@ export function apply(ctx: ClientContext): void {
   if (sessions === undefined) throw new Error('chatroom: client sessions service unavailable')
   const inputTriggers = ctx.get('inputTriggers') as InputTriggerServiceContract | undefined
   if (inputTriggers === undefined) throw new Error('chatroom: input trigger service unavailable')
+  const branchFrame = typeof location === 'undefined' ? undefined : branchFrameFromLocation(location)
   const store = new ChatroomClientStore((rawSessionId) => {
     const sessionId = rawSessionId as SessionId
     const list = sessions.list.getSnapshot()
@@ -37,8 +42,16 @@ export function apply(ctx: ClientContext): void {
     if (list.byId[sessionId] === undefined) return false
     sessions.open(sessionId)
     return true
-  })
+  }, branchFrame)
   ctx.effect(() => {
+    if (branchFrame !== undefined) document.documentElement.setAttribute('data-dsh-chatroom-branch-frame', '')
+    const markBranchShell = () => {
+      if (branchFrame === undefined) return
+      document.querySelector('[data-shell-overlay]')?.parentElement?.setAttribute('data-dsh-chatroom-branch-shell', '')
+    }
+    const shellObserver = branchFrame === undefined ? undefined : new MutationObserver(markBranchShell)
+    shellObserver?.observe(document.body, { childList: true, subtree: true })
+    markBranchShell()
     const style = document.createElement('style')
     style.dataset.dshChatroomStyles = ''
     style.textContent = CHATROOM_STYLES
@@ -46,7 +59,18 @@ export function apply(ctx: ClientContext): void {
     const restoreConfiguration = installRemoteConfigurationApi(connection)
     const restoreSettingsMirror = activateRemoteSettingsMirror(ctx.get('settingsScope'))
     const restorePrompt = installNativePromptIdentity(connection.api, store)
+    let branchStaged = false
+    const stageBranch = () => {
+      if (branchFrame === undefined || branchStaged) return
+      const list = sessions.list.getSnapshot()
+      const sessionId = branchFrame.sessionId as SessionId
+      if (list.byId[sessionId] === undefined) return
+      branchStaged = true
+      if (list.current !== sessionId) sessions.open(sessionId)
+      restoreParentSessionSelection(branchFrame.parentSessionId)
+    }
     const syncSession = () => {
+      stageBranch()
       store.resumeOpen()
       const current = sessions.list.getSnapshot().current
       store.activateSession(current === undefined ? undefined : String(current))
@@ -60,6 +84,8 @@ export function apply(ctx: ClientContext): void {
       restoreConfiguration()
       store.stop()
       style.remove()
+      shellObserver?.disconnect()
+      if (branchFrame !== undefined) document.documentElement.removeAttribute('data-dsh-chatroom-branch-frame')
     }
   }, 'chatroom: browser state and styles')
 
@@ -80,6 +106,8 @@ export function apply(ctx: ClientContext): void {
       resetIdentity: store.resetIdentity,
       retry: store.retry,
       closeMembers: store.closeMembers,
+      renameRoom: store.renameRoom,
+      setMemberRole: store.setMemberRole,
       closeThread: store.closeThread,
       setThreadReply: store.setThreadReply,
       clearThreadReply: store.clearThreadReply,
@@ -116,6 +144,7 @@ export function apply(ctx: ClientContext): void {
       removeFile: store.removeFile,
       clearReply: store.clearReply,
       sendFiles: store.sendFiles,
+      resolveTarget: store.agentTargetForSession.bind(store),
     }),
   }, ChatroomFileAction))
 
@@ -129,6 +158,7 @@ export function apply(ctx: ClientContext): void {
       removeFile: store.removeFile,
       clearReply: store.clearReply,
       sendFiles: store.sendFiles,
+      resolveTarget: store.agentTargetForSession.bind(store),
     }),
   }, ChatroomComposerDock))
 
@@ -138,6 +168,7 @@ export function apply(ctx: ClientContext): void {
     order: 5,
     inject: () => ({
       hooks: { chatroom: store },
+      resolveTarget: store.agentTargetForSession.bind(store),
       setReply: store.setReply,
       openThread: store.openThread,
       toggleReaction: store.toggleReaction,
@@ -245,6 +276,7 @@ function chatroomMessageInjection<T extends 'user' | 'steering'>(
 ) {
   return {
     hooks: { chatroom: store },
+    resolveTarget: store.agentTargetForSession.bind(store),
     nativeMessageView,
     setReply: store.setReply,
     openThread: store.openThread,

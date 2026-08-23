@@ -4,7 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
-import { AttachmentError, type ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { AttachmentError, type ImageAttachmentRef, type ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -23,15 +23,27 @@ import {
   type ThreadMessageRecord,
   type ThreadRecord,
 } from './domain.js'
-import { identifyFileText, identifyForwardText, identifyPrompt, mentionsAi } from './message.js'
+import {
+  identifyFileText,
+  identifyForwardText,
+  identifyPrompt,
+  mentionsAi,
+  participantMarker,
+  projectFileText,
+  projectForwardText,
+  projectReplyText,
+} from './message.js'
 import { CHATROOM_REACTION_EMOJIS, type ChatroomReactionEmoji } from './reactions.js'
 import type {
   ChatroomFileReference,
   ChatroomForwardBundle,
+  ChatroomForwardContentPart,
   ChatroomForwardItem,
   ChatroomIdentity,
+  ChatroomImageReference,
   ChatroomInfo,
   ChatroomMember,
+  ChatroomMemberRole,
   ChatroomNotification,
   ChatroomNotificationEvent,
   ChatroomPromptContentPart,
@@ -63,7 +75,7 @@ interface NotificationClient {
 }
 
 interface RoomState {
-  readonly record: RoomRecord
+  record: RoomRecord
   readonly clients: Set<SseClient>
   binding: AgentBinding | undefined
   activation: Promise<AgentBinding> | undefined
@@ -118,6 +130,11 @@ export class ChatroomRuntime {
       return left.createdAt - right.createdAt || left.id.localeCompare(right.id)
     })
     return records.map(publicRoom)
+  }
+
+  /** Current member roster for one room-management response. */
+  membersForRoom(roomId: string): readonly ChatroomMember[] {
+    return this.roomMembers(this.requireState(roomId))
   }
 
   /** Maximum accepted JSON body for one text, image, and file room submission. */
@@ -270,6 +287,8 @@ export class ChatroomRuntime {
       sessionId: `chatroom-v1-${id}`,
       createdAt: Date.now(),
       createdBy: identity.participantId,
+      ownerParticipantId: identity.participantId,
+      adminParticipantIds: [],
     }
     await this.requireRoomRecords().put(id, record)
     const state = newRoomState(record)
@@ -293,6 +312,51 @@ export class ChatroomRuntime {
     if (identity !== undefined) this.ensureRoomVisible(binding, this.requireState(roomId).record.title)
     if (identity !== undefined) await this.touchMember(roomId, identity)
     return this.requireRoom(roomId)
+  }
+
+  /** Rename one room as its owner or an administrator. */
+  async renameRoom(roomId: string, title: string, identity: ChatroomIdentity): Promise<ChatroomInfo> {
+    this.assertReady()
+    const state = this.requireState(roomId)
+    const normalizedTitle = normalizeRoomTitle(title, this.config.maxRoomTitleChars)
+    const record = await this.requireRoomRecords().update(roomId, current => {
+      this.assertRoomManager(current, identity.participantId)
+      return { ...current, title: normalizedTitle }
+    })
+    state.record = record
+    const binding = await this.ensureRoom(roomId)
+    this.ensureRoomVisible(binding, record.title)
+    this.broadcast(state, { type: 'room-updated', room: publicRoom(record), members: this.roomMembers(state) })
+    return publicRoom(record)
+  }
+
+  /** Promote or demote one room member; only the owner controls administrators. */
+  async setMemberRole(
+    roomId: string,
+    participantId: string,
+    role: 'admin' | 'member',
+    identity: ChatroomIdentity,
+  ): Promise<readonly ChatroomMember[]> {
+    this.assertReady()
+    const state = this.requireState(roomId)
+    if (![...this.requireMembers().entries()].some(([, member]) =>
+      member.roomId === roomId && member.participantId === participantId)) {
+      throw new ChatroomInputError('群成员不存在。')
+    }
+    const record = await this.requireRoomRecords().update(roomId, current => {
+      if (current.ownerParticipantId !== identity.participantId) {
+        throw new ChatroomInputError('只有群主可以设置管理员。')
+      }
+      if (participantId === current.ownerParticipantId) throw new ChatroomInputError('不能修改群主角色。')
+      const admins = new Set(current.adminParticipantIds ?? [])
+      if (role === 'admin') admins.add(participantId)
+      else admins.delete(participantId)
+      return { ...current, adminParticipantIds: [...admins].sort() }
+    })
+    state.record = record
+    const members = this.roomMembers(state)
+    this.broadcast(state, { type: 'room-updated', room: publicRoom(record), members })
+    return members
   }
 
   /** Append human chat immediately; wake the Agent only for an explicit AI mention. */
@@ -385,7 +449,11 @@ export class ChatroomRuntime {
     if (sourceRoomId === targetRoomId) throw new ChatroomInputError('请选择其他群聊进行转发。')
     const source = this.requireState(sourceRoomId)
     const target = this.requireState(targetRoomId)
-    const normalized = normalizeForwardItems(messages)
+    const requested = normalizeForwardItems(messages)
+    const normalized = await Promise.all(requested.map(async item =>
+      item.sourceSessionId === undefined || item.sourceSeq === undefined
+        ? item
+        : await this.resolveForwardItem(sourceRoomId, item)))
     const task = target.admission.then(async () => {
       const binding = await this.ensureRoom(targetRoomId)
       const bundle: ChatroomForwardBundle = {
@@ -416,12 +484,86 @@ export class ChatroomRuntime {
     return await task
   }
 
+  private async resolveForwardItem(sourceRoomId: string, item: ChatroomForwardItem): Promise<ChatroomForwardItem> {
+    if (item.sourceSessionId === undefined || item.sourceSeq === undefined) {
+      throw new ChatroomInputError('转发来源消息不完整。')
+    }
+    const source = await this.forwardSourceBinding(sourceRoomId, item.sourceSessionId)
+    const event = source.agent.session.events.find(candidate => candidate.seq === item.sourceSeq)
+    if (event === undefined) throw new ChatroomInputError('转发来源消息不存在或已变化。')
+    const message = event.type === 'user/message'
+      ? event.data
+      : event.type === 'assistant/message'
+        ? event.data.message
+        : undefined
+    if (message === undefined || (message.role === 'assistant') !== (item.role === 'ai')) {
+      throw new ChatroomInputError('转发来源消息不存在或已变化。')
+    }
+    const projected = projectForwardContent(message.content, item.role)
+    const sourceRoom = this.requireState(sourceRoomId).record
+    const displayName = item.role === 'ai'
+      ? sourceRoom.aiDisplayName
+      : projected.displayName ?? item.displayName
+    const reactions = this.reactionsForRoom(sourceRoomId)
+      .filter(reaction => reaction.messageId === item.messageId && reaction.participantIds.length > 0)
+      .map(reaction => ({ emoji: reaction.emoji, count: reaction.participantIds.length }))
+    return {
+      messageId: item.messageId,
+      sourceSessionId: item.sourceSessionId,
+      sourceSeq: item.sourceSeq,
+      role: item.role,
+      displayName,
+      text: projected.text,
+      createdAt: event.time,
+      content: projected.content,
+      ...(projected.reply === undefined ? {} : { reply: projected.reply }),
+      ...(reactions.length === 0 ? {} : { reactions }),
+      ...(projected.forward === undefined ? {} : { forward: projected.forward }),
+    }
+  }
+
+  private async forwardSourceBinding(roomId: string, sessionId: string): Promise<AgentBinding> {
+    const room = this.requireState(roomId)
+    if (room.record.sessionId === sessionId) return await this.ensureRoom(roomId)
+    const thread = [...this.threadStates.values()].find(candidate =>
+      candidate.record.roomId === roomId && candidate.record.sessionId === sessionId)
+    if (thread === undefined) throw new ChatroomInputError('转发来源会话不属于当前群聊。')
+    return await this.ensureThread(thread.record.id)
+  }
+
   /** Resolve one authenticated room-file download. */
   file(fileId: string): { readonly ref: ChatroomFileReference; readonly data: Uint8Array } {
     this.assertReady()
     const record = this.requireFiles().get(fileId)
     if (record === undefined) throw new ChatroomInputError('文件不存在。')
     return { ref: publicFile(record), data: decodeBase64(record.data, '文件') }
+  }
+
+  /** Resolve one forwarded image only when the durable source event still owns its attachment. */
+  async image(
+    sourceRoomId: string,
+    sourceSessionId: string,
+    sourceSeq: number,
+    ref: ChatroomImageReference,
+  ): Promise<{ readonly ref: ChatroomImageReference; readonly data: Uint8Array }> {
+    this.assertReady()
+    const binding = await this.forwardSourceBinding(sourceRoomId, sourceSessionId)
+    const event = binding.agent.session.events.find(candidate => candidate.seq === sourceSeq)
+    const message = event?.type === 'user/message'
+      ? event.data
+      : event?.type === 'assistant/message'
+        ? event.data.message
+        : undefined
+    const attachment = message?.content.find((block): block is Extract<ContentBlock, { type: 'image' }> =>
+      block.type === 'image'
+      && String(block.attachment.attachmentId) === ref.attachmentId
+      && block.attachment.mediaType === ref.mediaType)?.attachment
+    if (attachment === undefined) throw new ChatroomInputError('图片来源消息不存在或已变化。')
+    const stored = await this.ctx.attachments.readImage(attachment as ImageAttachmentRef)
+    return {
+      ref: { ...stored.ref, attachmentId: String(stored.ref.attachmentId) },
+      data: stored.data,
+    }
   }
 
   /** Attach one authenticated presence client to one room. */
@@ -489,12 +631,46 @@ export class ChatroomRuntime {
     identity: ChatroomIdentity,
     text: string,
     reply?: ChatroomReplyReference,
+  ): Promise<ChatroomPromptResponse>
+  async submitThread(
+    threadId: string,
+    identity: ChatroomIdentity,
+    content: readonly ChatroomPromptContentPart[],
+    mode: 'queue' | 'steer',
+    reply?: ChatroomReplyReference,
+  ): Promise<ChatroomPromptResponse>
+  async submitThread(
+    threadId: string,
+    identity: ChatroomIdentity,
+    contentOrText: readonly ChatroomPromptContentPart[] | string,
+    modeOrReply: 'queue' | 'steer' | ChatroomReplyReference = 'queue',
+    explicitReply?: ChatroomReplyReference,
   ): Promise<ChatroomPromptResponse> {
     this.assertReady()
     const state = this.requireThreadState(threadId)
-    const normalized = normalizeThreadText(text, this.config.maxMessageTextChars)
+    const content: readonly ChatroomPromptContentPart[] = typeof contentOrText === 'string'
+      ? [{ type: 'text', text: normalizeThreadText(contentOrText, this.config.maxMessageTextChars) }]
+      : contentOrText
+    const mode = typeof modeOrReply === 'string' ? modeOrReply : 'queue'
+    const reply = typeof modeOrReply === 'string' ? explicitReply : modeOrReply
     const task = state.admission.then(async () => {
       const binding = await this.ensureThread(threadId)
+      const room = this.requireState(state.record.roomId).record
+      const aiTriggered = mentionsAi(content, room.aiDisplayName)
+      const { provider, model: modelId } = binding.agent.options
+      if (aiTriggered && provider !== undefined && modelId !== undefined && content.some(part => part.type === 'image')) {
+        const model = await this.ctx.llm.resolveModelInfo(provider, modelId)
+        if (model.inputModalities !== undefined && !model.inputModalities.includes('image')) {
+          throw new ChatroomInputError(`模型 ${JSON.stringify(modelId)} 不支持图片输入。`)
+        }
+      }
+      const durable = await this.durableContent(
+        state.record.roomId,
+        identity,
+        identifyPrompt(content, identity, reply),
+      )
+      const text = promptPreview(content)
+      const files = durable.flatMap(block => block.type === 'text' ? projectFileText(block.text).files : [])
       const sequence = this.nextThreadSequence(threadId)
       const record: ThreadMessageRecord = {
         id: randomUUID(),
@@ -504,19 +680,19 @@ export class ChatroomRuntime {
         participantId: identity.participantId,
         displayName: identity.displayName,
         avatarId: identity.avatarId,
-        text: normalized,
+        text,
+        ...(files.length === 0 ? {} : { files }),
+        ...(durable.some(block => block.type === 'image') ? { hasImages: true } : {}),
         ...(reply === undefined ? {} : { reply }),
         createdAt: Date.now(),
       }
       await this.requireThreadMessages().put(record.id, record)
-      const identified = identifyPrompt([{ type: 'text', text: normalized }], identity, reply)
       const message = createUserMessage({
-        content: identified.map(part => ({ type: 'text' as const, text: part.type === 'text' ? part.text : '' })),
+        content: durable,
         source: { kind: 'user' },
       })
-      const room = this.requireState(state.record.roomId).record
-      const aiTriggered = mentionsAi([{ type: 'text', text: normalized }], room.aiDisplayName)
-      if (aiTriggered) binding.agent.followup(message)
+      if (aiTriggered && mode === 'steer') binding.agent.steer(message)
+      else if (aiTriggered) binding.agent.followup(message)
       else binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
       await this.touchMember(state.record.roomId, identity)
       const publicMessage = publicThreadMessage(record)
@@ -533,7 +709,7 @@ export class ChatroomRuntime {
         participantId: identity.participantId,
         displayName: identity.displayName,
         role: 'human',
-        text: normalized,
+        text,
         createdAt: record.createdAt,
       })
       return { accepted: true as const, aiTriggered }
@@ -699,7 +875,19 @@ export class ChatroomRuntime {
       lastSeenAt: now,
     })
     const state = this.states.get(roomId)
-    if (state !== undefined) this.broadcastPresence(state)
+    if (state !== undefined) {
+      if (state.record.ownerParticipantId === undefined) {
+        const record = await this.requireRoomRecords().update(roomId, current => current.ownerParticipantId === undefined
+          ? {
+            ...current,
+            ownerParticipantId: identity.participantId,
+            adminParticipantIds: current.adminParticipantIds ?? [],
+          }
+          : current)
+        state.record = record
+      }
+      this.broadcastPresence(state)
+    }
   }
 
   private roomMembers(state: RoomState): readonly ChatroomMember[] {
@@ -713,6 +901,7 @@ export class ChatroomRuntime {
         participantId: record.participantId,
         displayName: record.displayName,
         avatarId: record.avatarId,
+        role: memberRole(state.record, record.participantId),
         joinedAt: record.joinedAt,
         lastSeenAt: record.lastSeenAt,
         online: online.has(record.participantId),
@@ -760,11 +949,13 @@ export class ChatroomRuntime {
     const existing = records.get(this.config.roomId)
     const configured: RoomRecord = {
       id: this.config.roomId,
-      title: this.config.roomTitle,
+      title: existing?.title ?? this.config.roomTitle,
       aiDisplayName: this.config.aiDisplayName,
       sessionId: this.config.sessionId,
       createdAt: existing?.createdAt ?? Date.now(),
       createdBy: existing?.createdBy ?? 'system',
+      ...(existing?.ownerParticipantId === undefined ? {} : { ownerParticipantId: existing.ownerParticipantId }),
+      adminParticipantIds: existing?.adminParticipantIds ?? [],
     }
     if (existing === undefined
       || existing.title !== configured.title
@@ -1042,6 +1233,12 @@ export class ChatroomRuntime {
     if (state === undefined) throw new ChatroomInputError('分支会话不存在。')
     return state
   }
+
+  private assertRoomManager(record: RoomRecord, participantId: string): void {
+    if (record.ownerParticipantId !== participantId && !(record.adminParticipantIds ?? []).includes(participantId)) {
+      throw new ChatroomInputError('当前身份没有群管理权限。')
+    }
+  }
 }
 
 function newRoomState(record: RoomRecord): RoomState {
@@ -1092,6 +1289,11 @@ function publicRoom(record: RoomRecord): ChatroomInfo {
   }
 }
 
+function memberRole(record: RoomRecord, participantId: string): ChatroomMemberRole {
+  if (record.ownerParticipantId === participantId) return 'owner'
+  return (record.adminParticipantIds ?? []).includes(participantId) ? 'admin' : 'member'
+}
+
 function publicThread(record: ThreadRecord): ChatroomThread {
   return {
     id: record.id,
@@ -1111,6 +1313,8 @@ function publicThreadMessage(record: ThreadMessageRecord): ChatroomThreadMessage
     participantId: record.participantId,
     displayName: record.displayName,
     text: record.text,
+    ...(record.files === undefined ? {} : { files: record.files }),
+    ...(record.hasImages === undefined ? {} : { hasImages: record.hasImages }),
     ...(record.reply === undefined ? {} : { reply: record.reply }),
     createdAt: record.createdAt,
     ...(record.avatarId === undefined ? {} : { avatarId: record.avatarId }),
@@ -1168,16 +1372,97 @@ function normalizeForwardItems(items: readonly ChatroomForwardItem[]): readonly 
   const seen = new Set<string>()
   return items.map((item) => {
     const messageId = normalizeMessageId(item.messageId)
-    if (seen.has(messageId)) throw new ChatroomInputError('转发消息不能重复。')
-    seen.add(messageId)
+    const sourceSessionId = item.sourceSessionId?.trim()
+    if ((sourceSessionId === undefined) !== (item.sourceSeq === undefined)) {
+      throw new ChatroomInputError('转发来源消息不完整。')
+    }
+    if (sourceSessionId !== undefined && (sourceSessionId === '' || [...sourceSessionId].length > 240 || /\p{Cc}/u.test(sourceSessionId))) {
+      throw new ChatroomInputError('转发来源会话无效。')
+    }
+    if (item.sourceSeq !== undefined && (!Number.isSafeInteger(item.sourceSeq) || item.sourceSeq < 0)) {
+      throw new ChatroomInputError('转发来源序号无效。')
+    }
+    const sourceKey = sourceSessionId === undefined ? messageId : `${sourceSessionId}\u0000${item.sourceSeq}`
+    if (seen.has(sourceKey)) throw new ChatroomInputError('转发消息不能重复。')
+    seen.add(sourceKey)
     const displayName = item.displayName.trim().replace(/\s+/gu, ' ')
     const text = item.text.trim().replace(/\s+/gu, ' ')
     if (item.role !== 'human' && item.role !== 'ai') throw new ChatroomInputError('转发消息角色无效。')
     if (displayName === '' || [...displayName].length > 80) throw new ChatroomInputError('转发消息昵称无效。')
     if (text === '' || [...text].length > 2_000) throw new ChatroomInputError('转发消息内容无效。')
     if (!Number.isSafeInteger(item.createdAt) || item.createdAt < 0) throw new ChatroomInputError('转发消息时间无效。')
-    return { messageId, role: item.role, displayName, text, createdAt: item.createdAt }
+    return {
+      messageId,
+      ...(sourceSessionId === undefined ? {} : { sourceSessionId, sourceSeq: item.sourceSeq! }),
+      role: item.role,
+      displayName,
+      text,
+      createdAt: item.createdAt,
+    }
   })
+}
+
+function projectForwardContent(
+  blocks: readonly ContentBlock[],
+  role: ChatroomForwardItem['role'],
+): {
+  readonly displayName?: string
+  readonly text: string
+  readonly content: readonly ChatroomForwardContentPart[]
+  readonly reply?: ChatroomReplyReference
+  readonly forward?: ChatroomForwardBundle
+} {
+  const content: ChatroomForwardContentPart[] = []
+  const visibleTexts: string[] = []
+  let displayName: string | undefined
+  let reply: ChatroomReplyReference | undefined
+  let forward: ChatroomForwardBundle | undefined
+  let firstText = true
+  for (const block of blocks) {
+    if (block.type === 'image') {
+      const image: ChatroomImageReference = {
+        ...block.attachment,
+        attachmentId: String(block.attachment.attachmentId),
+      }
+      content.push({ type: 'image', image })
+      continue
+    }
+    if (block.type !== 'text') continue
+    let text = block.text
+    if (firstText && role === 'human') {
+      firstText = false
+      const marker = participantMarker(text)
+      if (marker !== undefined) text = text.slice(marker.length)
+      const prefix = /^([^：]{1,80})：/u.exec(text)
+      if (prefix !== null) {
+        displayName = prefix[1]
+        text = text.slice(prefix[0].length)
+      }
+      const replyProjection = projectReplyText(text)
+      text = replyProjection.text
+      reply = replyProjection.reply
+      const forwardProjection = projectForwardText(text)
+      text = forwardProjection.text
+      forward = forwardProjection.forward
+    }
+    const files = projectFileText(text)
+    text = files.text
+    for (const file of files.files) content.push({ type: 'file', file })
+    if (text.trim() !== '') {
+      content.push({ type: 'text', text, markdown: role === 'ai' })
+      visibleTexts.push(text.trim())
+    }
+  }
+  const text = visibleTexts.join('\n').trim()
+    || (forward === undefined ? undefined : `合并转发 ${forward.items.length} 条消息`)
+    || (content.some(part => part.type === 'file') ? '文件消息' : '图片消息')
+  return {
+    text,
+    content,
+    ...(displayName === undefined ? {} : { displayName }),
+    ...(reply === undefined ? {} : { reply }),
+    ...(forward === undefined ? {} : { forward }),
+  }
 }
 
 function reactionKey(roomId: string, messageId: string, emoji: ChatroomReactionEmoji, participantId: string): string {

@@ -140,7 +140,9 @@ var roomSchema = z2.object({
   aiDisplayName: z2.string().min(1),
   sessionId: z2.string().min(1),
   createdAt: nonNegativeSafeInteger,
-  createdBy: z2.string().min(1)
+  createdBy: z2.string().min(1),
+  ownerParticipantId: z2.string().min(1).optional(),
+  adminParticipantIds: z2.array(z2.string().min(1)).optional()
 });
 var memberSchema = z2.object({
   roomId: z2.string().min(1),
@@ -181,6 +183,13 @@ var threadMessageSchema = z2.object({
   displayName: z2.string().min(1),
   avatarId: z2.string().refine(isChatroomAvatarId).optional(),
   text: z2.string().min(1),
+  files: z2.array(z2.object({
+    id: z2.string().min(1),
+    name: z2.string().min(1),
+    mediaType: z2.string().min(1),
+    bytes: nonNegativeSafeInteger
+  })).optional(),
+  hasImages: z2.boolean().optional(),
   reply: replySchema.optional(),
   createdAt: nonNegativeSafeInteger
 });
@@ -224,15 +233,71 @@ function identifyPrompt(content, identity, reply) {
   });
   return identified ? output : [{ type: "text", text: identifyChatroomText(reply === void 0 ? "" : identifyReplyText("", reply), identity) }, ...output];
 }
+function participantMarker(text) {
+  if (!text.startsWith(PARTICIPANT_MARKER_START)) return void 0;
+  const end = text.indexOf(PARTICIPANT_MARKER_END, PARTICIPANT_MARKER_START.length);
+  if (end < 0) return void 0;
+  const payload = text.slice(PARTICIPANT_MARKER_START.length, end);
+  const separator = payload.indexOf("|");
+  const participantId = separator < 0 ? payload : payload.slice(0, separator);
+  if (participantId === "") return void 0;
+  const candidate = separator < 0 ? void 0 : payload.slice(separator + 1);
+  return {
+    participantId,
+    avatarId: isChatroomAvatarId(candidate) ? candidate : fallbackAvatarId(participantId),
+    length: end + PARTICIPANT_MARKER_END.length
+  };
+}
 function identifyReplyText(text, reply) {
   return `${REPLY_MARKER_START}${encodePayload(reply)}${PARTICIPANT_MARKER_END}${replyPrefix(reply)}${text}`;
+}
+function projectReplyText(text) {
+  if (!text.startsWith(REPLY_MARKER_START)) return { text };
+  const end = text.indexOf(PARTICIPANT_MARKER_END, REPLY_MARKER_START.length);
+  if (end < 0) return { text };
+  const reply = decodePayload(text.slice(REPLY_MARKER_START.length, end));
+  if (!validReply(reply)) return { text };
+  let visible = text.slice(end + PARTICIPANT_MARKER_END.length);
+  const prefix = replyPrefix(reply);
+  if (visible.startsWith(prefix)) visible = visible.slice(prefix.length);
+  return { text: visible, reply };
 }
 function identifyFileText(file) {
   return `
 ${FILE_MARKER_START}${encodePayload(file)}${PARTICIPANT_MARKER_END}${filePrefix(file)}`;
 }
+function projectFileText(text) {
+  const files = [];
+  let visible = text;
+  while (true) {
+    const start = visible.indexOf(FILE_MARKER_START);
+    if (start < 0) break;
+    const end = visible.indexOf(PARTICIPANT_MARKER_END, start + FILE_MARKER_START.length);
+    if (end < 0) break;
+    const file = decodePayload(visible.slice(start + FILE_MARKER_START.length, end));
+    if (!validFile(file)) break;
+    files.push(file);
+    const before = visible.slice(0, start).replace(/\n$/u, "");
+    let after = visible.slice(end + PARTICIPANT_MARKER_END.length);
+    const prefix = filePrefix(file);
+    if (after.startsWith(prefix)) after = after.slice(prefix.length);
+    visible = `${before}${after}`;
+  }
+  return { text: visible, files };
+}
 function identifyForwardText(bundle) {
   return `${FORWARD_MARKER_START}${encodePayload(bundle)}${PARTICIPANT_MARKER_END}${forwardPrefix(bundle)}`;
+}
+function projectForwardText(text) {
+  if (!text.startsWith(FORWARD_MARKER_START)) return { text };
+  const end = text.indexOf(PARTICIPANT_MARKER_END, FORWARD_MARKER_START.length);
+  if (end < 0) return { text };
+  const forward = decodePayload(text.slice(FORWARD_MARKER_START.length, end));
+  if (!validForward(forward)) return { text };
+  let visible = text.slice(end + PARTICIPANT_MARKER_END.length);
+  const prefix = forwardPrefix(forward);
+  if (visible.startsWith(prefix)) visible = visible.slice(prefix.length);
+  return { text: visible, forward };
 }
 function mentionsAi(content, aiDisplayName) {
   const text = content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
@@ -256,6 +321,42 @@ ${lines.join("\n")}`;
 }
 function encodePayload(value) {
   return encodeURIComponent(JSON.stringify(value));
+}
+function decodePayload(value) {
+  try {
+    return JSON.parse(decodeURIComponent(value));
+  } catch {
+    return void 0;
+  }
+}
+function validReply(value) {
+  if (value === null || typeof value !== "object") return false;
+  const item = value;
+  return typeof item.messageId === "string" && typeof item.displayName === "string" && typeof item.text === "string";
+}
+function validFile(value) {
+  if (value === null || typeof value !== "object") return false;
+  const item = value;
+  return typeof item.id === "string" && typeof item.name === "string" && typeof item.mediaType === "string" && typeof item.bytes === "number";
+}
+function validForward(value) {
+  if (value === null || typeof value !== "object") return false;
+  const bundle = value;
+  if (typeof bundle.sourceRoomId !== "string" || typeof bundle.sourceRoomTitle !== "string" || !Array.isArray(bundle.items) || bundle.items.length === 0) return false;
+  return bundle.items.every((raw) => {
+    if (raw === null || typeof raw !== "object") return false;
+    const item = raw;
+    return typeof item.messageId === "string" && (item.role === "human" || item.role === "ai") && typeof item.displayName === "string" && typeof item.text === "string" && typeof item.createdAt === "number" && (item.sourceSessionId === void 0 || typeof item.sourceSessionId === "string") && (item.sourceSeq === void 0 || typeof item.sourceSeq === "number") && (item.content === void 0 || Array.isArray(item.content) && item.content.every(validForwardContentPart)) && (item.reply === void 0 || validReply(item.reply)) && (item.reactions === void 0 || Array.isArray(item.reactions) && item.reactions.every((reaction) => reaction !== null && typeof reaction === "object" && typeof reaction.emoji === "string" && typeof reaction.count === "number"));
+  });
+}
+function validForwardContentPart(value) {
+  if (value === null || typeof value !== "object") return false;
+  const part = value;
+  if (part.type === "text") return typeof part.text === "string" && typeof part.markdown === "boolean";
+  if (part.type === "file") return validFile(part.file);
+  if (part.type !== "image" || part.image === null || typeof part.image !== "object") return false;
+  const image = part.image;
+  return typeof image.attachmentId === "string" && typeof image.mediaType === "string" && typeof image.bytes === "number" && typeof image.width === "number" && typeof image.height === "number";
 }
 
 // src/room.ts
@@ -296,6 +397,10 @@ var ChatroomRuntime = class {
       return left.createdAt - right.createdAt || left.id.localeCompare(right.id);
     });
     return records.map(publicRoom);
+  }
+  /** Current member roster for one room-management response. */
+  membersForRoom(roomId) {
+    return this.roomMembers(this.requireState(roomId));
   }
   /** Maximum accepted JSON body for one text, image, and file room submission. */
   get maxPromptRequestBytes() {
@@ -435,7 +540,9 @@ var ChatroomRuntime = class {
       aiDisplayName: this.config.aiDisplayName,
       sessionId: `chatroom-v1-${id}`,
       createdAt: Date.now(),
-      createdBy: identity.participantId
+      createdBy: identity.participantId,
+      ownerParticipantId: identity.participantId,
+      adminParticipantIds: []
     };
     await this.requireRoomRecords().put(id, record);
     const state = newRoomState(record);
@@ -458,6 +565,43 @@ var ChatroomRuntime = class {
     if (identity !== void 0) this.ensureRoomVisible(binding, this.requireState(roomId).record.title);
     if (identity !== void 0) await this.touchMember(roomId, identity);
     return this.requireRoom(roomId);
+  }
+  /** Rename one room as its owner or an administrator. */
+  async renameRoom(roomId, title, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    const normalizedTitle = normalizeRoomTitle(title, this.config.maxRoomTitleChars);
+    const record = await this.requireRoomRecords().update(roomId, (current) => {
+      this.assertRoomManager(current, identity.participantId);
+      return { ...current, title: normalizedTitle };
+    });
+    state.record = record;
+    const binding = await this.ensureRoom(roomId);
+    this.ensureRoomVisible(binding, record.title);
+    this.broadcast(state, { type: "room-updated", room: publicRoom(record), members: this.roomMembers(state) });
+    return publicRoom(record);
+  }
+  /** Promote or demote one room member; only the owner controls administrators. */
+  async setMemberRole(roomId, participantId, role, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    if (![...this.requireMembers().entries()].some(([, member]) => member.roomId === roomId && member.participantId === participantId)) {
+      throw new ChatroomInputError("\u7FA4\u6210\u5458\u4E0D\u5B58\u5728\u3002");
+    }
+    const record = await this.requireRoomRecords().update(roomId, (current) => {
+      if (current.ownerParticipantId !== identity.participantId) {
+        throw new ChatroomInputError("\u53EA\u6709\u7FA4\u4E3B\u53EF\u4EE5\u8BBE\u7F6E\u7BA1\u7406\u5458\u3002");
+      }
+      if (participantId === current.ownerParticipantId) throw new ChatroomInputError("\u4E0D\u80FD\u4FEE\u6539\u7FA4\u4E3B\u89D2\u8272\u3002");
+      const admins = new Set(current.adminParticipantIds ?? []);
+      if (role === "admin") admins.add(participantId);
+      else admins.delete(participantId);
+      return { ...current, adminParticipantIds: [...admins].sort() };
+    });
+    state.record = record;
+    const members = this.roomMembers(state);
+    this.broadcast(state, { type: "room-updated", room: publicRoom(record), members });
+    return members;
   }
   /** Append human chat immediately; wake the Agent only for an explicit AI mention. */
   async submit(roomId, identity, content, mode, reply) {
@@ -531,7 +675,8 @@ var ChatroomRuntime = class {
     if (sourceRoomId === targetRoomId) throw new ChatroomInputError("\u8BF7\u9009\u62E9\u5176\u4ED6\u7FA4\u804A\u8FDB\u884C\u8F6C\u53D1\u3002");
     const source = this.requireState(sourceRoomId);
     const target = this.requireState(targetRoomId);
-    const normalized = normalizeForwardItems(messages);
+    const requested = normalizeForwardItems(messages);
+    const normalized = await Promise.all(requested.map(async (item) => item.sourceSessionId === void 0 || item.sourceSeq === void 0 ? item : await this.resolveForwardItem(sourceRoomId, item)));
     const task = target.admission.then(async () => {
       const binding = await this.ensureRoom(targetRoomId);
       const bundle = {
@@ -561,12 +706,62 @@ var ChatroomRuntime = class {
     target.admission = task.then(() => void 0, () => void 0);
     return await task;
   }
+  async resolveForwardItem(sourceRoomId, item) {
+    if (item.sourceSessionId === void 0 || item.sourceSeq === void 0) {
+      throw new ChatroomInputError("\u8F6C\u53D1\u6765\u6E90\u6D88\u606F\u4E0D\u5B8C\u6574\u3002");
+    }
+    const source = await this.forwardSourceBinding(sourceRoomId, item.sourceSessionId);
+    const event = source.agent.session.events.find((candidate) => candidate.seq === item.sourceSeq);
+    if (event === void 0) throw new ChatroomInputError("\u8F6C\u53D1\u6765\u6E90\u6D88\u606F\u4E0D\u5B58\u5728\u6216\u5DF2\u53D8\u5316\u3002");
+    const message = event.type === "user/message" ? event.data : event.type === "assistant/message" ? event.data.message : void 0;
+    if (message === void 0 || message.role === "assistant" !== (item.role === "ai")) {
+      throw new ChatroomInputError("\u8F6C\u53D1\u6765\u6E90\u6D88\u606F\u4E0D\u5B58\u5728\u6216\u5DF2\u53D8\u5316\u3002");
+    }
+    const projected = projectForwardContent(message.content, item.role);
+    const sourceRoom = this.requireState(sourceRoomId).record;
+    const displayName = item.role === "ai" ? sourceRoom.aiDisplayName : projected.displayName ?? item.displayName;
+    const reactions = this.reactionsForRoom(sourceRoomId).filter((reaction) => reaction.messageId === item.messageId && reaction.participantIds.length > 0).map((reaction) => ({ emoji: reaction.emoji, count: reaction.participantIds.length }));
+    return {
+      messageId: item.messageId,
+      sourceSessionId: item.sourceSessionId,
+      sourceSeq: item.sourceSeq,
+      role: item.role,
+      displayName,
+      text: projected.text,
+      createdAt: event.time,
+      content: projected.content,
+      ...projected.reply === void 0 ? {} : { reply: projected.reply },
+      ...reactions.length === 0 ? {} : { reactions },
+      ...projected.forward === void 0 ? {} : { forward: projected.forward }
+    };
+  }
+  async forwardSourceBinding(roomId, sessionId) {
+    const room = this.requireState(roomId);
+    if (room.record.sessionId === sessionId) return await this.ensureRoom(roomId);
+    const thread = [...this.threadStates.values()].find((candidate) => candidate.record.roomId === roomId && candidate.record.sessionId === sessionId);
+    if (thread === void 0) throw new ChatroomInputError("\u8F6C\u53D1\u6765\u6E90\u4F1A\u8BDD\u4E0D\u5C5E\u4E8E\u5F53\u524D\u7FA4\u804A\u3002");
+    return await this.ensureThread(thread.record.id);
+  }
   /** Resolve one authenticated room-file download. */
   file(fileId) {
     this.assertReady();
     const record = this.requireFiles().get(fileId);
     if (record === void 0) throw new ChatroomInputError("\u6587\u4EF6\u4E0D\u5B58\u5728\u3002");
     return { ref: publicFile(record), data: decodeBase64(record.data, "\u6587\u4EF6") };
+  }
+  /** Resolve one forwarded image only when the durable source event still owns its attachment. */
+  async image(sourceRoomId, sourceSessionId, sourceSeq, ref) {
+    this.assertReady();
+    const binding = await this.forwardSourceBinding(sourceRoomId, sourceSessionId);
+    const event = binding.agent.session.events.find((candidate) => candidate.seq === sourceSeq);
+    const message = event?.type === "user/message" ? event.data : event?.type === "assistant/message" ? event.data.message : void 0;
+    const attachment = message?.content.find((block) => block.type === "image" && String(block.attachment.attachmentId) === ref.attachmentId && block.attachment.mediaType === ref.mediaType)?.attachment;
+    if (attachment === void 0) throw new ChatroomInputError("\u56FE\u7247\u6765\u6E90\u6D88\u606F\u4E0D\u5B58\u5728\u6216\u5DF2\u53D8\u5316\u3002");
+    const stored = await this.ctx.attachments.readImage(attachment);
+    return {
+      ref: { ...stored.ref, attachmentId: String(stored.ref.attachmentId) },
+      data: stored.data
+    };
   }
   /** Attach one authenticated presence client to one room. */
   subscribe(roomId, identity, response) {
@@ -621,13 +816,30 @@ var ChatroomRuntime = class {
     room.admission = task.then(() => void 0, () => void 0);
     return await task;
   }
-  /** Append one branch message and wake only that branch Agent on an AI mention. */
-  async submitThread(threadId, identity, text, reply) {
+  async submitThread(threadId, identity, contentOrText, modeOrReply = "queue", explicitReply) {
     this.assertReady();
     const state = this.requireThreadState(threadId);
-    const normalized = normalizeThreadText(text, this.config.maxMessageTextChars);
+    const content = typeof contentOrText === "string" ? [{ type: "text", text: normalizeThreadText(contentOrText, this.config.maxMessageTextChars) }] : contentOrText;
+    const mode = typeof modeOrReply === "string" ? modeOrReply : "queue";
+    const reply = typeof modeOrReply === "string" ? explicitReply : modeOrReply;
     const task = state.admission.then(async () => {
       const binding = await this.ensureThread(threadId);
+      const room = this.requireState(state.record.roomId).record;
+      const aiTriggered = mentionsAi(content, room.aiDisplayName);
+      const { provider, model: modelId } = binding.agent.options;
+      if (aiTriggered && provider !== void 0 && modelId !== void 0 && content.some((part) => part.type === "image")) {
+        const model = await this.ctx.llm.resolveModelInfo(provider, modelId);
+        if (model.inputModalities !== void 0 && !model.inputModalities.includes("image")) {
+          throw new ChatroomInputError(`\u6A21\u578B ${JSON.stringify(modelId)} \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165\u3002`);
+        }
+      }
+      const durable = await this.durableContent(
+        state.record.roomId,
+        identity,
+        identifyPrompt(content, identity, reply)
+      );
+      const text = promptPreview(content);
+      const files = durable.flatMap((block) => block.type === "text" ? projectFileText(block.text).files : []);
       const sequence = this.nextThreadSequence(threadId);
       const record = {
         id: randomUUID(),
@@ -637,19 +849,19 @@ var ChatroomRuntime = class {
         participantId: identity.participantId,
         displayName: identity.displayName,
         avatarId: identity.avatarId,
-        text: normalized,
+        text,
+        ...files.length === 0 ? {} : { files },
+        ...durable.some((block) => block.type === "image") ? { hasImages: true } : {},
         ...reply === void 0 ? {} : { reply },
         createdAt: Date.now()
       };
       await this.requireThreadMessages().put(record.id, record);
-      const identified = identifyPrompt([{ type: "text", text: normalized }], identity, reply);
       const message = createUserMessage({
-        content: identified.map((part) => ({ type: "text", text: part.type === "text" ? part.text : "" })),
+        content: durable,
         source: { kind: "user" }
       });
-      const room = this.requireState(state.record.roomId).record;
-      const aiTriggered = mentionsAi([{ type: "text", text: normalized }], room.aiDisplayName);
-      if (aiTriggered) binding.agent.followup(message);
+      if (aiTriggered && mode === "steer") binding.agent.steer(message);
+      else if (aiTriggered) binding.agent.followup(message);
       else binding.agent.session.append("user/message", message, { surfaceOp: "append" });
       await this.touchMember(state.record.roomId, identity);
       const publicMessage = publicThreadMessage(record);
@@ -666,7 +878,7 @@ var ChatroomRuntime = class {
         participantId: identity.participantId,
         displayName: identity.displayName,
         role: "human",
-        text: normalized,
+        text,
         createdAt: record.createdAt
       });
       return { accepted: true, aiTriggered };
@@ -810,7 +1022,17 @@ var ChatroomRuntime = class {
       lastSeenAt: now
     });
     const state = this.states.get(roomId);
-    if (state !== void 0) this.broadcastPresence(state);
+    if (state !== void 0) {
+      if (state.record.ownerParticipantId === void 0) {
+        const record = await this.requireRoomRecords().update(roomId, (current) => current.ownerParticipantId === void 0 ? {
+          ...current,
+          ownerParticipantId: identity.participantId,
+          adminParticipantIds: current.adminParticipantIds ?? []
+        } : current);
+        state.record = record;
+      }
+      this.broadcastPresence(state);
+    }
   }
   roomMembers(state) {
     const online = new Set([...state.clients].map((client) => client.participantId));
@@ -818,6 +1040,7 @@ var ChatroomRuntime = class {
       participantId: record.participantId,
       displayName: record.displayName,
       avatarId: record.avatarId,
+      role: memberRole(state.record, record.participantId),
       joinedAt: record.joinedAt,
       lastSeenAt: record.lastSeenAt,
       online: online.has(record.participantId)
@@ -857,11 +1080,13 @@ var ChatroomRuntime = class {
     const existing = records.get(this.config.roomId);
     const configured = {
       id: this.config.roomId,
-      title: this.config.roomTitle,
+      title: existing?.title ?? this.config.roomTitle,
       aiDisplayName: this.config.aiDisplayName,
       sessionId: this.config.sessionId,
       createdAt: existing?.createdAt ?? Date.now(),
-      createdBy: existing?.createdBy ?? "system"
+      createdBy: existing?.createdBy ?? "system",
+      ...existing?.ownerParticipantId === void 0 ? {} : { ownerParticipantId: existing.ownerParticipantId },
+      adminParticipantIds: existing?.adminParticipantIds ?? []
     };
     if (existing === void 0 || existing.title !== configured.title || existing.aiDisplayName !== configured.aiDisplayName || existing.sessionId !== configured.sessionId) {
       await records.put(configured.id, configured);
@@ -1103,6 +1328,11 @@ var ChatroomRuntime = class {
     if (state === void 0) throw new ChatroomInputError("\u5206\u652F\u4F1A\u8BDD\u4E0D\u5B58\u5728\u3002");
     return state;
   }
+  assertRoomManager(record, participantId) {
+    if (record.ownerParticipantId !== participantId && !(record.adminParticipantIds ?? []).includes(participantId)) {
+      throw new ChatroomInputError("\u5F53\u524D\u8EAB\u4EFD\u6CA1\u6709\u7FA4\u7BA1\u7406\u6743\u9650\u3002");
+    }
+  }
 };
 function newRoomState(record) {
   return {
@@ -1145,6 +1375,10 @@ function publicRoom(record) {
     sessionId: record.sessionId
   };
 }
+function memberRole(record, participantId) {
+  if (record.ownerParticipantId === participantId) return "owner";
+  return (record.adminParticipantIds ?? []).includes(participantId) ? "admin" : "member";
+}
 function publicThread(record) {
   return {
     id: record.id,
@@ -1163,6 +1397,8 @@ function publicThreadMessage(record) {
     participantId: record.participantId,
     displayName: record.displayName,
     text: record.text,
+    ...record.files === void 0 ? {} : { files: record.files },
+    ...record.hasImages === void 0 ? {} : { hasImages: record.hasImages },
     ...record.reply === void 0 ? {} : { reply: record.reply },
     createdAt: record.createdAt,
     ...record.avatarId === void 0 ? {} : { avatarId: record.avatarId }
@@ -1214,16 +1450,85 @@ function normalizeForwardItems(items) {
   const seen = /* @__PURE__ */ new Set();
   return items.map((item) => {
     const messageId = normalizeMessageId(item.messageId);
-    if (seen.has(messageId)) throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u4E0D\u80FD\u91CD\u590D\u3002");
-    seen.add(messageId);
+    const sourceSessionId = item.sourceSessionId?.trim();
+    if (sourceSessionId === void 0 !== (item.sourceSeq === void 0)) {
+      throw new ChatroomInputError("\u8F6C\u53D1\u6765\u6E90\u6D88\u606F\u4E0D\u5B8C\u6574\u3002");
+    }
+    if (sourceSessionId !== void 0 && (sourceSessionId === "" || [...sourceSessionId].length > 240 || /\p{Cc}/u.test(sourceSessionId))) {
+      throw new ChatroomInputError("\u8F6C\u53D1\u6765\u6E90\u4F1A\u8BDD\u65E0\u6548\u3002");
+    }
+    if (item.sourceSeq !== void 0 && (!Number.isSafeInteger(item.sourceSeq) || item.sourceSeq < 0)) {
+      throw new ChatroomInputError("\u8F6C\u53D1\u6765\u6E90\u5E8F\u53F7\u65E0\u6548\u3002");
+    }
+    const sourceKey = sourceSessionId === void 0 ? messageId : `${sourceSessionId}\0${item.sourceSeq}`;
+    if (seen.has(sourceKey)) throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u4E0D\u80FD\u91CD\u590D\u3002");
+    seen.add(sourceKey);
     const displayName = item.displayName.trim().replace(/\s+/gu, " ");
     const text = item.text.trim().replace(/\s+/gu, " ");
     if (item.role !== "human" && item.role !== "ai") throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u89D2\u8272\u65E0\u6548\u3002");
     if (displayName === "" || [...displayName].length > 80) throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u6635\u79F0\u65E0\u6548\u3002");
     if (text === "" || [...text].length > 2e3) throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u5185\u5BB9\u65E0\u6548\u3002");
     if (!Number.isSafeInteger(item.createdAt) || item.createdAt < 0) throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u65F6\u95F4\u65E0\u6548\u3002");
-    return { messageId, role: item.role, displayName, text, createdAt: item.createdAt };
+    return {
+      messageId,
+      ...sourceSessionId === void 0 ? {} : { sourceSessionId, sourceSeq: item.sourceSeq },
+      role: item.role,
+      displayName,
+      text,
+      createdAt: item.createdAt
+    };
   });
+}
+function projectForwardContent(blocks, role) {
+  const content = [];
+  const visibleTexts = [];
+  let displayName;
+  let reply;
+  let forward;
+  let firstText = true;
+  for (const block of blocks) {
+    if (block.type === "image") {
+      const image = {
+        ...block.attachment,
+        attachmentId: String(block.attachment.attachmentId)
+      };
+      content.push({ type: "image", image });
+      continue;
+    }
+    if (block.type !== "text") continue;
+    let text2 = block.text;
+    if (firstText && role === "human") {
+      firstText = false;
+      const marker = participantMarker(text2);
+      if (marker !== void 0) text2 = text2.slice(marker.length);
+      const prefix = /^([^：]{1,80})：/u.exec(text2);
+      if (prefix !== null) {
+        displayName = prefix[1];
+        text2 = text2.slice(prefix[0].length);
+      }
+      const replyProjection = projectReplyText(text2);
+      text2 = replyProjection.text;
+      reply = replyProjection.reply;
+      const forwardProjection = projectForwardText(text2);
+      text2 = forwardProjection.text;
+      forward = forwardProjection.forward;
+    }
+    const files = projectFileText(text2);
+    text2 = files.text;
+    for (const file of files.files) content.push({ type: "file", file });
+    if (text2.trim() !== "") {
+      content.push({ type: "text", text: text2, markdown: role === "ai" });
+      visibleTexts.push(text2.trim());
+    }
+  }
+  const text = visibleTexts.join("\n").trim() || (forward === void 0 ? void 0 : `\u5408\u5E76\u8F6C\u53D1 ${forward.items.length} \u6761\u6D88\u606F`) || (content.some((part) => part.type === "file") ? "\u6587\u4EF6\u6D88\u606F" : "\u56FE\u7247\u6D88\u606F");
+  return {
+    text,
+    content,
+    ...displayName === void 0 ? {} : { displayName },
+    ...reply === void 0 ? {} : { reply },
+    ...forward === void 0 ? {} : { forward }
+  };
 }
 function reactionKey(roomId, messageId, emoji, participantId) {
   return `${roomId}\0${messageId}\0${emoji}\0${participantId}`;
@@ -1326,6 +1631,10 @@ var ChatroomHttpController = class {
         await this.handleRoomSelection(request, response);
         return;
       }
+      if (route.endpoint === "/rooms/manage") {
+        await this.handleRoomManagement(request, response);
+        return;
+      }
       if (route.endpoint === "/prompt") {
         await this.handlePrompt(request, response);
         return;
@@ -1348,6 +1657,10 @@ var ChatroomHttpController = class {
       }
       if (route.endpoint.startsWith("/files/")) {
         this.handleFile(request, response, route.endpoint.slice("/files/".length));
+        return;
+      }
+      if (route.endpoint.startsWith("/images/")) {
+        await this.handleImage(request, response, route.endpoint.slice("/images/".length));
         return;
       }
       if (route.endpoint === "/events" && request.method === "GET") {
@@ -1443,6 +1756,36 @@ var ChatroomHttpController = class {
     const room = await this.runtime.selectRoom(fieldString(body, "roomId"), identity);
     json(response, 200, { room });
   }
+  async handleRoomManagement(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const body = await readJson(request, smallRequestLimit(this.config) + 2048);
+    const roomId = fieldString(body, "roomId");
+    const action = fieldString(body, "action");
+    if (action === "rename") {
+      const room = await this.runtime.renameRoom(roomId, fieldString(body, "title"), identity);
+      json(response, 200, { room, members: this.runtime.membersForRoom(roomId) });
+      return;
+    }
+    if (action === "set-role") {
+      const role = fieldString(body, "role");
+      if (role !== "admin" && role !== "member") throw new ChatroomInputError("\u7FA4\u6210\u5458\u89D2\u8272\u65E0\u6548\u3002");
+      const members = await this.runtime.setMemberRole(
+        roomId,
+        fieldString(body, "participantId"),
+        role,
+        identity
+      );
+      json(response, 200, { room: this.runtime.rooms.find((item) => item.id === roomId), members });
+      return;
+    }
+    throw new ChatroomInputError("\u7FA4\u7BA1\u7406\u64CD\u4F5C\u65E0\u6548\u3002");
+  }
   async handleThreadOpen(request, response) {
     if (request.method !== "POST") {
       methodNotAllowed(response, "POST");
@@ -1464,14 +1807,21 @@ var ChatroomHttpController = class {
     assertSameOrigin(request);
     const identity = this.requireIdentity(request, response);
     if (identity === void 0) return;
-    const body = await readJson(request, this.config.maxMessageTextChars * 4 + 2048);
-    const reply = replyRequest(body.reply);
+    const body = await readJson(request, this.runtime.maxPromptRequestBytes);
+    const parsed = promptRequest({ ...body, roomId: "__thread__" }, this.config);
     const prompt = {
       threadId: fieldString(body, "threadId"),
-      text: fieldString(body, "text"),
-      ...reply === void 0 ? {} : { reply }
+      mode: parsed.mode,
+      content: parsed.content,
+      ...parsed.reply === void 0 ? {} : { reply: parsed.reply }
     };
-    const result = await this.runtime.submitThread(prompt.threadId, identity, prompt.text, prompt.reply);
+    const result = await this.runtime.submitThread(
+      prompt.threadId,
+      identity,
+      prompt.content,
+      prompt.mode,
+      prompt.reply
+    );
     json(response, 200, result);
   }
   async handlePrompt(request, response) {
@@ -1539,6 +1889,34 @@ var ChatroomHttpController = class {
       "X-Content-Type-Options": "nosniff"
     });
     response.end(file.data);
+  }
+  async handleImage(request, response, encoded) {
+    if (request.method !== "GET") {
+      methodNotAllowed(response, "GET");
+      return;
+    }
+    if (this.requireIdentity(request, response) === void 0) return;
+    let value;
+    try {
+      value = JSON.parse(decodeURIComponent(encoded));
+    } catch {
+      throw new ChatroomInputError("\u56FE\u7247\u5F15\u7528\u65E0\u6548\u3002");
+    }
+    const image = forwardImageRequest(value);
+    const stored = await this.runtime.image(
+      image.sourceRoomId,
+      image.sourceSessionId,
+      image.sourceSeq,
+      image.image
+    );
+    response.writeHead(200, {
+      "Content-Type": stored.ref.mediaType,
+      "Content-Length": stored.data.byteLength,
+      "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(stored.ref.name ?? "image")}`,
+      "Cache-Control": "private, max-age=3600",
+      "X-Content-Type-Options": "nosniff"
+    });
+    response.end(stored.data);
   }
   async handleEvents(request, response, search) {
     const identity = this.requireIdentity(request, response);
@@ -1716,8 +2094,15 @@ function forwardItems(value) {
     const role = item.role;
     if (role !== "human" && role !== "ai") throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u89D2\u8272\u65E0\u6548\u3002");
     if (typeof item.createdAt !== "number") throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u65F6\u95F4\u65E0\u6548\u3002");
+    if (item.sourceSessionId === void 0 !== (item.sourceSeq === void 0) || item.sourceSessionId !== void 0 && typeof item.sourceSessionId !== "string" || item.sourceSeq !== void 0 && typeof item.sourceSeq !== "number") {
+      throw new ChatroomInputError("\u8F6C\u53D1\u6765\u6E90\u6D88\u606F\u4E0D\u5B8C\u6574\u3002");
+    }
     return {
       messageId: fieldString(item, "messageId"),
+      ...item.sourceSessionId === void 0 ? {} : {
+        sourceSessionId: item.sourceSessionId,
+        sourceSeq: item.sourceSeq
+      },
       role,
       displayName: fieldString(item, "displayName"),
       text: fieldString(item, "text"),
@@ -1803,6 +2188,39 @@ function threadRootRequest(value) {
 }
 function isImageMediaType(value) {
   return value === "image/png" || value === "image/jpeg" || value === "image/webp" || value === "image/gif";
+}
+function imageReference(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ChatroomInputError("\u56FE\u7247\u5F15\u7528\u65E0\u6548\u3002");
+  }
+  const image = value;
+  if (typeof image.attachmentId !== "string" || !isImageMediaType(image.mediaType) || !Number.isSafeInteger(image.bytes) || !Number.isSafeInteger(image.width) || !Number.isSafeInteger(image.height) || image.name !== void 0 && typeof image.name !== "string") {
+    throw new ChatroomInputError("\u56FE\u7247\u5F15\u7528\u65E0\u6548\u3002");
+  }
+  return {
+    attachmentId: image.attachmentId,
+    mediaType: image.mediaType,
+    bytes: image.bytes,
+    width: image.width,
+    height: image.height,
+    ...image.name === void 0 ? {} : { name: image.name }
+  };
+}
+function forwardImageRequest(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ChatroomInputError("\u56FE\u7247\u6765\u6E90\u65E0\u6548\u3002");
+  }
+  const request = value;
+  const sourceSeq = request.sourceSeq;
+  if (!Number.isSafeInteger(sourceSeq) || sourceSeq < 0) {
+    throw new ChatroomInputError("\u56FE\u7247\u6765\u6E90\u65E0\u6548\u3002");
+  }
+  return {
+    sourceRoomId: fieldString(request, "sourceRoomId"),
+    sourceSessionId: fieldString(request, "sourceSessionId"),
+    sourceSeq,
+    image: imageReference(request.image)
+  };
 }
 function smallRequestLimit(config) {
   return Math.max(config.maxDisplayNameChars, config.maxRoomTitleChars) * 4 + 1024;

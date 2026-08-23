@@ -1,11 +1,12 @@
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomClientStore, ChatroomView } from './store.js';
+import type { ChatroomAgentTarget, ChatroomClientStore, ChatroomView } from './store.js';
 interface ChatroomComposerInjected {
     useChatroom<T>(selector: (snapshot: ChatroomView) => T): T;
     addFiles(roomId: string, files: readonly File[]): void;
     removeFile(roomId: string, fileId: string): void;
     clearReply(roomId: string): void;
     sendFiles(roomId: string): Promise<void>;
+    resolveTarget(sessionId: string): ChatroomAgentTarget | undefined;
 }
 type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomComposerInjected;
 type ComposerDockProps = PropsRuntime<'conversation.input.dock'> & ChatroomComposerInjected;

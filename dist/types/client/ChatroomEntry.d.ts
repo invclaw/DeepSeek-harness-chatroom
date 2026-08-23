@@ -12,6 +12,8 @@ interface ChatroomEntryInjected {
     resetIdentity(): Promise<void>;
     retry(): Promise<void>;
     closeMembers(): void;
+    renameRoom?(title: string): Promise<boolean>;
+    setMemberRole?(participantId: string, role: 'admin' | 'member'): Promise<boolean>;
     closeThread(): void;
     setThreadReply(reply: ChatroomReplyReference): void;
     clearThreadReply(): void;

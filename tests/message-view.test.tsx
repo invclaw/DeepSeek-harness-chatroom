@@ -11,7 +11,7 @@ import {
 } from '../src/client/ChatroomMessageNodeView.js'
 import { ChatroomAssistantReplyAction } from '../src/client/ChatroomAssistantReplyAction.js'
 import type { ChatroomIdentity } from '../src/types.js'
-import { identifyFileText, identifyReplyText } from '../src/message.js'
+import { identifyFileText, identifyForwardText, identifyReplyText } from '../src/message.js'
 
 const alice: ChatroomIdentity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' }
 const bob: ChatroomIdentity = { participantId: 'bob-id', displayName: 'Bob', avatarId: 'fox' }
@@ -90,7 +90,15 @@ describe('participant-specific native message projection', () => {
     expect(screen.getByText('回复 Alice')).toBeTruthy()
     expect(screen.getByText('brief.pdf')).toBeTruthy()
     expect(screen.getByTestId('native').textContent).toBe('请查收')
-    fireEvent.click(screen.getByRole('button', { name: '↩ 回复' }))
+    expect(screen.getByRole('button', { name: '回复' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '点赞' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '转发' })).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: '▣ 复制' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '更多消息操作' }))
+    expect(screen.getByRole('menuitem', { name: '▣ 复制' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: '☑ 多选' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: '⑂ 分支' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '回复' }))
     expect(setReply).toHaveBeenCalledWith('lobby', expect.objectContaining({ displayName: 'Bob', text: '请查收' }))
   })
 
@@ -138,6 +146,53 @@ describe('participant-specific native message projection', () => {
     expect(screen.getByText('brief.pdf')).toBeTruthy()
     expect(screen.queryByText('发送了文件。')).toBeNull()
     expect(screen.queryByTestId('native')).toBeNull()
+  })
+
+  it('renders forwarded Markdown, files, images, quotes, and reaction snapshots', () => {
+    const bundle = {
+      sourceRoomId: 'source-room',
+      sourceRoomTitle: '来源群',
+      items: [{
+        messageId: 'assistant:9',
+        sourceSessionId: 'source-session',
+        sourceSeq: 9,
+        role: 'ai' as const,
+        displayName: 'DeepSeek',
+        text: '**结论**',
+        createdAt: 9,
+        reply: { messageId: 'user:8', displayName: 'Alice', text: '问题' },
+        reactions: [{ emoji: '🎉' as const, count: 2 }],
+        content: [
+          { type: 'text' as const, text: '**结论**', markdown: true },
+          { type: 'file' as const, file: { id: 'file-id', name: 'report.pdf', mediaType: 'application/pdf', bytes: 2_048 } },
+          {
+            type: 'image' as const,
+            image: {
+              attachmentId: 'image-id', mediaType: 'image/png' as const, bytes: 100,
+              width: 10, height: 10, name: 'chart.png',
+            },
+          },
+        ],
+      }],
+    }
+    const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>
+    render(<ChatroomUserMessageNodeView {...messageProps(
+      userNode(identifyChatroomText(identifyForwardText(bundle), bob)),
+      alice,
+      Native,
+    )} />)
+
+    expect(screen.getByText('合并转发 · 1 条消息')).toBeTruthy()
+    expect(screen.getByText('结论').tagName).toBe('STRONG')
+    expect(screen.getByText('回复 Alice')).toBeTruthy()
+    expect(screen.getByText('report.pdf')).toBeTruthy()
+    expect(screen.getByText('🎉 2')).toBeTruthy()
+    const image = screen.getByRole('img', { name: 'chart.png' }) as HTMLImageElement
+    const encoded = image.src.slice(image.src.indexOf('/images/') + '/images/'.length)
+    expect(JSON.parse(decodeURIComponent(encoded))).toMatchObject({
+      sourceRoomId: 'source-room', sourceSessionId: 'source-session', sourceSeq: 9,
+      image: { attachmentId: 'image-id' },
+    })
   })
 
   it('shows every message checkbox in selection mode and the latest three branch replies', () => {

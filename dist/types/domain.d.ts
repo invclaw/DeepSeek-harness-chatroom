@@ -37,6 +37,8 @@ export interface RoomRecord {
     readonly sessionId: string;
     readonly createdAt: number;
     readonly createdBy: string;
+    readonly ownerParticipantId?: string;
+    readonly adminParticipantIds?: readonly string[];
 }
 export interface MemberRecord {
     readonly roomId: string;
@@ -63,6 +65,13 @@ export interface ThreadMessageRecord {
     readonly displayName: string;
     readonly avatarId?: ChatroomAvatarId;
     readonly text: string;
+    readonly files?: readonly {
+        readonly id: string;
+        readonly name: string;
+        readonly mediaType: string;
+        readonly bytes: number;
+    }[];
+    readonly hasImages?: boolean;
     readonly reply?: ChatroomReplyReference;
     readonly createdAt: number;
 }

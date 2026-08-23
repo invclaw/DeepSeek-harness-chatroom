@@ -183,5 +183,24 @@ function validForward(value: unknown): value is ChatroomForwardBundle {
       && typeof item.displayName === 'string'
       && typeof item.text === 'string'
       && typeof item.createdAt === 'number'
+      && (item.sourceSessionId === undefined || typeof item.sourceSessionId === 'string')
+      && (item.sourceSeq === undefined || typeof item.sourceSeq === 'number')
+      && (item.content === undefined || (Array.isArray(item.content) && item.content.every(validForwardContentPart)))
+      && (item.reply === undefined || validReply(item.reply))
+      && (item.reactions === undefined || (Array.isArray(item.reactions) && item.reactions.every(reaction =>
+        reaction !== null && typeof reaction === 'object'
+        && typeof (reaction as { emoji?: unknown }).emoji === 'string'
+        && typeof (reaction as { count?: unknown }).count === 'number')))
   })
+}
+
+function validForwardContentPart(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false
+  const part = value as Record<string, unknown>
+  if (part.type === 'text') return typeof part.text === 'string' && typeof part.markdown === 'boolean'
+  if (part.type === 'file') return validFile(part.file)
+  if (part.type !== 'image' || part.image === null || typeof part.image !== 'object') return false
+  const image = part.image as Record<string, unknown>
+  return typeof image.attachmentId === 'string' && typeof image.mediaType === 'string'
+    && typeof image.bytes === 'number' && typeof image.width === 'number' && typeof image.height === 'number'
 }

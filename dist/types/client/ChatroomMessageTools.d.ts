@@ -16,10 +16,8 @@ export interface ChatroomMessageToolsProps {
     toggleSelection(roomId: string, message: ChatroomForwardItem): void;
 }
 /** Capability-driven actions reused by main-room and branch message rows. */
-export declare function ChatroomInlineMessageActions({ tools, nativeCopy, nativeLike, }: {
+export declare function ChatroomInlineMessageActions({ tools, }: {
     readonly tools: ChatroomMessageToolsProps;
-    readonly nativeCopy?: boolean;
-    readonly nativeLike?: boolean;
 }): JSX.Element | null;
 /** Checkbox shown on every message while the room is in multi-select mode. */
 export declare function ChatroomSelectionCheckbox({ tools }: {

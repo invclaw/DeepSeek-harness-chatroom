@@ -1,5 +1,5 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadRoot } from '../types.js';
+import type { ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 export type ChatroomPhase = 'loading' | 'identity-required' | 'ready' | 'error';
 export type ChatroomConnection = 'offline' | 'connecting' | 'online';
@@ -15,8 +15,25 @@ export interface ChatroomComposition {
     readonly files: readonly PendingChatroomFile[];
     readonly reply: ChatroomReplyReference | undefined;
 }
+/** Query-carried context for the isolated native Harness branch frame. */
+export interface ChatroomBranchFrame {
+    readonly threadId: string;
+    readonly sessionId: string;
+    readonly roomId: string;
+    readonly parentSessionId: string;
+}
+/** Agent submission target resolved from a native Harness Session id. */
+export type ChatroomAgentTarget = {
+    readonly kind: 'room';
+    readonly room: ChatroomInfo;
+} | {
+    readonly kind: 'thread';
+    readonly room: ChatroomInfo;
+    readonly threadId: string;
+};
 /** Browser identity, room directory, selection, and presence around native Harness Sessions. */
 export interface ChatroomView {
+    readonly branchFrame?: ChatroomBranchFrame | undefined;
     readonly open: boolean;
     readonly phase: ChatroomPhase;
     readonly connection: ChatroomConnection;
@@ -28,6 +45,8 @@ export interface ChatroomView {
     readonly reactions: readonly ChatroomReaction[];
     readonly threadPreviews: readonly ChatroomThreadPreview[];
     readonly membersOpen: boolean;
+    readonly managementBusy?: boolean;
+    readonly managementError?: string | undefined;
     readonly error: string | undefined;
     readonly composerRoomId: string | undefined;
     readonly pendingFiles: readonly PendingChatroomFile[];
@@ -61,11 +80,13 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private compositionRevision;
     private pendingFileSequence;
     private originalTitle;
-    constructor(openSession?: (sessionId: string) => boolean);
+    constructor(openSession?: (sessionId: string) => boolean, branchFrame?: ChatroomBranchFrame);
     /** Current immutable room projection. */
     getSnapshot: () => ChatroomView;
     /** Resolve room metadata for any native Session in the shared directory. */
     roomForSession(sessionId: string): ChatroomInfo | undefined;
+    /** Resolve whether one native Session submits to a room or one branch. */
+    agentTargetForSession(sessionId: string): ChatroomAgentTarget | undefined;
     /** Subscribe to room projection changes. */
     subscribe: (listener: () => void) => (() => void);
     /** Resolve the persistent browser identity and shared room directory. */
@@ -78,6 +99,10 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     openMembers: () => void;
     /** Close group management without changing the active room. */
     closeMembers: () => void;
+    /** Rename the active room through the server-enforced management endpoint. */
+    renameRoom: (title: string) => Promise<boolean>;
+    /** Promote or demote one member through the owner-only management endpoint. */
+    setMemberRole: (participantId: string, role: "admin" | "member") => Promise<boolean>;
     /** Close only the additive room dialog. */
     closeRoom: () => void;
     /** Retry pending native navigation when the Host Session list changes. */
@@ -143,6 +168,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private closeNotifications;
     private receive;
     private replaceReaction;
+    private applyRoomManagement;
     private receiveNotification;
     private clearUnread;
     private updateDocumentTitle;
@@ -151,6 +177,8 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
 }
 /** Submit one native composer payload through human-first room admission. */
 export declare function submitRoomPrompt(request: ChatroomPromptRequest, signal?: AbortSignal): Promise<ChatroomPromptResponse>;
+/** Submit one native composer payload through branch human-first admission. */
+export declare function submitThreadPrompt(request: ChatroomThreadPromptRequest, signal?: AbortSignal): Promise<ChatroomPromptResponse>;
 /** Serialize browser Files only at submission time, keeping bytes out of observable state. */
 export declare function serializePendingFiles(files: readonly PendingChatroomFile[]): Promise<ChatroomPromptContentPart[]>;
 //# sourceMappingURL=store.d.ts.map

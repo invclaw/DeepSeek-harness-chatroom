@@ -2,6 +2,7 @@
 import type { ChatroomAvatarId } from './avatars.js';
 import type { ChatroomReactionEmoji } from './reactions.js';
 export type ChatroomMessageRole = 'human' | 'ai';
+export type ChatroomMemberRole = 'owner' | 'admin' | 'member';
 /** Public participant identity bound to one opaque browser session. */
 export interface ChatroomIdentity {
     readonly participantId: string;
@@ -10,6 +11,7 @@ export interface ChatroomIdentity {
 }
 /** One room member projected with current presence. */
 export interface ChatroomMember extends ChatroomIdentity {
+    readonly role?: ChatroomMemberRole | undefined;
     readonly joinedAt: number;
     readonly lastSeenAt: number;
     readonly online: boolean;
@@ -27,6 +29,39 @@ export interface ChatroomFileReference {
     readonly mediaType: string;
     readonly bytes: number;
 }
+/** Durable image metadata safe to carry inside forwarded-message cards. */
+export interface ChatroomImageReference {
+    readonly attachmentId: string;
+    readonly mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+    readonly bytes: number;
+    readonly width: number;
+    readonly height: number;
+    readonly name?: string;
+}
+/** Authenticated source coordinates used to read one image retained by a forwarded event. */
+export interface ChatroomForwardImageRequest {
+    readonly sourceRoomId: string;
+    readonly sourceSessionId: string;
+    readonly sourceSeq: number;
+    readonly image: ChatroomImageReference;
+}
+/** One preserved content block inside a forwarded message. */
+export type ChatroomForwardContentPart = {
+    readonly type: 'text';
+    readonly text: string;
+    readonly markdown: boolean;
+} | {
+    readonly type: 'image';
+    readonly image: ChatroomImageReference;
+} | {
+    readonly type: 'file';
+    readonly file: ChatroomFileReference;
+};
+/** Reaction snapshot retained on a forwarded message. */
+export interface ChatroomForwardReaction {
+    readonly emoji: ChatroomReactionEmoji;
+    readonly count: number;
+}
 /** One durable reaction summary for a native room message. */
 export interface ChatroomReaction {
     readonly roomId: string;
@@ -37,10 +72,16 @@ export interface ChatroomReaction {
 /** One selected message included in a merged forward. */
 export interface ChatroomForwardItem {
     readonly messageId: string;
+    readonly sourceSessionId?: string;
+    readonly sourceSeq?: number;
     readonly role: ChatroomMessageRole;
     readonly displayName: string;
     readonly text: string;
     readonly createdAt: number;
+    readonly content?: readonly ChatroomForwardContentPart[];
+    readonly reply?: ChatroomReplyReference;
+    readonly reactions?: readonly ChatroomForwardReaction[];
+    readonly forward?: ChatroomForwardBundle;
 }
 /** Durable merged-forward metadata rendered as one expandable message card. */
 export interface ChatroomForwardBundle {
@@ -65,6 +106,11 @@ export interface ChatroomInfo {
     readonly title: string;
     readonly aiDisplayName: string;
     readonly sessionId: string;
+}
+/** Result of one room-management mutation. */
+export interface ChatroomRoomManageResponse {
+    readonly room: ChatroomInfo;
+    readonly members: readonly ChatroomMember[];
 }
 /** Initial identity lookup result. */
 export interface ChatroomSessionResponse {
@@ -141,6 +187,8 @@ export interface ChatroomThreadMessage {
     readonly displayName: string;
     readonly avatarId?: ChatroomAvatarId;
     readonly text: string;
+    readonly files?: readonly ChatroomFileReference[];
+    readonly hasImages?: boolean;
     readonly reply?: ChatroomReplyReference;
     readonly createdAt: number;
 }
@@ -158,7 +206,8 @@ export interface ChatroomThreadPreview {
 /** Branch text admission request. */
 export interface ChatroomThreadPromptRequest {
     readonly threadId: string;
-    readonly text: string;
+    readonly mode: 'queue' | 'steer';
+    readonly content: readonly ChatroomPromptContentPart[];
     readonly reply?: ChatroomReplyReference;
 }
 /** Browser notification for a new human or AI message. */
@@ -200,12 +249,18 @@ export interface ChatroomReactionEvent {
     readonly type: 'reaction';
     readonly reaction: ChatroomReaction;
 }
+/** Room title or role roster replacement after a management mutation. */
+export interface ChatroomRoomUpdatedEvent {
+    readonly type: 'room-updated';
+    readonly room: ChatroomInfo;
+    readonly members: readonly ChatroomMember[];
+}
 /** One global message alert delivered independently of active-room presence. */
 export interface ChatroomNotificationEvent {
     readonly type: 'notification';
     readonly notification: ChatroomNotification;
 }
-export type ChatroomServerEvent = ChatroomSnapshotEvent | ChatroomPresenceEvent | ChatroomThreadMessageEvent | ChatroomReactionEvent;
+export type ChatroomServerEvent = ChatroomSnapshotEvent | ChatroomPresenceEvent | ChatroomThreadMessageEvent | ChatroomReactionEvent | ChatroomRoomUpdatedEvent;
 /** Browser-visible error envelope. */
 export interface ChatroomErrorResponse {
     readonly error: string;

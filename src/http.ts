@@ -11,7 +11,10 @@ import type {
   ChatroomPromptContentPart,
   ChatroomPromptRequest,
   ChatroomForwardItem,
+  ChatroomForwardImageRequest,
+  ChatroomImageReference,
   ChatroomRoomResponse,
+  ChatroomRoomManageResponse,
   ChatroomRoomsResponse,
   ChatroomSessionResponse,
   ChatroomThreadPromptRequest,
@@ -61,6 +64,10 @@ export class ChatroomHttpController {
         await this.handleRoomSelection(request, response)
         return
       }
+      if (route.endpoint === '/rooms/manage') {
+        await this.handleRoomManagement(request, response)
+        return
+      }
       if (route.endpoint === '/prompt') {
         await this.handlePrompt(request, response)
         return
@@ -83,6 +90,10 @@ export class ChatroomHttpController {
       }
       if (route.endpoint.startsWith('/files/')) {
         this.handleFile(request, response, route.endpoint.slice('/files/'.length))
+        return
+      }
+      if (route.endpoint.startsWith('/images/')) {
+        await this.handleImage(request, response, route.endpoint.slice('/images/'.length))
         return
       }
       if (route.endpoint === '/events' && request.method === 'GET') {
@@ -182,6 +193,37 @@ export class ChatroomHttpController {
     json(response, 200, { room } satisfies ChatroomRoomResponse)
   }
 
+  private async handleRoomManagement(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, smallRequestLimit(this.config) + 2_048)
+    const roomId = fieldString(body, 'roomId')
+    const action = fieldString(body, 'action')
+    if (action === 'rename') {
+      const room = await this.runtime.renameRoom(roomId, fieldString(body, 'title'), identity)
+      json(response, 200, { room, members: this.runtime.membersForRoom(roomId) } satisfies ChatroomRoomManageResponse)
+      return
+    }
+    if (action === 'set-role') {
+      const role = fieldString(body, 'role')
+      if (role !== 'admin' && role !== 'member') throw new ChatroomInputError('群成员角色无效。')
+      const members = await this.runtime.setMemberRole(
+        roomId,
+        fieldString(body, 'participantId'),
+        role,
+        identity,
+      )
+      json(response, 200, { room: this.runtime.rooms.find(item => item.id === roomId)!, members } satisfies ChatroomRoomManageResponse)
+      return
+    }
+    throw new ChatroomInputError('群管理操作无效。')
+  }
+
   private async handleThreadOpen(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method !== 'POST') {
       methodNotAllowed(response, 'POST')
@@ -204,14 +246,21 @@ export class ChatroomHttpController {
     assertSameOrigin(request)
     const identity = this.requireIdentity(request, response)
     if (identity === undefined) return
-    const body = await readJson(request, this.config.maxMessageTextChars * 4 + 2_048)
-    const reply = replyRequest(body.reply)
+    const body = await readJson(request, this.runtime.maxPromptRequestBytes)
+    const parsed = promptRequest({ ...body, roomId: '__thread__' }, this.config)
     const prompt: ChatroomThreadPromptRequest = {
       threadId: fieldString(body, 'threadId'),
-      text: fieldString(body, 'text'),
-      ...(reply === undefined ? {} : { reply }),
+      mode: parsed.mode,
+      content: parsed.content,
+      ...(parsed.reply === undefined ? {} : { reply: parsed.reply }),
     }
-    const result = await this.runtime.submitThread(prompt.threadId, identity, prompt.text, prompt.reply)
+    const result = await this.runtime.submitThread(
+      prompt.threadId,
+      identity,
+      prompt.content,
+      prompt.mode,
+      prompt.reply,
+    )
     json(response, 200, result)
   }
 
@@ -283,6 +332,35 @@ export class ChatroomHttpController {
       'X-Content-Type-Options': 'nosniff',
     })
     response.end(file.data)
+  }
+
+  private async handleImage(request: IncomingMessage, response: ServerResponse, encoded: string): Promise<void> {
+    if (request.method !== 'GET') {
+      methodNotAllowed(response, 'GET')
+      return
+    }
+    if (this.requireIdentity(request, response) === undefined) return
+    let value: unknown
+    try {
+      value = JSON.parse(decodeURIComponent(encoded))
+    } catch {
+      throw new ChatroomInputError('图片引用无效。')
+    }
+    const image = forwardImageRequest(value)
+    const stored = await this.runtime.image(
+      image.sourceRoomId,
+      image.sourceSessionId,
+      image.sourceSeq,
+      image.image,
+    )
+    response.writeHead(200, {
+      'Content-Type': stored.ref.mediaType,
+      'Content-Length': stored.data.byteLength,
+      'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(stored.ref.name ?? 'image')}`,
+      'Cache-Control': 'private, max-age=3600',
+      'X-Content-Type-Options': 'nosniff',
+    })
+    response.end(stored.data)
   }
 
   private async handleEvents(
@@ -487,8 +565,17 @@ function forwardItems(value: unknown): readonly ChatroomForwardItem[] {
     const role = item.role
     if (role !== 'human' && role !== 'ai') throw new ChatroomInputError('转发消息角色无效。')
     if (typeof item.createdAt !== 'number') throw new ChatroomInputError('转发消息时间无效。')
+    if ((item.sourceSessionId === undefined) !== (item.sourceSeq === undefined)
+      || (item.sourceSessionId !== undefined && typeof item.sourceSessionId !== 'string')
+      || (item.sourceSeq !== undefined && typeof item.sourceSeq !== 'number')) {
+      throw new ChatroomInputError('转发来源消息不完整。')
+    }
     return {
       messageId: fieldString(item, 'messageId'),
+      ...(item.sourceSessionId === undefined ? {} : {
+        sourceSessionId: item.sourceSessionId,
+        sourceSeq: item.sourceSeq as number,
+      }),
       role,
       displayName: fieldString(item, 'displayName'),
       text: fieldString(item, 'text'),
@@ -578,6 +665,43 @@ function threadRootRequest(value: unknown): ChatroomThreadRoot {
 
 function isImageMediaType(value: unknown): value is Extract<ChatroomPromptContentPart, { type: 'image' }>['mediaType'] {
   return value === 'image/png' || value === 'image/jpeg' || value === 'image/webp' || value === 'image/gif'
+}
+
+function imageReference(value: unknown): ChatroomImageReference {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ChatroomInputError('图片引用无效。')
+  }
+  const image = value as Record<string, unknown>
+  if (typeof image.attachmentId !== 'string' || !isImageMediaType(image.mediaType)
+    || !Number.isSafeInteger(image.bytes) || !Number.isSafeInteger(image.width) || !Number.isSafeInteger(image.height)
+    || (image.name !== undefined && typeof image.name !== 'string')) {
+    throw new ChatroomInputError('图片引用无效。')
+  }
+  return {
+    attachmentId: image.attachmentId,
+    mediaType: image.mediaType,
+    bytes: image.bytes as number,
+    width: image.width as number,
+    height: image.height as number,
+    ...(image.name === undefined ? {} : { name: image.name }),
+  }
+}
+
+function forwardImageRequest(value: unknown): ChatroomForwardImageRequest {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ChatroomInputError('图片来源无效。')
+  }
+  const request = value as Record<string, unknown>
+  const sourceSeq = request.sourceSeq
+  if (!Number.isSafeInteger(sourceSeq) || (sourceSeq as number) < 0) {
+    throw new ChatroomInputError('图片来源无效。')
+  }
+  return {
+    sourceRoomId: fieldString(request, 'sourceRoomId'),
+    sourceSessionId: fieldString(request, 'sourceSessionId'),
+    sourceSeq: sourceSeq as number,
+    image: imageReference(request.image),
+  }
 }
 
 function smallRequestLimit(config: Config): number {

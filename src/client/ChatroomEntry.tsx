@@ -16,6 +16,8 @@ interface ChatroomEntryInjected {
   resetIdentity(): Promise<void>
   retry(): Promise<void>
   closeMembers(): void
+  renameRoom?(title: string): Promise<boolean>
+  setMemberRole?(participantId: string, role: 'admin' | 'member'): Promise<boolean>
   closeThread(): void
   setThreadReply(reply: ChatroomReplyReference): void
   clearThreadReply(): void
@@ -35,6 +37,7 @@ type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected
 /** Additive shared-session launcher, identity setup, and room directory. */
 export function ChatroomEntry(props: ChatroomEntryProps): JSX.Element | null {
   const room = props.useChatroom(snapshot => snapshot)
+  if (room.branchFrame !== undefined) return null
   const panels = <ChatroomPanels room={room} {...props} />
 
   if (!room.open) {

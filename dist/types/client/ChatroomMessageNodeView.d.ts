@@ -4,11 +4,13 @@ import { type ChatroomAvatarId } from '../avatars.js';
 import type { ChatroomFileReference, ChatroomForwardBundle, ChatroomForwardItem, ChatroomIdentity, ChatroomReplyReference, ChatroomThreadRoot } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 import type { ChatroomView } from './store.js';
+import type { ChatroomAgentTarget } from './store.js';
 type ParticipantNode = ChatNode<'user' | 'steering'>;
 export { identifyChatroomText } from '../message.js';
 interface ChatroomMessageNodeInjected<Kind extends 'user' | 'steering'> {
     useChatroom<T>(selector: (snapshot: ChatroomView) => T): T;
     nativeMessageView: ComponentType<ChatNodeViewProps<Kind>>;
+    resolveTarget?(sessionId: string): ChatroomAgentTarget | undefined;
     setReply(roomId: string, reply: ChatroomReplyReference): void;
     openThread(roomId: string, root: ChatroomThreadRoot): Promise<void>;
     toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>;

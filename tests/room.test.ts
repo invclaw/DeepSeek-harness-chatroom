@@ -49,6 +49,47 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
+  it('lets owners promote administrators and lets both roles rename the room', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const bob = { participantId: 'bob-id', displayName: 'Bob', avatarId: 'panda' as const }
+    const room = await runtime.createRoom('项目群', alice)
+    await runtime.selectRoom(room.id, bob)
+
+    expect([...runtime.membersForRoom(room.id)].sort((left, right) => left.participantId.localeCompare(right.participantId))).toMatchObject([
+      { participantId: 'alice-id', role: 'owner' },
+      { participantId: 'bob-id', role: 'member' },
+    ])
+    await expect(runtime.renameRoom(room.id, '越权改名', bob)).rejects.toThrow('没有群管理权限')
+    await runtime.setMemberRole(room.id, bob.participantId, 'admin', alice)
+    expect([...runtime.membersForRoom(room.id)].sort((left, right) => left.participantId.localeCompare(right.participantId))).toMatchObject([
+      { participantId: 'alice-id', role: 'owner' },
+      { participantId: 'bob-id', role: 'admin' },
+    ])
+    await expect(runtime.renameRoom(room.id, '管理员已改名', bob)).resolves.toMatchObject({
+      title: '管理员已改名',
+    })
+    await expect(runtime.setMemberRole(room.id, alice.participantId, 'member', alice)).rejects.toThrow('不能修改群主角色')
+    await runtime.stop()
+  })
+
+  it('keeps a managed configured-room title across plugin restarts', async () => {
+    const harness = fakeHarness()
+    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const first = new ChatroomRuntime(harness.ctx, config())
+    await first.start()
+    await first.selectRoom('lobby', alice)
+    await first.renameRoom('lobby', '新版大厅', alice)
+    await first.stop()
+
+    const second = new ChatroomRuntime(harness.ctx, config())
+    await second.start()
+    expect(second.room.title).toBe('新版大厅')
+    await second.stop()
+  })
+
   it('updates an identity without replacing its participant id or token', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
@@ -248,6 +289,68 @@ describe('ChatroomRuntime', () => {
     })
     await runtime.stop()
   })
+
+  it('rebuilds a forward from the durable source event with media, quote, Markdown, and reactions', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const target = await runtime.createRoom('项目二', alice)
+    const image = await sharp({ create: { width: 8, height: 6, channels: 3, background: '#336699' } }).png().toBuffer()
+    await runtime.submit('lobby', alice, [
+      { type: 'text', text: '**方案 A**' },
+      { type: 'file', name: 'notes.txt', mediaType: 'text/plain', data: Buffer.from('hello').toString('base64') },
+      { type: 'image', name: 'diagram.png', mediaType: 'image/png', data: image.toString('base64') },
+    ], 'queue', { messageId: 'user:2', displayName: 'Bob', text: '请补充资料' })
+    const sourceMessage = harness.agents[0]?.session.append.mock.calls[0]?.[1]
+    Object.assign(harness.agents[0]!.session, {
+      events: [{ type: 'user/message', seq: 7, time: 123_456, data: sourceMessage }],
+    })
+    await runtime.toggleReaction('lobby', 'user:7', '🎉', alice)
+
+    await runtime.forwardMessages('lobby', target.id, [{
+      messageId: 'user:7',
+      sourceSessionId: 'chatroom-v1-lobby',
+      sourceSeq: 7,
+      role: 'human',
+      displayName: '伪造昵称',
+      text: '伪造内容',
+      createdAt: 1,
+    }], alice)
+
+    const targetMessage = harness.agents[1]?.session.append.mock.calls
+      .find(call => (call[1] as { content?: unknown } | undefined)?.content !== undefined)?.[1]
+    const raw = targetMessage?.content.find((block: { type: string }) => block.type === 'text')?.text ?? ''
+    const marker = participantMarker(raw)
+    const visible = raw.slice(marker?.length ?? 0).replace(/^Alice：/u, '')
+    const forwarded = projectForwardText(visible).forward
+    expect(forwarded?.items[0]).toMatchObject({
+      messageId: 'user:7',
+      sourceSessionId: 'chatroom-v1-lobby',
+      sourceSeq: 7,
+      displayName: 'Alice',
+      text: '**方案 A**',
+      createdAt: 123_456,
+      reply: { messageId: 'user:2', displayName: 'Bob', text: '请补充资料' },
+      reactions: [{ emoji: '🎉', count: 1 }],
+      content: [
+        { type: 'text', text: '**方案 A**', markdown: false },
+        { type: 'file', file: { name: 'notes.txt', mediaType: 'text/plain', bytes: 5 } },
+        { type: 'image', image: { attachmentId: 'attachment-0', mediaType: 'image/png', name: 'diagram.png' } },
+      ],
+    })
+    const imagePart = forwarded?.items[0]?.content?.find(part => part.type === 'image')
+    if (imagePart?.type !== 'image') throw new Error('forwarded image missing')
+    await expect(runtime.image('lobby', 'chatroom-v1-lobby', 7, imagePart.image)).resolves.toMatchObject({
+      data: new Uint8Array([1, 2, 3]),
+    })
+    await expect(runtime.image('lobby', 'chatroom-v1-lobby', 7, {
+      ...imagePart.image,
+      attachmentId: 'another-attachment',
+    })).rejects.toThrow('图片来源消息不存在')
+    expect(harness.agents[1]?.followup).not.toHaveBeenCalled()
+    await runtime.stop()
+  })
 })
 
 function fakeHarness(): {
@@ -327,6 +430,7 @@ function fakeHarness(): {
         mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
       },
       saveImages: savedImages,
+      readImage: vi.fn(async (ref) => ({ ref, data: new Uint8Array([1, 2, 3]) })),
     },
     llm: { resolveModelInfo: vi.fn(async () => ({ inputModalities: ['text', 'image'] })) },
   } as unknown as Context

@@ -77,4 +77,58 @@ describe('native prompt admission', () => {
     restore()
     expect(api.sessions.prompt).toBe(original)
   })
+
+  it('routes a native branch composer payload, attachments, and steer mode to the branch Agent', async () => {
+    const original = vi.fn(async () => ({
+      rpcId: 'rpc' as never,
+      result: { ok: true as const, value: { accepted: true as const } },
+    }))
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      accepted: true,
+      aiTriggered: true,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const api = { sessions: { prompt: original } } as unknown as IApiClient
+    const room = { id: 'room', sessionId: 'room-session' }
+    const store = {
+      agentTargetForSession: (sessionId: string) => sessionId === 'branch-session'
+        ? { kind: 'thread', room, threadId: 'thread-id' }
+        : undefined,
+      getSnapshot: () => ({ identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' } }),
+      composition: () => ({
+        roomId: 'room',
+        revision: 0,
+        files: [{
+          id: 'file-id',
+          file: {
+            name: 'note.txt', type: 'text/plain',
+            arrayBuffer: async () => new TextEncoder().encode('hello').buffer,
+          },
+        }],
+        reply: { messageId: 'user:1', displayName: 'Bob', text: '前文' },
+      }),
+      completeComposition: vi.fn(),
+    } as unknown as ChatroomClientStore
+    installNativePromptIdentity(api, store)
+
+    await api.sessions.prompt({
+      sessionId: 'branch-session' as never,
+      mode: 'steer',
+      content: [{ type: 'text', text: '@AI 继续' }],
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('/plugins/deepseek-harness-chatroom/api/threads/prompt', expect.objectContaining({
+      body: JSON.stringify({
+        threadId: 'thread-id',
+        mode: 'steer',
+        content: [
+          { type: 'text', text: '@AI 继续' },
+          { type: 'file', name: 'note.txt', mediaType: 'text/plain', data: 'aGVsbG8=' },
+        ],
+        reply: { messageId: 'user:1', displayName: 'Bob', text: '前文' },
+      }),
+    }))
+    expect(original).not.toHaveBeenCalled()
+    expect(store.completeComposition).toHaveBeenCalledOnce()
+  })
 })

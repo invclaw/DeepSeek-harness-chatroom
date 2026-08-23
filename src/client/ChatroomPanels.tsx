@@ -1,26 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { chatroomAvatar, fallbackAvatarId } from '../avatars.js'
+import { useState } from 'react'
+import { chatroomAvatar } from '../avatars.js'
 import type {
   ChatroomForwardItem,
   ChatroomNotification,
   ChatroomReplyReference,
-  ChatroomThreadMessage,
 } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
-import {
-  ChatroomInlineMessageActions,
-  ChatroomMessageContextMenu,
-  ChatroomReactionBar,
-  ChatroomSelectionCheckbox,
-  useChatroomMessageMenu,
-  type ChatroomMessageToolsProps,
-} from './ChatroomMessageTools.js'
-import { ChatroomMarkdown } from './ChatroomMarkdown.js'
+import { branchFrameUrl } from './branch-frame.js'
 import type { ChatroomView } from './store.js'
 
 interface ChatroomPanelsProps {
   readonly room: ChatroomView
   closeMembers(): void
+  renameRoom?(title: string): Promise<boolean>
+  setMemberRole?(participantId: string, role: 'admin' | 'member'): Promise<boolean>
   closeThread(): void
   setThreadReply(reply: ChatroomReplyReference): void
   clearThreadReply(): void
@@ -111,24 +104,42 @@ function ToastStack({
 }
 
 function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
+  const [title, setTitle] = useState(props.room.room?.title ?? '')
+  const viewerRole = props.room.members.find(member =>
+    member.participantId === props.room.identity?.participantId)?.role ?? 'member'
   return (
     <div className="dsh-chatroom-dialog-layer dsh-chatroom-member-layer" data-testid="chatroom-members">
       <section className="dsh-chatroom-card dsh-chatroom-member-card" aria-label="群管理">
         <button className="dsh-chatroom-close" aria-label="关闭群管理" type="button" onClick={props.closeMembers}>×</button>
         <h2>群管理</h2>
         <p>{props.room.room?.title} · {props.room.members.length} 位成员 · {props.room.online} 人在线</p>
+        {(viewerRole === 'owner' || viewerRole === 'admin') && <form className="dsh-chatroom-manage-title" onSubmit={(event) => {
+          event.preventDefault()
+          void props.renameRoom?.(title)
+        }}>
+          <input value={title} maxLength={160} aria-label="群聊名称" onChange={event => { setTitle(event.target.value) }} />
+          <button type="submit" disabled={props.room.managementBusy || title.trim() === '' || title.trim() === props.room.room?.title}>保存名称</button>
+        </form>}
         <div className="dsh-chatroom-member-list">
           {props.room.members.map(member => {
             const avatar = chatroomAvatar(member.avatarId, member.participantId)
             return (
               <div className="dsh-chatroom-member" key={member.participantId}>
                 <span className="dsh-chatroom-member-avatar" data-avatar={avatar.id}>{avatar.emoji}</span>
-                <span><strong>{member.displayName}</strong><small>{member.online ? '在线' : `最近活跃 ${formatRelative(member.lastSeenAt)}`}</small></span>
-                <i data-online={member.online} />
+                <span><strong>{member.displayName} <em>{member.role === 'owner' ? '群主' : member.role === 'admin' ? '管理员' : ''}</em></strong><small>{member.online ? '在线' : `最近活跃 ${formatRelative(member.lastSeenAt)}`}</small></span>
+                {viewerRole === 'owner' && member.role !== 'owner'
+                  ? <button
+                    className="dsh-chatroom-member-role"
+                    type="button"
+                    disabled={props.room.managementBusy}
+                    onClick={() => { void props.setMemberRole?.(member.participantId, member.role === 'admin' ? 'member' : 'admin') }}
+                  >{member.role === 'admin' ? '取消管理员' : '设为管理员'}</button>
+                  : <i data-online={member.online} />}
               </div>
             )
           })}
         </div>
+        {props.room.managementError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.managementError}</div>}
         <button
           className="dsh-chatroom-notification-button"
           type="button"
@@ -143,214 +154,24 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
 }
 
 function ThreadPanel(props: ChatroomPanelsProps): JSX.Element {
-  const [text, setText] = useState('')
-  const [mention, setMention] = useState<ThreadMention | undefined>()
-  const [mentionIndex, setMentionIndex] = useState(0)
-  const endRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const thread = props.room.thread!
-  const mentionCandidates = useMemo(() => {
-    const aiNames = [...new Set(['AI', props.room.room?.aiDisplayName].filter((name): name is string => name !== undefined))]
-    return [
-      ...aiNames.map(name => ({ name, description: '提及后在本分支触发 AI', ai: true })),
-      ...props.room.members
-        .filter(member => member.participantId !== props.room.identity?.participantId)
-        .map(member => ({ name: member.displayName, description: member.online ? '在线成员' : '群成员', ai: false })),
-    ].filter((candidate, index, all) => all.findIndex(item => item.name === candidate.name) === index)
-  }, [props.room.identity?.participantId, props.room.members, props.room.room?.aiDisplayName])
-  const visibleMentions = mention === undefined
-    ? []
-    : mentionCandidates.filter(candidate => candidate.name.toLocaleLowerCase().includes(mention.query.toLocaleLowerCase()))
-  useEffect(() => {
-    if (typeof endRef.current?.scrollIntoView === 'function') endRef.current.scrollIntoView({ block: 'end' })
-  }, [props.room.threadMessages.length])
-  useEffect(() => { setMentionIndex(0) }, [mention?.query])
-
-  const updateMention = (value: string, cursor: number): void => {
-    setMention(activeThreadMention(value, cursor))
-  }
-  const pickMention = (name: string): void => {
-    if (mention === undefined) return
-    const cursor = textareaRef.current?.selectionStart ?? text.length
-    const next = `${text.slice(0, mention.start)}@${name} ${text.slice(cursor)}`
-    const nextCursor = mention.start + name.length + 2
-    setText(next)
-    setMention(undefined)
-    queueMicrotask(() => {
-      textareaRef.current?.focus()
-      textareaRef.current?.setSelectionRange(nextCursor, nextCursor)
-    })
-  }
+  const parentSessionId = props.room.room?.sessionId
   return (
     <aside className="dsh-chatroom-thread-panel" data-testid="chatroom-thread-panel" aria-label="分支回复">
       <header>
-        <div><strong>分支回复</strong><small>{props.room.room?.title}</small></div>
+        <div><strong>分支回复</strong><small>{thread.root.displayName}：{thread.root.text}</small></div>
         <button aria-label="关闭分支" type="button" onClick={props.closeThread}>×</button>
       </header>
-      <div className="dsh-chatroom-thread-root">
-        <strong>{thread.root.displayName}</strong>
-        <div>{thread.root.role === 'ai'
-          ? <ChatroomMarkdown text={thread.root.text} />
-          : thread.root.text}</div>
-      </div>
-      <div className="dsh-chatroom-thread-messages">
-        {props.room.threadMessages.length === 0 && <p className="dsh-chatroom-thread-empty">从这里开始分支讨论。输入 <code>@AI</code> 只会在本分支触发 AI。</p>}
-        {props.room.threadMessages.map(message => <ThreadMessage key={message.id} message={message} props={props} />)}
-        <div ref={endRef} />
-      </div>
-      <form className="dsh-chatroom-thread-composer" onSubmit={(event) => {
-        event.preventDefault()
-        const submitted = text.trim()
-        if (submitted === '') return
-        void props.sendThreadMessage(submitted).then((sent) => { if (sent) setText('') })
-      }}>
-        {props.room.threadReply !== undefined && (
-          <div className="dsh-chatroom-thread-composer-reply">
-            <span><strong>回复 {props.room.threadReply.displayName}</strong>{props.room.threadReply.text}</span>
-            <button type="button" aria-label="取消引用" onClick={props.clearThreadReply}>×</button>
-          </div>
-        )}
-        <textarea
-          ref={textareaRef}
-          rows={3}
-          placeholder="回复分支；输入 @AI 让 AI 在本分支回答"
-          value={text}
-          aria-expanded={visibleMentions.length > 0}
-          aria-controls="dsh-chatroom-thread-mentions"
-          onChange={event => {
-            setText(event.target.value)
-            updateMention(event.target.value, event.target.selectionStart)
-          }}
-          onClick={event => { updateMention(event.currentTarget.value, event.currentTarget.selectionStart) }}
-          onKeyDown={event => {
-            if (visibleMentions.length > 0) {
-              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                event.preventDefault()
-                const direction = event.key === 'ArrowDown' ? 1 : -1
-                setMentionIndex(current => (current + direction + visibleMentions.length) % visibleMentions.length)
-                return
-              }
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                setMention(undefined)
-                return
-              }
-              if (event.key === 'Tab') {
-                event.preventDefault()
-                pickMention(visibleMentions[mentionIndex]?.name ?? visibleMentions[0]!.name)
-                return
-              }
-            }
-            if (event.key !== 'Enter' || event.shiftKey) return
-            if (visibleMentions.length > 0 && mention?.query === '') {
-              event.preventDefault()
-              pickMention(visibleMentions[mentionIndex]?.name ?? visibleMentions[0]!.name)
-              return
-            }
-            event.preventDefault()
-            event.currentTarget.form?.requestSubmit()
-          }}
-        />
-        {visibleMentions.length > 0 && <div className="dsh-chatroom-thread-mentions" id="dsh-chatroom-thread-mentions" role="listbox" aria-label="提及成员">
-          {visibleMentions.map((candidate, index) => (
-            <button
-              type="button"
-              role="option"
-              aria-label={candidate.name}
-              aria-selected={index === mentionIndex}
-              data-active={index === mentionIndex}
-              key={candidate.name}
-              onMouseDown={event => { event.preventDefault() }}
-              onClick={() => { pickMention(candidate.name) }}
-            >
-              <i>{candidate.ai ? '✦' : '●'}</i><span><strong>{candidate.name}</strong><small>{candidate.description}</small></span>
-            </button>
-          ))}
-        </div>}
-        <button type="submit" disabled={props.room.threadBusy || text.trim() === ''}>发送</button>
-      </form>
+      {parentSessionId === undefined
+        ? <div className="dsh-chatroom-thread-frame-error">无法确定父群聊会话。</div>
+        : <iframe
+          className="dsh-chatroom-thread-frame"
+          title={`分支回复：${thread.root.text}`}
+          src={branchFrameUrl(thread, parentSessionId)}
+        />}
       {props.room.threadError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.threadError}</div>}
     </aside>
   )
-}
-
-function ThreadMessage({
-  message,
-  props,
-}: {
-  message: ChatroomThreadMessage
-  props: ChatroomPanelsProps
-}): JSX.Element {
-  const own = message.participantId === props.room.identity?.participantId
-  const avatarId = message.avatarId ?? fallbackAvatarId(message.participantId)
-  const avatar = message.role === 'ai' ? { id: 'ai', emoji: '✦' } : chatroomAvatar(avatarId, message.participantId)
-  const target = threadMessageTarget(message)
-  const onReply = props.room.identity === undefined ? undefined : () => { props.setThreadReply(target) }
-  const tools: ChatroomMessageToolsProps = {
-    roomId: props.room.thread!.roomId,
-    message: { ...target, role: message.role, createdAt: message.createdAt },
-    reactions: props.room.reactions,
-    identity: props.room.identity,
-    selecting: props.room.selectionRoomId === props.room.thread!.roomId,
-    selected: props.room.selectionRoomId === props.room.thread!.roomId
-      && props.room.selectedMessages.some(item => item.messageId === message.id),
-    copyText: message.text,
-    onReply,
-    toggleReaction: props.toggleReaction,
-    openForward: props.openForward,
-    toggleSelection: props.toggleMessageSelection,
-  }
-  const menu = useChatroomMessageMenu()
-  return (
-    <article
-      className="dsh-chatroom-thread-message"
-      data-own={own}
-      data-role={message.role}
-      data-dsh-chatroom-selection-mode={tools.selecting || undefined}
-      data-dsh-chatroom-selected={tools.selected || undefined}
-      onContextMenu={menu.open}
-    >
-      <ChatroomSelectionCheckbox tools={tools} />
-      <span className="dsh-chatroom-member-avatar" data-avatar={avatar.id}>{avatar.emoji}</span>
-      <div className="dsh-chatroom-thread-message-column">
-        <strong>{message.displayName}<time>{formatTime(message.createdAt)}</time></strong>
-        {message.reply !== undefined && (
-          <div className="dsh-chatroom-thread-reply-quote">
-            <strong>回复 {message.reply.displayName}</strong>
-            <span>{message.reply.text}</span>
-          </div>
-        )}
-        <div className="dsh-chatroom-thread-message-body">
-          {message.role === 'ai'
-            ? <ChatroomMarkdown text={message.text} />
-            : <div className="dsh-chatroom-thread-literal-text">{message.text}</div>}
-        </div>
-        <ChatroomReactionBar {...tools} />
-        <ChatroomInlineMessageActions tools={tools} />
-      </div>
-      <ChatroomMessageContextMenu tools={tools} position={menu.position} close={menu.close} />
-    </article>
-  )
-}
-
-function threadMessageTarget(message: ChatroomThreadMessage): ChatroomReplyReference {
-  return {
-    messageId: message.id,
-    displayName: message.displayName,
-    text: [...message.text.trim().replace(/\s+/gu, ' ')].slice(0, 120).join(''),
-  }
-}
-
-interface ThreadMention {
-  readonly start: number
-  readonly query: string
-}
-
-function activeThreadMention(text: string, cursor: number): ThreadMention | undefined {
-  const prefix = text.slice(0, cursor)
-  const match = /(?:^|\s)@([^\s@]*)$/u.exec(prefix)
-  if (match === null) return undefined
-  return { start: prefix.length - match[1]!.length - 1, query: match[1]! }
 }
 
 function formatRelative(time: number): string {
@@ -359,8 +180,4 @@ function formatRelative(time: number): string {
   if (minutes < 60) return `${minutes} 分钟前`
   if (minutes < 1_440) return `${Math.floor(minutes / 60)} 小时前`
   return `${Math.floor(minutes / 1_440)} 天前`
-}
-
-function formatTime(time: number): string {
-  return new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatroomReplyReference } from '../types.js'
-import type { ChatroomClientStore, ChatroomView } from './store.js'
+import type { ChatroomAgentTarget, ChatroomClientStore, ChatroomView } from './store.js'
 
 interface ChatroomComposerInjected {
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
@@ -9,6 +9,7 @@ interface ChatroomComposerInjected {
   removeFile(roomId: string, fileId: string): void
   clearReply(roomId: string): void
   sendFiles(roomId: string): Promise<void>
+  resolveTarget(sessionId: string): ChatroomAgentTarget | undefined
 }
 
 type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomComposerInjected
@@ -19,7 +20,8 @@ const MESSAGE_EMOJIS = ['😀', '😄', '😂', '🥰', '😍', '🤔', '😮', 
 /** Small file chooser inside the native composer tool row. */
 export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
   const room = props.useChatroom(snapshot => snapshot)
-  const active = room.rooms.find(candidate => candidate.sessionId === String(props.sessionId))
+  const target = props.resolveTarget(String(props.sessionId))
+  const active = target?.room
   const input = useRef<HTMLInputElement>(null)
   const root = useRef<HTMLDivElement>(null)
   const [emojiOpen, setEmojiOpen] = useState(false)
@@ -89,7 +91,8 @@ export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
 /** Reply quote and pending file rail above the native composer. */
 export function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | null {
   const room = props.useChatroom(snapshot => snapshot)
-  const active = room.rooms.find(candidate => candidate.sessionId === String(props.sessionId))
+  const target = props.resolveTarget(String(props.sessionId))
+  const active = target?.room
   if (active === undefined || room.composerRoomId !== active.id) return null
   const hasFiles = room.pendingFiles.length > 0
   if (!hasFiles && room.reply === undefined && room.composerError === undefined) return null

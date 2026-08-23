@@ -47,6 +47,8 @@ export interface RoomRecord {
   readonly sessionId: string
   readonly createdAt: number
   readonly createdBy: string
+  readonly ownerParticipantId?: string
+  readonly adminParticipantIds?: readonly string[]
 }
 
 export interface MemberRecord {
@@ -76,6 +78,13 @@ export interface ThreadMessageRecord {
   readonly displayName: string
   readonly avatarId?: ChatroomAvatarId
   readonly text: string
+  readonly files?: readonly {
+    readonly id: string
+    readonly name: string
+    readonly mediaType: string
+    readonly bytes: number
+  }[]
+  readonly hasImages?: boolean
   readonly reply?: ChatroomReplyReference
   readonly createdAt: number
 }
@@ -130,6 +139,8 @@ const roomSchema = z.object({
   sessionId: z.string().min(1),
   createdAt: nonNegativeSafeInteger,
   createdBy: z.string().min(1),
+  ownerParticipantId: z.string().min(1).optional(),
+  adminParticipantIds: z.array(z.string().min(1)).optional(),
 }) as z.ZodType<RoomRecord>
 
 const memberSchema = z.object({
@@ -175,6 +186,13 @@ const threadMessageSchema = z.object({
   displayName: z.string().min(1),
   avatarId: z.string().refine(isChatroomAvatarId).optional(),
   text: z.string().min(1),
+  files: z.array(z.object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    mediaType: z.string().min(1),
+    bytes: nonNegativeSafeInteger,
+  })).optional(),
+  hasImages: z.boolean().optional(),
   reply: replySchema.optional(),
   createdAt: nonNegativeSafeInteger,
 }) as z.ZodType<ThreadMessageRecord>
