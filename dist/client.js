@@ -403,6 +403,10 @@ ${e.slice(l,u)}`,l=Q(e,u);else if(_r(e,l,u)){var d=Q(e,u);if(d<r&&(gr(e,d,dr(e,d
   display: none !important;
 }
 
+.dsh-chatroom-native-message [data-ref-chip][title^="@"] {
+  gap: 0 !important;
+}
+
 .dsh-chatroom-native-message [data-ref-chip][title^="@"]::before {
   content: "@";
 }

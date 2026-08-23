@@ -119,6 +119,7 @@ describe('native branch frame isolation', () => {
     expect(CHATROOM_STYLES).toContain(
       '.dsh-chatroom-native-message [data-ref-chip][title^="@"] > svg',
     )
+    expect(CHATROOM_STYLES).toContain('gap: 0 !important;')
     expect(CHATROOM_STYLES).toContain('content: "@";')
   })
 })

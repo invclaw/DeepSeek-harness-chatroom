@@ -353,6 +353,10 @@ export const CHATROOM_STYLES = `
   display: none !important;
 }
 
+.dsh-chatroom-native-message [data-ref-chip][title^="@"] {
+  gap: 0 !important;
+}
+
 .dsh-chatroom-native-message [data-ref-chip][title^="@"]::before {
   content: "@";
 }
