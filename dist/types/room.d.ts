@@ -25,6 +25,7 @@ export declare class ChatroomRuntime {
     private directMessages;
     private authentication;
     private readonly states;
+    private readonly sessionRoomCreations;
     private readonly threadStates;
     private readonly notificationClients;
     private ready;
@@ -61,6 +62,9 @@ export declare class ChatroomRuntime {
     deleteIdentity(token: string | undefined): Promise<void>;
     /** Create and activate one independent shared Harness Session. */
     createRoom(title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
+    /** Adopt one native Harness Session as a shared room, once, across concurrent browsers. */
+    ensureSessionRoom(sessionId: string, title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
+    private createSessionRoom;
     /** Activate an existing room and return its public metadata. */
     selectRoom(roomId: string, identity?: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Rename one room as its owner or an administrator. */

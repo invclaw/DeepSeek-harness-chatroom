@@ -122,6 +122,7 @@ export class ChatroomRuntime {
   private directMessages: KvTable<string, DirectMessageRecord> | undefined
   private authentication: ChatroomAuth | undefined
   private readonly states = new Map<string, RoomState>()
+  private readonly sessionRoomCreations = new Map<string, Promise<ChatroomInfo>>()
   private readonly threadStates = new Map<string, ThreadState>()
   private readonly notificationClients = new Set<NotificationClient>()
   private ready = false
@@ -334,6 +335,71 @@ export class ChatroomRuntime {
     try {
       const binding = await this.ensureRoom(id)
       this.ensureRoomVisible(binding, record.title)
+      await this.touchMember(id, identity)
+      return publicRoom(record)
+    } catch (error) {
+      this.states.delete(id)
+      await this.requireRoomRecords().delete(id)
+      throw error
+    }
+  }
+
+  /** Adopt one native Harness Session as a shared room, once, across concurrent browsers. */
+  async ensureSessionRoom(
+    sessionId: string,
+    title: string,
+    identity: ChatroomIdentity,
+  ): Promise<ChatroomInfo> {
+    this.assertReady()
+    const existing = [...this.states.values()].find(state => state.record.sessionId === sessionId)
+    if (existing !== undefined) {
+      await this.touchMember(existing.record.id, identity)
+      return publicRoom(existing.record)
+    }
+    const pending = this.sessionRoomCreations.get(sessionId)
+    if (pending !== undefined) {
+      const room = await pending
+      await this.touchMember(room.id, identity)
+      return room
+    }
+    const creation = this.createSessionRoom(sessionId, title, identity)
+    this.sessionRoomCreations.set(sessionId, creation)
+    try {
+      return await creation
+    } finally {
+      this.sessionRoomCreations.delete(sessionId)
+    }
+  }
+
+  private async createSessionRoom(
+    sessionId: string,
+    title: string,
+    identity: ChatroomIdentity,
+  ): Promise<ChatroomInfo> {
+    const normalizedSessionId = String(SessionId(sessionId))
+    if ([...this.threadStates.values()].some(state => state.record.sessionId === normalizedSessionId)) {
+      throw new ChatroomInputError('分支会话不能单独转换为群聊。')
+    }
+    const live = this.ctx.agents.get(SessionId(normalizedSessionId))
+    const persisted = live !== undefined || (await this.ctx.sessionPersistence.list())
+      .some(header => String(header.id) === normalizedSessionId)
+    if (!persisted) throw new ChatroomInputError('Harness 会话不存在或尚未就绪。')
+    const id = `session-${createHash('sha256').update(normalizedSessionId).digest('base64url').slice(0, 24)}`
+    const record: RoomRecord = {
+      id,
+      title: normalizeRoomTitle(title, this.config.maxRoomTitleChars),
+      aiDisplayName: this.config.aiDisplayName,
+      sessionId: normalizedSessionId,
+      createdAt: Date.now(),
+      createdBy: identity.participantId,
+      ownerParticipantId: identity.participantId,
+      adminParticipantIds: [],
+    }
+    await this.requireRoomRecords().put(id, record)
+    const state = newRoomState(record)
+    this.states.set(id, state)
+    try {
+      await this.ensureRoom(id)
       await this.touchMember(id, identity)
       return publicRoom(record)
     } catch (error) {

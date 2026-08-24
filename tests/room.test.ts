@@ -49,6 +49,35 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
+  it('adopts one native Harness Session as one shared room across concurrent browsers', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    harness.agents.push({
+      id: 'native-session-1',
+      options: { provider: 'deepseek', model: 'chat' },
+      session: { events: [], append: vi.fn() },
+      followup: vi.fn(),
+      steer: vi.fn(),
+    } as never)
+    vi.mocked(harness.ctx.agents.get).mockImplementation(id =>
+      harness.agents.find(agent => String(agent.id) === String(id)))
+    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const bob = { participantId: 'bob-id', displayName: 'Bob', avatarId: 'panda' as const }
+
+    const [first, second] = await Promise.all([
+      runtime.ensureSessionRoom('native-session-1', '新会话', alice),
+      runtime.ensureSessionRoom('native-session-1', '新会话', bob),
+    ])
+
+    expect(second).toEqual(first)
+    expect(first).toMatchObject({ sessionId: 'native-session-1', title: '新会话' })
+    expect(runtime.rooms).toHaveLength(2)
+    expect(runtime.membersForRoom(first.id)).toHaveLength(2)
+    expect(harness.agents).toHaveLength(2)
+    await runtime.stop()
+  })
+
   it('lets owners promote administrators and lets both roles rename the room', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())

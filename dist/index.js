@@ -148,7 +148,7 @@ var ChatroomAuth = class {
   async start(now = Date.now()) {
     const existingSettings = this.settingsTable.get("auth");
     const loginProviders = this.providers();
-    const inferredProviderId = loginProviders.length === 1 ? loginProviders[0].id : void 0;
+    const inferredProviderId = loginProviders.find((provider) => provider.type === "dsh-auth")?.id ?? (loginProviders.length === 1 ? loginProviders[0].id : void 0);
     if (existingSettings === void 0) {
       await this.settingsTable.put("auth", {
         allowSelfRegistration: this.config.authAllowSelfRegistration,
@@ -1285,6 +1285,7 @@ var ChatroomRuntime = class {
   directMessages;
   authentication;
   states = /* @__PURE__ */ new Map();
+  sessionRoomCreations = /* @__PURE__ */ new Map();
   threadStates = /* @__PURE__ */ new Map();
   notificationClients = /* @__PURE__ */ new Set();
   ready = false;
@@ -1474,6 +1475,60 @@ var ChatroomRuntime = class {
     try {
       const binding = await this.ensureRoom(id);
       this.ensureRoomVisible(binding, record.title);
+      await this.touchMember(id, identity);
+      return publicRoom(record);
+    } catch (error) {
+      this.states.delete(id);
+      await this.requireRoomRecords().delete(id);
+      throw error;
+    }
+  }
+  /** Adopt one native Harness Session as a shared room, once, across concurrent browsers. */
+  async ensureSessionRoom(sessionId, title, identity) {
+    this.assertReady();
+    const existing = [...this.states.values()].find((state) => state.record.sessionId === sessionId);
+    if (existing !== void 0) {
+      await this.touchMember(existing.record.id, identity);
+      return publicRoom(existing.record);
+    }
+    const pending = this.sessionRoomCreations.get(sessionId);
+    if (pending !== void 0) {
+      const room = await pending;
+      await this.touchMember(room.id, identity);
+      return room;
+    }
+    const creation = this.createSessionRoom(sessionId, title, identity);
+    this.sessionRoomCreations.set(sessionId, creation);
+    try {
+      return await creation;
+    } finally {
+      this.sessionRoomCreations.delete(sessionId);
+    }
+  }
+  async createSessionRoom(sessionId, title, identity) {
+    const normalizedSessionId = String(SessionId(sessionId));
+    if ([...this.threadStates.values()].some((state2) => state2.record.sessionId === normalizedSessionId)) {
+      throw new ChatroomInputError("\u5206\u652F\u4F1A\u8BDD\u4E0D\u80FD\u5355\u72EC\u8F6C\u6362\u4E3A\u7FA4\u804A\u3002");
+    }
+    const live = this.ctx.agents.get(SessionId(normalizedSessionId));
+    const persisted = live !== void 0 || (await this.ctx.sessionPersistence.list()).some((header) => String(header.id) === normalizedSessionId);
+    if (!persisted) throw new ChatroomInputError("Harness \u4F1A\u8BDD\u4E0D\u5B58\u5728\u6216\u5C1A\u672A\u5C31\u7EEA\u3002");
+    const id = `session-${createHash2("sha256").update(normalizedSessionId).digest("base64url").slice(0, 24)}`;
+    const record = {
+      id,
+      title: normalizeRoomTitle(title, this.config.maxRoomTitleChars),
+      aiDisplayName: this.config.aiDisplayName,
+      sessionId: normalizedSessionId,
+      createdAt: Date.now(),
+      createdBy: identity.participantId,
+      ownerParticipantId: identity.participantId,
+      adminParticipantIds: []
+    };
+    await this.requireRoomRecords().put(id, record);
+    const state = newRoomState(record);
+    this.states.set(id, state);
+    try {
+      await this.ensureRoom(id);
       await this.touchMember(id, identity);
       return publicRoom(record);
     } catch (error) {
@@ -2770,6 +2825,10 @@ var ChatroomHttpController = class {
         await this.handleRooms(request, response);
         return;
       }
+      if (route.endpoint === "/rooms/ensure") {
+        await this.handleRoomEnsure(request, response);
+        return;
+      }
       if (route.endpoint === "/rooms/select") {
         await this.handleRoomSelection(request, response);
         return;
@@ -3168,6 +3227,22 @@ var ChatroomHttpController = class {
     const body = await readJson(request, smallRequestLimit(this.config));
     const room = await this.runtime.createRoom(fieldString(body, "title"), identity);
     json(response, 201, { room });
+  }
+  async handleRoomEnsure(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const body = await readJson(request, smallRequestLimit(this.config));
+    const room = await this.runtime.ensureSessionRoom(
+      fieldString(body, "sessionId"),
+      fieldString(body, "title"),
+      identity
+    );
+    json(response, 200, { room });
   }
   async handleRoomSelection(request, response) {
     if (request.method !== "POST") {

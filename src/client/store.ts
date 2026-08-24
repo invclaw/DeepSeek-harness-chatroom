@@ -184,6 +184,8 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private compositionRevision = 0
   private pendingFileSequence = 0
   private originalTitle: string | undefined
+  private activeNativeSession: { readonly id: string; readonly title: string; readonly shareable: boolean } | undefined
+  private roomEnsure: { readonly sessionId: string; readonly promise: Promise<void> } | undefined
 
   constructor(
     private readonly openSession: (sessionId: string) => boolean = () => false,
@@ -550,8 +552,13 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.set({ open: false, error: undefined })
   }
 
-  /** Track native navigation so presence follows the room currently on screen. */
-  activateSession = (sessionId: string | undefined): void => {
+  /** Track native navigation and adopt ordinary Harness Sessions as shared rooms. */
+  activateSession = (
+    sessionId: string | undefined,
+    title = '新会话',
+    shareable = true,
+  ): void => {
+    this.activeNativeSession = sessionId === undefined ? undefined : { id: sessionId, title, shareable }
     const room = sessionId === undefined ? undefined : this.roomForSession(sessionId)
     if (room === undefined) {
       this.closeEvents()
@@ -572,6 +579,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         selectedMessages: [],
         forwardOpen: false,
       })
+      if (sessionId !== undefined && shareable) void this.ensureActiveSessionRoom()
       return
     }
     this.updateActiveDocumentRoom(true)
@@ -617,6 +625,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         : session.rooms.find(room => room.id === activeRoom.id)
       this.set({
         phase: 'ready',
+        open: false,
         rooms: session.rooms,
         room: resolvedRoom,
         identity: session.identity,
@@ -625,6 +634,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         error: undefined,
       })
       this.openNotifications()
+      void this.ensureActiveSessionRoom()
     } catch (error) {
       this.set({ phase: 'identity-required', error: errorMessage(error) })
     }
@@ -962,6 +972,37 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       error: undefined,
     })
     this.openNotifications()
+    void this.ensureActiveSessionRoom()
+  }
+
+  private async ensureActiveSessionRoom(): Promise<void> {
+    const active = this.activeNativeSession
+    if (active === undefined || !active.shareable
+      || this.snapshot.phase !== 'ready' || this.snapshot.identity === undefined
+      || this.roomForSession(active.id) !== undefined) return
+    if (this.roomEnsure?.sessionId === active.id) return await this.roomEnsure.promise
+    const promise = (async () => {
+      try {
+        const response = await requestJson<ChatroomRoomResponse>(`${CHATROOM_API_PREFIX}/rooms/ensure`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: active.id, title: active.title }),
+        })
+        const rooms = this.snapshot.rooms.some(room => room.id === response.room.id)
+          ? this.snapshot.rooms.map(room => room.id === response.room.id ? response.room : room)
+          : [...this.snapshot.rooms, response.room]
+        this.set({ rooms, error: undefined })
+        if (this.activeNativeSession?.id === active.id) this.activateSession(active.id, active.title, active.shareable)
+      } catch (error) {
+        if (this.activeNativeSession?.id === active.id) this.set({ error: errorMessage(error) })
+      }
+    })()
+    this.roomEnsure = { sessionId: active.id, promise }
+    try {
+      await promise
+    } finally {
+      if (this.roomEnsure?.promise === promise) this.roomEnsure = undefined
+    }
   }
 
   private selectAndOpen(room: ChatroomInfo): void {
@@ -1024,6 +1065,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         this.closeEvents()
         this.set({
           phase: 'identity-required',
+          open: true,
           connection: 'offline',
           rooms: session.rooms,
           room: undefined,
@@ -1043,6 +1085,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         error: undefined,
       })
       this.openNotifications()
+      void this.ensureActiveSessionRoom()
     } catch (error) {
       if (!this.stopped) this.set({ phase: 'error', connection: 'offline', error: errorMessage(error) })
     }

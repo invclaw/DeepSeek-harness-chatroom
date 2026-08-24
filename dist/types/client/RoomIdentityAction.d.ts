@@ -2,7 +2,6 @@ import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client';
 import type { ChatroomView } from './store.js';
 interface RoomIdentityActionInjected {
     useChatroom<T>(selector: (snapshot: ChatroomView) => T): T;
-    openRoom(): void;
     openMembers(): void;
 }
 type RoomIdentityActionProps = {

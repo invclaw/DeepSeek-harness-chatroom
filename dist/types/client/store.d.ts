@@ -95,6 +95,8 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private compositionRevision;
     private pendingFileSequence;
     private originalTitle;
+    private activeNativeSession;
+    private roomEnsure;
     constructor(openSession?: (sessionId: string) => boolean, branchFrame?: ChatroomBranchFrame);
     /** Current immutable room projection. */
     getSnapshot: () => ChatroomView;
@@ -180,8 +182,8 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     closeRoom: () => void;
     /** Retry pending native navigation when the Host Session list changes. */
     resumeOpen: () => void;
-    /** Track native navigation so presence follows the room currently on screen. */
-    activateSession: (sessionId: string | undefined) => void;
+    /** Track native navigation and adopt ordinary Harness Sessions as shared rooms. */
+    activateSession: (sessionId: string | undefined, title?: string, shareable?: boolean) => void;
     /** Create the persistent browser identity, then show the room directory. */
     join: (displayName: string, avatarId: string) => Promise<void>;
     /** Add browser files to the next submission in one shared room. */
@@ -234,6 +236,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     retry: () => Promise<void>;
     private adminMutation;
     private acceptSession;
+    private ensureActiveSessionRoom;
     private selectAndOpen;
     private compositionFor;
     private loadSession;

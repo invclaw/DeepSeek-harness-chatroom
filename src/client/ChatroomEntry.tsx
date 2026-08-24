@@ -53,22 +53,14 @@ interface ChatroomEntryInjected {
 
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected
 
-/** Additive shared-session launcher, identity setup, and room directory. */
+/** Authentication and first-identity overlays plus persistent chatroom panels. */
 export function ChatroomEntry(props: ChatroomEntryProps): JSX.Element | null {
   const room = props.useChatroom(snapshot => snapshot)
   if (room.branchFrame !== undefined) return null
   const panels = <ChatroomPanels room={room} {...props} />
 
   if (!room.open) {
-    return (
-      <>
-        <button className="dsh-chatroom-launcher" data-dsh-chatroom-entry type="button" onClick={props.openRoom}>
-          ◉ 共享会话
-          {room.unreadCount > 0 && <span className="dsh-chatroom-unread">{Math.min(room.unreadCount, 99)}</span>}
-        </button>
-        {panels}
-      </>
-    )
+    return panels
   }
 
   return (

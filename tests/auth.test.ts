@@ -13,6 +13,15 @@ import type {
 } from '../src/domain.js'
 
 describe('ChatroomAuth', () => {
+  it('prefers dsh-auth as the initial login provider when it is installed', async () => {
+    const fixture = createAuth({ authDshAuthVerifyUrl: 'http://127.0.0.1:3080/auth/verify' })
+
+    await fixture.auth.start()
+
+    expect(fixture.auth.state().autoRedirectProvider).toMatchObject({ id: 'dsh-auth', type: 'dsh-auth' })
+    expect(fixture.settings.get('auth')?.autoRedirectProviderId).toBe('dsh-auth')
+  })
+
   it('bootstraps one super administrator and enforces registration and final-admin policy', async () => {
     const fixture = createAuth()
     await fixture.auth.start()

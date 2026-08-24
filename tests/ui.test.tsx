@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChatroomEntry } from '../src/client/ChatroomEntry.js'
+import { ChatroomSettingsSection } from '../src/client/ChatroomAccountPanels.js'
 import { RoomIdentityAction } from '../src/client/RoomIdentityAction.js'
 import { BRANCH_FRAME_READY, markBranchFrameSessionReady } from '../src/client/branch-frame.js'
 import type { ChatroomView } from '../src/client/store.js'
@@ -10,9 +11,9 @@ import type { ChatroomView } from '../src/client/store.js'
 afterEach(cleanup)
 
 describe('native chatroom integration', () => {
-  it('shows an additive shared-session launcher', () => {
+  it('does not add a floating shared-session launcher', () => {
     renderEntry(view({ open: false }))
-    expect(screen.getByText('◉ 共享会话')).toBeTruthy()
+    expect(screen.queryByText('◉ 共享会话')).toBeNull()
     expect(screen.queryByTestId('chatroom-dialog')).toBeNull()
   })
 
@@ -67,7 +68,7 @@ describe('native chatroom integration', () => {
       participantId: 'alice-id', username: 'alice', displayName: 'Alice', avatarId: 'whale' as const,
       role: 'super-admin' as const, status: 'active' as const, createdAt: 1,
     }
-    renderEntry(view({
+    const accountView = view({
       auth: {
         enabled: true, authenticated: true, account: owner, providers: [],
         allowSelfRegistration: true, bootstrapRequired: false,
@@ -92,8 +93,10 @@ describe('native chatroom integration', () => {
       directMessages: [{
         id: 'message-1', conversationId: 'direct-1', sequence: 1, senderId: 'bob-id', text: '私聊内容', createdAt: 2,
       }],
-    }), { adminUpdateUser, adminSetAutoRedirectProvider, sendDirect })
-    expect(screen.getByTestId('chatroom-admin')).toBeTruthy()
+    })
+    renderEntry(accountView, { adminUpdateUser, adminSetAutoRedirectProvider, sendDirect })
+    renderSettings(accountView, { adminUpdateUser, adminSetAutoRedirectProvider, sendDirect })
+    expect(screen.getByTestId('chatroom-settings')).toBeTruthy()
     expect(screen.getByText('@alice')).toBeTruthy()
     const entry = screen.getByLabelText('未登录用户入口') as HTMLSelectElement
     expect(entry.value).toBe('company')
@@ -127,7 +130,6 @@ describe('native chatroom integration', () => {
     const { rerender } = render(<RoomIdentityAction
       sessionId={'chatroom-v1-lobby' as never}
       useChatroom={selector => selector(room)}
-      openRoom={vi.fn()}
       openMembers={vi.fn()}
     />)
     expect(screen.getByText('Alice · 2 人在线')).toBeTruthy()
@@ -135,23 +137,21 @@ describe('native chatroom integration', () => {
     rerender(<RoomIdentityAction
       sessionId={'another-session' as never}
       useChatroom={selector => selector(room)}
-      openRoom={vi.fn()}
       openMembers={vi.fn()}
     />)
     expect(screen.queryByText('Alice · 2 人在线')).toBeNull()
   })
 
-  it('opens the room chooser from a shared Session header', () => {
-    const openRoom = vi.fn()
+  it('opens group management from a shared Session header', () => {
+    const openMembers = vi.fn()
     const room = view()
     render(<RoomIdentityAction
       sessionId={'chatroom-v1-lobby' as never}
       useChatroom={selector => selector(room)}
-      openRoom={openRoom}
-      openMembers={vi.fn()}
+      openMembers={openMembers}
     />)
-    fireEvent.click(screen.getByTitle('切换共享会话'))
-    expect(openRoom).toHaveBeenCalledOnce()
+    fireEvent.click(screen.getByRole('button', { name: '群管理' }))
+    expect(openMembers).toHaveBeenCalledOnce()
   })
 
   it('renders room management, unread alerts, and an isolated native branch frame', () => {
@@ -335,6 +335,31 @@ function renderEntry(
   overrides: Partial<Parameters<typeof ChatroomEntry>[0]> = {},
 ): ReturnType<typeof render> {
   return render(entry(room, overrides))
+}
+
+function renderSettings(
+  room: ChatroomView,
+  overrides: Record<string, unknown> = {},
+): ReturnType<typeof render> {
+  const props = {
+    close: vi.fn(),
+    useChatroom: (selector: (snapshot: ChatroomView) => unknown) => selector(room),
+    closeAccount: vi.fn(),
+    changePassword: vi.fn(async () => true),
+    openAdmin: vi.fn(async () => undefined),
+    closeAdmin: vi.fn(),
+    adminCreateUser: vi.fn(async () => true),
+    adminUpdateUser: vi.fn(async () => true),
+    adminSetSelfRegistration: vi.fn(async () => true),
+    adminSetAutoRedirectProvider: vi.fn(async () => true),
+    adminSaveProvider: vi.fn(async () => true),
+    adminDeleteProvider: vi.fn(async () => true),
+    openDirect: vi.fn(async () => undefined),
+    closeDirect: vi.fn(),
+    sendDirect: vi.fn(async () => true),
+    ...overrides,
+  } as unknown as Parameters<typeof ChatroomSettingsSection>[0]
+  return render(<ChatroomSettingsSection {...props} />)
 }
 
 function entry(

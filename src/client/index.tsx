@@ -8,6 +8,7 @@ import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { ChatroomEntry } from './ChatroomEntry.js'
+import { ChatroomSettingsSection } from './ChatroomAccountPanels.js'
 import { ChatroomAssistantReplyAction } from './ChatroomAssistantReplyAction.js'
 import { ChatroomComposerDock, ChatroomFileAction } from './ChatroomComposer.js'
 import {
@@ -99,11 +100,22 @@ export function apply(ctx: ClientContext): void {
     const syncSession = () => {
       stageBranch()
       store.resumeOpen()
-      const current = sessions.list.getSnapshot().current
-      store.activateSession(current === undefined ? undefined : String(current))
+      const list = sessions.list.getSnapshot()
+      const current = list.current
+      const summary = current === undefined ? undefined : list.byId[current]
+      store.activateSession(
+        current === undefined ? undefined : String(current),
+        summary?.displayTitle ?? '新会话',
+        branchFrame === undefined && summary?.origin !== 'subagent',
+      )
     }
     const unsubscribeSessions = sessions.list.subscribe(syncSession)
-    void store.start().then(syncSession)
+    void store.start().then(async () => {
+      syncSession()
+      if (typeof location === 'undefined') return
+      const invitedRoomId = new URLSearchParams(location.search).get('dsh-chatroom-room')
+      if (invitedRoomId !== null && invitedRoomId !== '') await store.selectRoom(invitedRoomId)
+    })
     return () => {
       unsubscribeSessions()
       globalThis.removeEventListener('message', receiveBranchSwitch)
@@ -171,13 +183,35 @@ export function apply(ctx: ClientContext): void {
     }),
   }, ChatroomEntry))
 
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'chatroom',
+    order: 30,
+    label: () => '群聊与账号',
+    inject: () => ({
+      hooks: { chatroom: store },
+      closeAccount: store.closeAccount,
+      changePassword: store.changePassword,
+      openAdmin: store.openAdmin,
+      closeAdmin: store.closeAdmin,
+      adminCreateUser: store.adminCreateUser,
+      adminUpdateUser: store.adminUpdateUser,
+      adminSetSelfRegistration: store.adminSetSelfRegistration,
+      adminSetAutoRedirectProvider: store.adminSetAutoRedirectProvider,
+      adminSaveProvider: store.adminSaveProvider,
+      adminDeleteProvider: store.adminDeleteProvider,
+      openDirect: store.openDirect,
+      closeDirect: store.closeDirect,
+      sendDirect: store.sendDirect,
+    }),
+  }, ChatroomSettingsSection))
+
   ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
     name: 'conversation.session.header.actions',
     id: 'chatroom-identity',
     order: -5,
     inject: () => ({
       hooks: { chatroom: store },
-      openRoom: store.openRoom,
       openMembers: store.openMembers,
     }),
   }, RoomIdentityAction))

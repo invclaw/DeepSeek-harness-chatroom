@@ -84,6 +84,10 @@ export class ChatroomHttpController {
         await this.handleRooms(request, response)
         return
       }
+      if (route.endpoint === '/rooms/ensure') {
+        await this.handleRoomEnsure(request, response)
+        return
+      }
       if (route.endpoint === '/rooms/select') {
         await this.handleRoomSelection(request, response)
         return
@@ -501,6 +505,23 @@ export class ChatroomHttpController {
     const body = await readJson(request, smallRequestLimit(this.config))
     const room = await this.runtime.createRoom(fieldString(body, 'title'), identity)
     json(response, 201, { room } satisfies ChatroomRoomResponse)
+  }
+
+  private async handleRoomEnsure(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, smallRequestLimit(this.config))
+    const room = await this.runtime.ensureSessionRoom(
+      fieldString(body, 'sessionId'),
+      fieldString(body, 'title'),
+      identity,
+    )
+    json(response, 200, { room } satisfies ChatroomRoomResponse)
   }
 
   private async handleRoomSelection(request: IncomingMessage, response: ServerResponse): Promise<void> {

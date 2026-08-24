@@ -116,7 +116,8 @@ export class ChatroomAuth {
   async start(now = Date.now()): Promise<void> {
     const existingSettings = this.settingsTable.get('auth')
     const loginProviders = this.providers()
-    const inferredProviderId = loginProviders.length === 1 ? loginProviders[0]!.id : undefined
+    const inferredProviderId = loginProviders.find(provider => provider.type === 'dsh-auth')?.id
+      ?? (loginProviders.length === 1 ? loginProviders[0]!.id : undefined)
     if (existingSettings === undefined) {
       await this.settingsTable.put('auth', {
         allowSelfRegistration: this.config.authAllowSelfRegistration,

@@ -126,14 +126,26 @@ function ToastStack({
 
 function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
   const [title, setTitle] = useState(props.room.room?.title ?? '')
+  const [inviteCopied, setInviteCopied] = useState(false)
   const viewerRole = props.room.members.find(member =>
     member.participantId === props.room.identity?.participantId)?.role ?? 'member'
   return (
-    <div className="dsh-chatroom-dialog-layer dsh-chatroom-member-layer" data-testid="chatroom-members">
-      <section className="dsh-chatroom-card dsh-chatroom-member-card" aria-label="群管理">
+      <aside className="dsh-chatroom-member-card" data-testid="chatroom-members" aria-label="群管理">
         <button className="dsh-chatroom-close" aria-label="关闭群管理" type="button" onClick={props.closeMembers}>×</button>
         <h2>群管理</h2>
         <p>{props.room.room?.title} · {props.room.members.length} 位成员 · {props.room.online} 人在线</p>
+        <section className="dsh-chatroom-invite">
+          <div><strong>邀请成员</strong><small>复制链接后，对方登录即可进入这个群聊。</small></div>
+          <button type="button" onClick={async () => {
+            const roomId = props.room.room?.id
+            if (roomId === undefined || typeof location === 'undefined') return
+            const url = new URL(location.href)
+            url.searchParams.set('dsh-chatroom-room', roomId)
+            await navigator.clipboard.writeText(url.href)
+            setInviteCopied(true)
+            globalThis.setTimeout(() => { setInviteCopied(false) }, 2_000)
+          }}>{inviteCopied ? '已复制' : '复制邀请链接'}</button>
+        </section>
         {(viewerRole === 'owner' || viewerRole === 'admin') && <form className="dsh-chatroom-manage-title" onSubmit={(event) => {
           event.preventDefault()
           void props.renameRoom?.(title)
@@ -169,8 +181,7 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
         >
           {props.room.notificationsEnabled ? '✓ 系统消息提醒已开启' : '开启系统消息提醒'}
         </button>
-      </section>
-    </div>
+      </aside>
   )
 }
 

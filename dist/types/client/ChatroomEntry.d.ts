@@ -71,7 +71,7 @@ interface ChatroomEntryInjected {
     sendDirect(text: string): Promise<boolean>;
 }
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected;
-/** Additive shared-session launcher, identity setup, and room directory. */
+/** Authentication and first-identity overlays plus persistent chatroom panels. */
 export declare function ChatroomEntry(props: ChatroomEntryProps): JSX.Element | null;
 export type { ChatroomClientStore };
 //# sourceMappingURL=ChatroomEntry.d.ts.map

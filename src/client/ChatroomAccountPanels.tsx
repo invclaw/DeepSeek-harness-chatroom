@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { CHATROOM_AVATARS, chatroomAvatar, type ChatroomAvatarId } from '../avatars.js'
 import type { ChatroomView } from './store.js'
 
@@ -7,6 +8,7 @@ export interface ChatroomAccountPanelProps {
   closeAccount(): void
   changePassword(currentPassword: string, newPassword: string): Promise<boolean>
   closeAdmin(): void
+  openAdmin(): Promise<void>
   adminCreateUser(input: { username: string; password: string; displayName: string; avatarId: string; role: 'super-admin' | 'admin' | 'member' }): Promise<boolean>
   adminUpdateUser(userId: string, patch: { role?: 'super-admin' | 'admin' | 'member'; status?: 'active' | 'disabled' }): Promise<boolean>
   adminSetSelfRegistration(value: boolean): Promise<boolean>
@@ -34,20 +36,41 @@ interface OidcProviderForm {
 /** Super-administrator and private-message panels independent from native Agent Sessions. */
 export function ChatroomAccountPanels(props: ChatroomAccountPanelProps): JSX.Element {
   return <>
-    {props.room.accountOpen && <AccountPanel {...props} />}
-    {props.room.adminOpen && <AdminPanel {...props} />}
     {props.room.directOpen && <DirectPanel {...props} />}
   </>
 }
 
-function AccountPanel(props: ChatroomAccountPanelProps): JSX.Element {
+interface ChatroomSettingsInjected extends Omit<ChatroomAccountPanelProps, 'room'> {
+  readonly hooks: { readonly chatroom: { readonly getSnapshot: () => ChatroomView; readonly subscribe: (listener: () => void) => () => void } }
+}
+
+type ChatroomSettingsSectionProps = PropsRuntime<'settings.section'> & InjectFace<ChatroomSettingsInjected>
+
+/** Account, registration, and enterprise-login controls inside native Harness Settings. */
+export function ChatroomSettingsSection(props: ChatroomSettingsSectionProps): JSX.Element {
+  const room = props.useChatroom(snapshot => snapshot)
+  const panelProps: ChatroomAccountPanelProps = { ...props, room }
+  const superAdmin = room.auth.account?.role === 'super-admin'
+  useEffect(() => {
+    if (superAdmin) void props.openAdmin()
+  }, [superAdmin])
+  return <div className="dsh-chatroom-settings" data-testid="chatroom-settings">
+    <header className="dsh-chatroom-settings-header">
+      <div><h2>群聊与账号</h2><p>管理个人账号、平台成员和企业统一登录。</p></div>
+      <button type="button" onClick={() => { void panelProps.openDirect() }}>打开私聊</button>
+    </header>
+    <AccountPanel {...panelProps} embedded />
+    {superAdmin && <AdminPanel {...panelProps} embedded />}
+  </div>
+}
+
+function AccountPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): JSX.Element {
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const account = props.room.auth.account
-  return <div className="dsh-chatroom-dialog-layer dsh-chatroom-account-layer" data-testid="chatroom-account">
-    <section className="dsh-chatroom-card dsh-chatroom-account-card" aria-label="账号设置">
-      <header><div><h2>账号设置</h2><p>{account === undefined ? '' : `${account.displayName} · @${account.username}`}</p></div><button aria-label="关闭账号设置" type="button" onClick={props.closeAccount}>×</button></header>
+  const content = <section className="dsh-chatroom-card dsh-chatroom-account-card" aria-label="账号设置">
+      <header><div><h2>账号设置</h2><p>{account === undefined ? '' : `${account.displayName} · @${account.username}`}</p></div>{!props.embedded && <button aria-label="关闭账号设置" type="button" onClick={props.closeAccount}>×</button>}</header>
       <form className="dsh-chatroom-admin-form" onSubmit={async event => {
         event.preventDefault()
         if (newPassword !== confirmation) return
@@ -63,10 +86,10 @@ function AccountPanel(props: ChatroomAccountPanelProps): JSX.Element {
       </form>
       {props.room.accountError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.accountError}</div>}
     </section>
-  </div>
+  return props.embedded ? content : <div className="dsh-chatroom-dialog-layer dsh-chatroom-account-layer" data-testid="chatroom-account">{content}</div>
 }
 
-function AdminPanel(props: ChatroomAccountPanelProps): JSX.Element {
+function AdminPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): JSX.Element {
   const overview = props.room.adminOverview
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
@@ -74,10 +97,8 @@ function AdminPanel(props: ChatroomAccountPanelProps): JSX.Element {
   const [role, setRole] = useState<'super-admin' | 'admin' | 'member'>('member')
   const [avatarId, setAvatarId] = useState<ChatroomAvatarId>(CHATROOM_AVATARS[0].id)
   const [provider, setProvider] = useState(emptyProvider())
-  return (
-    <div className="dsh-chatroom-dialog-layer dsh-chatroom-admin-layer" data-testid="chatroom-admin">
-      <section className="dsh-chatroom-card dsh-chatroom-admin-card" aria-label="系统管理">
-        <header><div><h2>系统管理</h2><p>账号、注册策略和企业身份提供方</p></div><button aria-label="关闭系统管理" type="button" onClick={props.closeAdmin}>×</button></header>
+  const content = <section className="dsh-chatroom-card dsh-chatroom-admin-card" aria-label="系统管理">
+        <header><div><h2>系统管理</h2><p>账号、注册策略和企业身份提供方</p></div>{!props.embedded && <button aria-label="关闭系统管理" type="button" onClick={props.closeAdmin}>×</button>}</header>
         {props.room.adminBusy && overview === undefined
           ? <div className="dsh-chatroom-panel-status">正在载入管理数据…</div>
           : overview !== undefined && <div className="dsh-chatroom-admin-layout">
@@ -172,8 +193,7 @@ function AdminPanel(props: ChatroomAccountPanelProps): JSX.Element {
           </div>}
         {props.room.adminError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.adminError}</div>}
       </section>
-    </div>
-  )
+  return props.embedded ? content : <div className="dsh-chatroom-dialog-layer dsh-chatroom-admin-layer" data-testid="chatroom-admin">{content}</div>
 }
 
 function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {

@@ -44,7 +44,7 @@ describe('ChatroomClientStore', () => {
     store.openRoom()
     await store.join('Alice', 'whale')
     expect(openSession).not.toHaveBeenCalled()
-    expect(store.getSnapshot()).toMatchObject({ open: true, phase: 'ready', identity, room: undefined })
+    expect(store.getSnapshot()).toMatchObject({ open: false, phase: 'ready', identity, room: undefined })
 
     await store.selectRoom('lobby')
     expect(openSession).toHaveBeenCalledWith('chatroom-v1-lobby')
@@ -138,6 +138,26 @@ describe('ChatroomClientStore', () => {
     expect(openSession).toHaveBeenCalledWith('chatroom-v1-second')
   })
 
+  it('adopts the selected native Harness Session as a shared room automatically', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const adopted = { id: 'session-native', title: '设计讨论', aiDisplayName: 'DeepSeek', sessionId: 'native-session' }
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [])))
+      .mockResolvedValueOnce(jsonResponse({ room: adopted }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+
+    store.activateSession('native-session', '设计讨论')
+    await vi.waitFor(() => { expect(store.getSnapshot().room).toEqual(adopted) })
+
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/plugins/deepseek-harness-chatroom/api/rooms/ensure')
+    expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
+      sessionId: 'native-session', title: '设计讨论',
+    })
+  })
+
   it('preserves the active identity and room while identity editing is cancelled or submitted', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const updated = { ...identity, displayName: 'Alice 2', avatarId: 'panda' as const }
@@ -163,7 +183,7 @@ describe('ChatroomClientStore', () => {
     await store.resetIdentity()
     await store.join('Alice 2', 'panda')
     expect(store.getSnapshot()).toMatchObject({
-      open: true,
+      open: false,
       phase: 'ready',
       connection: 'online',
       identity: updated,
