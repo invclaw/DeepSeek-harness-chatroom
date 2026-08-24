@@ -7,6 +7,7 @@ import {
   branchFrameSwitchFromMessage,
   branchFrameTarget,
   branchFrameUrl,
+  invitedRoomFromLocation,
   notifyBranchFrameReady,
   prepareBranchFrameSelection,
   restoreParentSessionSelection,
@@ -87,6 +88,17 @@ describe('native branch frame isolation', () => {
     expect(JSON.parse(localStorage.getItem('dsh.sessions.current')!)).toEqual({
       sessionId: 'chatroom-v1-parent',
     })
+  })
+
+  it('does not navigate an isolated branch runtime back to its parent room', () => {
+    const location = { search: '?dsh-chatroom-room=room-id' } as Location
+    expect(invitedRoomFromLocation(location, undefined)).toBe('room-id')
+    expect(invitedRoomFromLocation(location, {
+      threadId: 'thread-id',
+      roomId: 'room-id',
+      sessionId: 'chatroom-thread-v1-thread-id',
+      parentSessionId: 'chatroom-v1-room-id',
+    })).toBeUndefined()
   })
 
   it('waits for asynchronous native navigation before staging the branch', () => {

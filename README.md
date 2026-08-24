@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.1.6" src="https://img.shields.io/badge/version-1.1.6-4f6bff">
+    <img alt="Version 1.1.7" src="https://img.shields.io/badge/version-1.1.7-4f6bff">
     <img alt="Harness RC7 or later" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -63,7 +63,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 ### Complete native Agent runtime
 
 - The native sidebar, Conversation/Trajectory tabs, composer, model and permission selectors, reasoning/tool flow, Session log, approvals, questions, slash commands, stop/queue/steer, failures, and retries remain intact.
-- Persistent branches open in a right-side panel and own independent Harness Sessions. Branches support Markdown, `@` candidates, images/files, quotes, reactions, forwarding, selection, and the full Agent runtime without nested chatroom branches.
+- Persistent branches open in a right-side panel and own independent Harness Sessions. Branches support Markdown, `@` candidates, images/files, quotes, reactions, forwarding, selection, and the full Agent runtime without nested chatroom branches. v1.1.7 prevents an isolated branch runtime from navigating back to its parent room during startup, eliminating the intermittent 30-second load timeout.
 - Historical images remain durable. For text-only models, only the model request receives deterministic text markers in place of image input; the UI keeps the original media.
 
 ### Messaging and media

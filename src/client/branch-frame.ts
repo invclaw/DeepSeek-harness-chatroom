@@ -31,6 +31,16 @@ export function branchFrameFromLocation(location: Pick<Location, 'search'>): Cha
   }
 }
 
+/** Return a URL-selected room only for the top-level Harness runtime. */
+export function invitedRoomFromLocation(
+  location: Pick<Location, 'search'>,
+  branchFrame: ChatroomBranchFrame | undefined,
+): string | undefined {
+  if (branchFrame !== undefined) return undefined
+  const roomId = new URLSearchParams(location.search).get(ROOM_ID)
+  return roomId === null || roomId === '' ? undefined : roomId
+}
+
 /** Build a same-origin Harness URL whose current session is isolated to one branch. */
 export function branchFrameUrl(thread: ChatroomThread, parentSessionId: string, loadId?: string): string {
   const url = new URL(globalThis.location.href)

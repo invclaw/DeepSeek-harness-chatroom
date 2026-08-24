@@ -25,6 +25,7 @@ import { CHATROOM_STYLES } from './styles.js'
 import {
   branchFrameSwitchFromMessage,
   branchFrameFromLocation,
+  invitedRoomFromLocation,
   clearBranchFrameReady,
   notifyBranchFrameReady,
   restoreParentSessionSelection,
@@ -124,8 +125,8 @@ export function apply(ctx: ClientContext): void {
     void store.start().then(async () => {
       syncSession()
       if (typeof location === 'undefined') return
-      const invitedRoomId = new URLSearchParams(location.search).get('dsh-chatroom-room')
-      if (invitedRoomId !== null && invitedRoomId !== '') await store.selectRoom(invitedRoomId)
+      const invitedRoomId = invitedRoomFromLocation(location, branchFrame)
+      if (invitedRoomId !== undefined) await store.selectRoom(invitedRoomId)
     })
     return () => {
       unsubscribeSessions()
