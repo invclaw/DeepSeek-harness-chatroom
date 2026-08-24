@@ -323,6 +323,7 @@ function messageProps(
       },
       online: 2,
       members: [],
+      memberCandidates: [],
       reactions: [],
       threadPreviews: [],
       membersOpen: false,

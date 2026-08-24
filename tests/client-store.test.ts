@@ -335,6 +335,37 @@ describe('ChatroomClientStore', () => {
     expect(store.getSnapshot()).toMatchObject({ unreadCount: 1, toasts: [{ text: '有新消息' }] })
     store.stop()
   })
+
+  it('loads unjoined platform users and adds checked accounts to the room', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const owner = { ...identity, role: 'owner' as const, joinedAt: 1, lastSeenAt: 2, online: true }
+    const candidate = { participantId: 'bob-id', username: 'bob-user', displayName: 'Bob', avatarId: 'panda' as const }
+    const added = { ...candidate, role: 'member' as const, joinedAt: 3, lastSeenAt: 3, online: false }
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ room, members: [owner], candidates: [candidate] }))
+      .mockResolvedValueOnce(jsonResponse({ room, members: [owner, added], candidates: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    store.activateSession(room.sessionId)
+    FakeEventSource.instances[1]?.emit({
+      type: 'snapshot', room, identity, online: 1, members: [owner], reactions: [], threadPreviews: [],
+    })
+
+    store.openMembers()
+    await vi.waitFor(() => { expect(store.getSnapshot().memberCandidates).toEqual([candidate]) })
+    await expect(store.addRoomMembers([candidate.participantId])).resolves.toBe(true)
+
+    expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+      roomId: 'lobby', action: 'add-members', participantIds: ['bob-id'],
+    })
+    expect(store.getSnapshot()).toMatchObject({
+      members: [owner, added], memberCandidates: [], managementBusy: false,
+    })
+  })
 })
 
 function roomInfo() {

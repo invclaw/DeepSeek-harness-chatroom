@@ -22,6 +22,7 @@ interface ChatroomPanelsProps extends ChatroomAccountPanelProps {
   closeMembers(): void
   renameRoom?(title: string): Promise<boolean>
   setMemberRole?(participantId: string, role: 'admin' | 'member'): Promise<boolean>
+  addRoomMembers?(participantIds: readonly string[]): Promise<boolean>
   closeThread(): void
   setThreadReply(reply: ChatroomReplyReference): void
   clearThreadReply(): void
@@ -126,27 +127,68 @@ function ToastStack({
 
 function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
   const [title, setTitle] = useState(props.room.room?.title ?? '')
-  const [inviteCopied, setInviteCopied] = useState(false)
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState<readonly string[]>([])
   const viewerRole = props.room.members.find(member =>
     member.participantId === props.room.identity?.participantId)?.role ?? 'member'
+  const canManage = viewerRole === 'owner' || viewerRole === 'admin'
+  const normalizedSearch = search.trim().toLocaleLowerCase('zh-CN')
+  const candidates = props.room.memberCandidates.filter(candidate => normalizedSearch === ''
+    || candidate.displayName.toLocaleLowerCase('zh-CN').includes(normalizedSearch)
+    || candidate.username.toLocaleLowerCase('zh-CN').includes(normalizedSearch))
+  useEffect(() => {
+    const available = new Set(props.room.memberCandidates.map(candidate => candidate.participantId))
+    setSelected(current => current.filter(participantId => available.has(participantId)))
+  }, [props.room.memberCandidates])
   return (
       <aside className="dsh-chatroom-member-card" data-testid="chatroom-members" aria-label="群管理">
         <button className="dsh-chatroom-close" aria-label="关闭群管理" type="button" onClick={props.closeMembers}>×</button>
         <h2>群管理</h2>
         <p>{props.room.room?.title} · {props.room.members.length} 位成员 · {props.room.online} 人在线</p>
-        <section className="dsh-chatroom-invite">
-          <div><strong>邀请成员</strong><small>复制链接后，对方登录即可进入这个群聊。</small></div>
-          <button type="button" onClick={async () => {
-            const roomId = props.room.room?.id
-            if (roomId === undefined || typeof location === 'undefined') return
-            const url = new URL(location.href)
-            url.searchParams.set('dsh-chatroom-room', roomId)
-            await navigator.clipboard.writeText(url.href)
-            setInviteCopied(true)
-            globalThis.setTimeout(() => { setInviteCopied(false) }, 2_000)
-          }}>{inviteCopied ? '已复制' : '复制邀请链接'}</button>
-        </section>
-        {(viewerRole === 'owner' || viewerRole === 'admin') && <form className="dsh-chatroom-manage-title" onSubmit={(event) => {
+        {canManage && <section className="dsh-chatroom-invite" aria-label="添加群成员">
+          <div className="dsh-chatroom-invite-heading">
+            <div><strong>添加成员</strong><small>从系统中尚未加入本群的启用账号里选择。</small></div>
+            <span>{selected.length} 位已选</span>
+          </div>
+          <input
+            type="search"
+            value={search}
+            placeholder="搜索姓名或账号"
+            aria-label="搜索系统用户"
+            onChange={event => { setSearch(event.target.value) }}
+          />
+          <div className="dsh-chatroom-invite-list">
+            {candidates.map(candidate => {
+              const avatar = chatroomAvatar(candidate.avatarId, candidate.participantId)
+              const checked = selected.includes(candidate.participantId)
+              return <label key={candidate.participantId}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={props.room.managementBusy}
+                  onChange={() => { setSelected(current => checked
+                    ? current.filter(participantId => participantId !== candidate.participantId)
+                    : [...current, candidate.participantId]) }}
+                />
+                <span className="dsh-chatroom-member-avatar" data-avatar={avatar.id}>{avatar.emoji}</span>
+                <span><strong>{candidate.displayName}</strong><small>@{candidate.username}</small></span>
+              </label>
+            })}
+            {candidates.length === 0 && <p>{props.room.managementBusy
+              ? '正在加载系统用户…'
+              : normalizedSearch === ''
+                ? '所有启用账号都已在群聊中。'
+                : '没有匹配的系统用户。'}</p>}
+          </div>
+          <button
+            type="button"
+            disabled={props.room.managementBusy || selected.length === 0}
+            onClick={async () => {
+              if (await props.addRoomMembers?.(selected)) setSelected([])
+            }}
+          >添加选中的 {selected.length} 位</button>
+        </section>}
+        {canManage && <form className="dsh-chatroom-manage-title" onSubmit={(event) => {
           event.preventDefault()
           void props.renameRoom?.(title)
         }}>

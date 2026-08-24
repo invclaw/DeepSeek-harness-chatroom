@@ -22,7 +22,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Oversized images are resized before entering Harness's durable attachment store; stop/queue/steer behavior, slash commands, approvals, and question interactions stay native
 - Participant names added on the Host before Session admission, so every browser and the model see the same identity
 - Current identity, online count, and Group management in the native Session header, with no floating room launcher
-- A right-side management drawer with invite links, member avatars, online state, and role controls
+- A right-side management drawer where room managers search and check active platform accounts to add them directly, alongside member avatars, online state, and role controls
 - In-page message toasts, unread title badges, and opt-in browser system notifications across rooms
 - Persistent branch replies in a right-side panel that retains one native Harness runtime and switches its Session in place, including Markdown, image/file upload, model and permission selectors, stop/queue/steer, slash commands, approvals, question interactions, Think/tool trajectory, failure details, and retries
 - Native AI/member `@` candidates inside the branch composer; every branch owns an independent Session, so `@AI` answers, quotes, and tool runs stay inside that branch while chatroom reactions, replies, forwarding, and selection remain available without nested chatroom branches
@@ -33,7 +33,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 1.1.2 rebuilds **Settings → Chatroom & accounts** as a width-safe native Settings column using Harness theme tokens, labeled account and OIDC fields, responsive member actions, and the same module, hairline, and capsule-control vocabulary as the Models and Agent presets pages. Version 1.1.1 keeps the first AI run on Harness's native turn numbering instead of writing a synthetic setup turn. Version 1.1.0 makes native Harness Sessions shared by default, removes the floating launcher, moves account and SSO administration into native Settings, and turns Group management into a right drawer with invite links. An installed `dsh-auth` is the initial default login provider; `local=1` retains local-account recovery.
+Version 1.1.3 replaces copied room invitation links with a manager-only, searchable multi-select directory of active platform accounts; checked users are added to the room immediately. Version 1.1.2 rebuilds **Settings → Chatroom & accounts** as a width-safe native Settings column using Harness theme tokens, labeled account and OIDC fields, responsive member actions, and the same module, hairline, and capsule-control vocabulary as the Models and Agent presets pages. Version 1.1.1 keeps the first AI run on Harness's native turn numbering instead of writing a synthetic setup turn. Version 1.1.0 makes native Harness Sessions shared by default, removes the floating launcher, and moves account and SSO administration into native Settings. An installed `dsh-auth` is the initial default login provider; `local=1` retains local-account recovery.
 
 ## Requirements
 
@@ -145,7 +145,7 @@ The verifier returns `204` with verified identity headers, or `401` with the sta
 
 `settingsAdminParticipantIds` defaults to an empty list, so remote browsers cannot read or modify Harness configuration. Production deployments may supply the allowlist through the comma-separated `DSH_CHATROOM_SETTINGS_ADMIN_IDS` environment variable. The current identity's `participantId` is available in the authenticated `/plugins/deepseek-harness-chatroom/api/session` response. Changing a display name or avatar preserves that ID; resetting the chatroom identity creates a new ID and requires an allowlist update. A remote Models request must also carry the valid HttpOnly chatroom cookie and pass the same-origin check.
 
-`sessionId` remains the persistent Session for the pre-upgrade lobby. When an authenticated member first opens an ordinary Harness Session, the plugin idempotently creates only the shared-room record for that exact Session ID. Invite links navigate other members to the same native Session. Every branch still receives an independent persistent Session.
+`sessionId` remains the persistent Session for the pre-upgrade lobby. When an authenticated member first opens an ordinary Harness Session, the plugin idempotently creates only the shared-room record for that exact Session ID. Room managers add active platform accounts from the Group management drawer. Every branch still receives an independent persistent Session.
 
 The API route is registered immediately and reports `503` until identity storage and the Session are ready. Initialization runs in the background, and failures remain isolated from Harness Web startup.
 
@@ -160,12 +160,12 @@ A display name is presentation, not authentication. Remote Models authorization 
 1. Open Harness Web and finish login or first-time identity setup. No floating **Shared sessions** button should appear.
 2. Use the native **New session** action. The Session must automatically become a shared room while retaining the sidebar, Conversation/Trajectory tabs, native composer, and Session log.
 3. Open **Settings → Chatroom & accounts** and verify account, registration, and SSO administration lives there instead of a custom modal.
-4. In a private window or another browser sign in as `Bob` and follow the room invite link.
+4. In a private window or another browser sign in as `Bob` so the platform account is available to Group management.
 5. Send ordinary text from Alice. Both pages must synchronize it without an AI reply. Typing `@` must list both AI and Bob; mentioning Bob must stay human-only, while mentioning AI must wake the Agent.
 6. Select **Reply** below a human message. The composer must show the quote, and both browsers must render the same quote after sending.
 7. Insert an emoji through **Emoji**, then send a pure image and a pure file. Only the media or download card must render, without a "sent a..." text bubble; the other browser must download the original file bytes.
 8. Run `/new`, approval and question interactions, and stop/queue/steer flows through their native Harness paths.
-9. Open **Group management** in the Session header. A right drawer must show an invite link, both participants, and presence. Rename the room as its owner, promote Bob, and rename it again as Bob; the title and roles must survive reload.
+9. Open **Group management** in the Session header. As a manager, search the platform account directory, check Bob, and add him directly; the drawer must then show both participants and presence. Rename the room as its owner, promote Bob, and rename it again as Bob; membership, title, and roles must survive reload.
 10. Choose **Branch** from a human or AI message's overflow menu. The panel must contain the complete native Harness conversation. Verify model and permission selection, image/file upload, stop/steer, slash commands, approval/question interactions, Think/tool trajectory, and retry UI. Typing `@` must list AI and room members, while `@AI` output stays in the branch. Reply, react, forward, and multi-select a branch message; no nested chatroom branch action may appear. After four messages, close the panel and verify the root's total and latest three replies.
 11. Choose **Multi-select** from the overflow menu and confirm every human and AI message receives a checkbox. Select messages containing Markdown, quotes, images, files, and reactions, merge them into **Project two**, and verify the target card retains all of those fields.
 12. Enter another shared room and confirm that display-name and avatar setup is not requested again.

@@ -175,6 +175,7 @@ describe('native chatroom integration', () => {
   it('renders room management, unread alerts, and an isolated native branch frame', () => {
     const renameRoom = vi.fn(async () => true)
     const setMemberRole = vi.fn(async () => true)
+    const addRoomMembers = vi.fn(async () => true)
     const closeThread = vi.fn()
     const room = view({
       membersOpen: true,
@@ -188,6 +189,10 @@ describe('native chatroom integration', () => {
           joinedAt: 1, lastSeenAt: Date.now(), online: true,
         },
       ],
+      memberCandidates: [
+        { participantId: 'carol-id', username: 'carol', displayName: 'Carol', avatarId: 'fox' },
+        { participantId: 'dave-id', username: 'dave', displayName: 'Dave', avatarId: 'dog' },
+      ],
       unreadCount: 3,
       toasts: [{
         id: 'notice', roomId: 'lobby', roomTitle: 'AI 聊天室', participantId: 'bob-id', displayName: 'Bob',
@@ -198,11 +203,16 @@ describe('native chatroom integration', () => {
         root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
       },
     })
-    const overrides = { renameRoom, setMemberRole, closeThread }
+    const overrides = { renameRoom, setMemberRole, addRoomMembers, closeThread }
     const rendered = renderEntry(room, overrides)
     expect(screen.getByTestId('chatroom-members')).toBeTruthy()
     expect(screen.getByTestId('chatroom-thread-panel')).toBeTruthy()
     expect(screen.getByText('新消息')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '复制邀请链接' })).toBeNull()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Carol/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Dave/ }))
+    fireEvent.click(screen.getByRole('button', { name: '添加选中的 2 位' }))
+    expect(addRoomMembers).toHaveBeenCalledWith(['carol-id', 'dave-id'])
     const frame = screen.getByTitle('分支回复：主题消息') as HTMLIFrameElement
     const frameUrl = new URL(frame.src)
     expect(frameUrl.searchParams.get('dsh-chatroom-thread')).toBe('thread')
@@ -308,6 +318,7 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     },
     online: 1,
     members: [],
+    memberCandidates: [],
     reactions: [],
     threadPreviews: [],
     membersOpen: false,

@@ -1,5 +1,5 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot } from '../types.js';
+import type { ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 export type ChatroomPhase = 'loading' | 'auth-required' | 'identity-required' | 'ready' | 'error';
 export type ChatroomConnection = 'offline' | 'connecting' | 'online';
@@ -43,6 +43,7 @@ export interface ChatroomView {
     readonly auth: ChatroomAuthState;
     readonly online: number;
     readonly members: readonly ChatroomMember[];
+    readonly memberCandidates: readonly ChatroomRoomInviteCandidate[];
     readonly reactions: readonly ChatroomReaction[];
     readonly threadPreviews: readonly ChatroomThreadPreview[];
     readonly membersOpen: boolean;
@@ -174,6 +175,8 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     openMembers: () => void;
     /** Close group management without changing the active room. */
     closeMembers: () => void;
+    /** Add selected active platform accounts to the current room. */
+    addRoomMembers: (participantIds: readonly string[]) => Promise<boolean>;
     /** Rename the active room through the server-enforced management endpoint. */
     renameRoom: (title: string) => Promise<boolean>;
     /** Promote or demote one member through the owner-only management endpoint. */
@@ -247,6 +250,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private receive;
     private replaceReaction;
     private applyRoomManagement;
+    private loadMemberCandidates;
     private receiveNotification;
     private receiveDirectMessage;
     private clearUnread;

@@ -73,6 +73,11 @@ export interface ChatroomMember extends ChatroomIdentity {
   readonly online: boolean
 }
 
+/** One active platform account that a room manager may add to the current room. */
+export interface ChatroomRoomInviteCandidate extends ChatroomIdentity {
+  readonly username: string
+}
+
 /** Durable reply metadata rendered as a quote and retained in model-visible text. */
 export interface ChatroomReplyReference {
   readonly messageId: string
@@ -172,6 +177,11 @@ export interface ChatroomInfo {
 export interface ChatroomRoomManageResponse {
   readonly room: ChatroomInfo
   readonly members: readonly ChatroomMember[]
+}
+
+/** Manager-only room roster plus active platform accounts that are not members yet. */
+export interface ChatroomRoomManagementResponse extends ChatroomRoomManageResponse {
+  readonly candidates: readonly ChatroomRoomInviteCandidate[]
 }
 
 /** Initial identity lookup result. */

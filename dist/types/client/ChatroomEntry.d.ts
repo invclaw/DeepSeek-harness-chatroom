@@ -26,6 +26,7 @@ interface ChatroomEntryInjected {
     closeMembers(): void;
     renameRoom?(title: string): Promise<boolean>;
     setMemberRole?(participantId: string, role: 'admin' | 'member'): Promise<boolean>;
+    addRoomMembers?(participantIds: readonly string[]): Promise<boolean>;
     closeThread(): void;
     setThreadReply(reply: ChatroomReplyReference): void;
     clearThreadReply(): void;

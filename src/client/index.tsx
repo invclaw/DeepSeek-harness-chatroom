@@ -157,6 +157,7 @@ export function apply(ctx: ClientContext): void {
       closeMembers: store.closeMembers,
       renameRoom: store.renameRoom,
       setMemberRole: store.setMemberRole,
+      addRoomMembers: store.addRoomMembers,
       closeThread: store.closeThread,
       setThreadReply: store.setThreadReply,
       clearThreadReply: store.clearThreadReply,

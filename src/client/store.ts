@@ -23,6 +23,8 @@ import type {
   ChatroomReplyReference,
   ChatroomRoomResponse,
   ChatroomRoomManageResponse,
+  ChatroomRoomManagementResponse,
+  ChatroomRoomInviteCandidate,
   ChatroomServerEvent,
   ChatroomSessionResponse,
   ChatroomThread,
@@ -77,6 +79,7 @@ export interface ChatroomView {
   readonly auth: ChatroomAuthState
   readonly online: number
   readonly members: readonly ChatroomMember[]
+  readonly memberCandidates: readonly ChatroomRoomInviteCandidate[]
   readonly reactions: readonly ChatroomReaction[]
   readonly threadPreviews: readonly ChatroomThreadPreview[]
   readonly membersOpen: boolean
@@ -136,6 +139,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     },
     online: 0,
     members: [],
+    memberCandidates: [],
     reactions: [],
     threadPreviews: [],
     membersOpen: false,
@@ -483,18 +487,42 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   /** Open group management for the active room. */
   openMembers = (): void => {
-    if (this.snapshot.room !== undefined) this.set({
+    if (this.snapshot.room === undefined) return
+    this.set({
       membersOpen: true,
+      memberCandidates: [],
       thread: undefined,
       threadMessages: [],
       threadReply: undefined,
       threadError: undefined,
     })
+    const viewerRole = this.snapshot.members.find(member =>
+      member.participantId === this.snapshot.identity?.participantId)?.role
+    if (viewerRole === 'owner' || viewerRole === 'admin') void this.loadMemberCandidates()
   }
 
   /** Close group management without changing the active room. */
   closeMembers = (): void => {
-    this.set({ membersOpen: false, managementError: undefined })
+    this.set({ membersOpen: false, memberCandidates: [], managementError: undefined })
+  }
+
+  /** Add selected active platform accounts to the current room. */
+  addRoomMembers = async (participantIds: readonly string[]): Promise<boolean> => {
+    const room = this.snapshot.room
+    if (room === undefined || participantIds.length === 0 || this.snapshot.managementBusy) return false
+    this.set({ managementBusy: true, managementError: undefined })
+    try {
+      const result = await requestJson<ChatroomRoomManagementResponse>(`${CHATROOM_API_PREFIX}/rooms/manage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId: room.id, action: 'add-members', participantIds }),
+      })
+      this.applyRoomManagement(result)
+      return true
+    } catch (error) {
+      this.set({ managementBusy: false, managementError: errorMessage(error) })
+      return false
+    }
   }
 
   /** Rename the active room through the server-enforced management endpoint. */
@@ -569,6 +597,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         connection: 'offline',
         online: 0,
         members: [],
+        memberCandidates: [],
         reactions: [],
         threadPreviews: [],
         membersOpen: false,
@@ -593,6 +622,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       connection: 'connecting',
       online: 0,
       members: [],
+      memberCandidates: [],
       reactions: [],
       threadPreviews: [],
       membersOpen: false,
@@ -1017,6 +1047,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       connection: 'connecting',
       online: 0,
       members: [],
+      memberCandidates: [],
       reactions: [],
       threadPreviews: [],
       thread: undefined,
@@ -1182,14 +1213,32 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.set({ reactions: reaction.participantIds.length === 0 ? without : [...without, reaction] })
   }
 
-  private applyRoomManagement(result: ChatroomRoomManageResponse): void {
+  private applyRoomManagement(result: ChatroomRoomManageResponse | ChatroomRoomManagementResponse): void {
     const rooms = this.snapshot.rooms.map(room => room.id === result.room.id ? result.room : room)
+    const memberIds = new Set(result.members.map(member => member.participantId))
     this.set({
       rooms,
       ...(this.snapshot.room?.id === result.room.id ? { room: result.room, members: result.members } : {}),
+      memberCandidates: 'candidates' in result
+        ? result.candidates
+        : this.snapshot.memberCandidates.filter(candidate => !memberIds.has(candidate.participantId)),
       managementBusy: false,
       managementError: undefined,
     })
+  }
+
+  private async loadMemberCandidates(): Promise<void> {
+    const room = this.snapshot.room
+    if (room === undefined || this.snapshot.managementBusy) return
+    this.set({ managementBusy: true, managementError: undefined })
+    try {
+      const result = await requestJson<ChatroomRoomManagementResponse>(
+        `${CHATROOM_API_PREFIX}/rooms/manage?roomId=${encodeURIComponent(room.id)}`,
+      )
+      if (this.snapshot.room?.id === room.id) this.applyRoomManagement(result)
+    } catch (error) {
+      this.set({ managementBusy: false, managementError: errorMessage(error) })
+    }
   }
 
   private receiveNotification(notification: ChatroomNotification): void {

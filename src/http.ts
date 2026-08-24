@@ -19,6 +19,7 @@ import type {
   ChatroomImageReference,
   ChatroomRoomResponse,
   ChatroomRoomManageResponse,
+  ChatroomRoomManagementResponse,
   ChatroomRoomsResponse,
   ChatroomSessionResponse,
   ChatroomThreadPromptRequest,
@@ -538,14 +539,27 @@ export class ChatroomHttpController {
   }
 
   private async handleRoomManagement(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    if (request.method === 'GET') {
+      const url = new URL(request.url ?? '/', 'http://chatroom.local')
+      const roomId = url.searchParams.get('roomId')
+      if (roomId === null || roomId === '') throw new ChatroomInputError('缺少群聊标识。')
+      const room = this.runtime.rooms.find(item => item.id === roomId)
+      if (room === undefined) throw new ChatroomInputError('共享会话不存在。')
+      json(response, 200, {
+        room,
+        members: this.runtime.membersForRoom(roomId),
+        candidates: this.runtime.roomInviteCandidates(roomId, identity),
+      } satisfies ChatroomRoomManagementResponse)
+      return
+    }
     if (request.method !== 'POST') {
-      methodNotAllowed(response, 'POST')
+      methodNotAllowed(response, 'GET, POST')
       return
     }
     assertSameOrigin(request)
-    const identity = this.requireIdentity(request, response)
-    if (identity === undefined) return
-    const body = await readJson(request, smallRequestLimit(this.config) + 2_048)
+    const body = await readJson(request, smallRequestLimit(this.config) + 8_192)
     const roomId = fieldString(body, 'roomId')
     const action = fieldString(body, 'action')
     if (action === 'rename') {
@@ -563,6 +577,19 @@ export class ChatroomHttpController {
         identity,
       )
       json(response, 200, { room: this.runtime.rooms.find(item => item.id === roomId)!, members } satisfies ChatroomRoomManageResponse)
+      return
+    }
+    if (action === 'add-members') {
+      const members = await this.runtime.addRoomMembers(
+        roomId,
+        stringArray(body, 'participantIds'),
+        identity,
+      )
+      json(response, 200, {
+        room: this.runtime.rooms.find(item => item.id === roomId)!,
+        members,
+        candidates: this.runtime.roomInviteCandidates(roomId, identity),
+      } satisfies ChatroomRoomManagementResponse)
       return
     }
     throw new ChatroomInputError('群管理操作无效。')
@@ -935,6 +962,14 @@ async function readJson(request: IncomingMessage, limit: number): Promise<Record
 function fieldString(body: Record<string, unknown>, field: string): string {
   const value = body[field]
   if (typeof value !== 'string') throw new ChatroomInputError(`字段 ${field} 必须是字符串。`)
+  return value
+}
+
+function stringArray(body: Record<string, unknown>, field: string): readonly string[] {
+  const value = body[field]
+  if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
+    throw new ChatroomInputError(`字段 ${field} 必须是字符串数组。`)
+  }
   return value
 }
 

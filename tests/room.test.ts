@@ -106,6 +106,40 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
+  it('lets room managers add active platform accounts without an invite link', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, {
+      ...config(),
+      authEnabled: true,
+      authSecret: 'a secure test secret with at least 32 bytes',
+      authPublicOrigin: 'https://chat.example.com',
+      authBootstrapToken: 'bootstrap-token',
+    })
+    await runtime.start()
+    const alice = (await runtime.auth.register({
+      username: 'alice', password: 'alice password 123', displayName: 'Alice', bootstrapToken: 'bootstrap-token',
+    })).account
+    const bob = (await runtime.auth.register({
+      username: 'bob-user', password: 'bob password 1234', displayName: 'Bob',
+    })).account
+    const charlie = (await runtime.auth.register({
+      username: 'charlie', password: 'charlie password 123', displayName: 'Charlie',
+    })).account
+    const room = await runtime.createRoom('项目群', alice)
+
+    expect(runtime.roomInviteCandidates(room.id, alice).map(candidate => candidate.username)).toEqual([
+      'bob-user', 'charlie',
+    ])
+    await runtime.addRoomMembers(room.id, [bob.participantId], alice)
+    expect(runtime.membersForRoom(room.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ participantId: alice.participantId, role: 'owner' }),
+      expect.objectContaining({ participantId: bob.participantId, role: 'member', online: false }),
+    ]))
+    expect(runtime.roomInviteCandidates(room.id, alice).map(candidate => candidate.username)).toEqual(['charlie'])
+    await expect(runtime.addRoomMembers(room.id, [charlie.participantId], charlie)).rejects.toThrow('没有群管理权限')
+    await runtime.stop()
+  })
+
   it('keeps a managed configured-room title across plugin restarts', async () => {
     const harness = fakeHarness()
     const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }

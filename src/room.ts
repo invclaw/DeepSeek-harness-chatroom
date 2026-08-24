@@ -59,6 +59,7 @@ import type {
   ChatroomPromptResponse,
   ChatroomReaction,
   ChatroomReplyReference,
+  ChatroomRoomInviteCandidate,
   ChatroomServerEvent,
   ChatroomSnapshotEvent,
   ChatroomThread,
@@ -154,6 +155,21 @@ export class ChatroomRuntime {
   /** Current member roster for one room-management response. */
   membersForRoom(roomId: string): readonly ChatroomMember[] {
     return this.roomMembers(this.requireState(roomId))
+  }
+
+  /** Active platform accounts that a room manager may add to one room. */
+  roomInviteCandidates(roomId: string, identity: ChatroomIdentity): readonly ChatroomRoomInviteCandidate[] {
+    const state = this.requireState(roomId)
+    this.assertRoomManager(state.record, identity.participantId)
+    const members = new Set(this.roomMembers(state).map(member => member.participantId))
+    return this.auth.activeAccounts()
+      .filter(account => !members.has(account.participantId))
+      .map(account => ({
+        participantId: account.participantId,
+        username: account.username,
+        displayName: account.displayName,
+        avatarId: account.avatarId,
+      }))
   }
 
   /** Maximum accepted JSON body for one text, image, and file room submission. */
@@ -460,6 +476,43 @@ export class ChatroomRuntime {
     state.record = record
     const members = this.roomMembers(state)
     this.broadcast(state, { type: 'room-updated', room: publicRoom(record), members })
+    return members
+  }
+
+  /** Add active platform accounts to a room as ordinary members. */
+  async addRoomMembers(
+    roomId: string,
+    participantIds: readonly string[],
+    identity: ChatroomIdentity,
+  ): Promise<readonly ChatroomMember[]> {
+    this.assertReady()
+    const state = this.requireState(roomId)
+    this.assertRoomManager(state.record, identity.participantId)
+    const requested = [...new Set(participantIds)]
+    if (requested.length === 0) throw new ChatroomInputError('请至少选择一位用户。')
+    if (requested.length > 100) throw new ChatroomInputError('一次最多添加 100 位用户。')
+    const accounts = new Map(this.auth.activeAccounts().map(account => [account.participantId, account]))
+    const selected = requested.map(participantId => {
+      const account = accounts.get(participantId)
+      if (account === undefined) throw new ChatroomInputError('所选用户不存在或已停用。')
+      return account
+    })
+    const table = this.requireMembers()
+    const now = Date.now()
+    for (const account of selected) {
+      const key = `${roomId}:${account.participantId}`
+      if (table.get(key) !== undefined) continue
+      await table.put(key, {
+        roomId,
+        participantId: account.participantId,
+        displayName: account.displayName,
+        avatarId: account.avatarId,
+        joinedAt: now,
+        lastSeenAt: now,
+      })
+    }
+    const members = this.roomMembers(state)
+    this.broadcast(state, { type: 'room-updated', room: publicRoom(state.record), members })
     return members
   }
 

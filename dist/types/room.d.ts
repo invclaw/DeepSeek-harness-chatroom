@@ -4,7 +4,7 @@ import { type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
 import { ChatroomAuth } from './auth.js';
 import type { Config } from './config.js';
 import { type ChatroomReactionEmoji } from './reactions.js';
-import type { ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
+import type { ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
 /** Runtime validation failure safe to return to a browser. */
 export declare class ChatroomInputError extends Error {
 }
@@ -37,6 +37,8 @@ export declare class ChatroomRuntime {
     get rooms(): readonly ChatroomInfo[];
     /** Current member roster for one room-management response. */
     membersForRoom(roomId: string): readonly ChatroomMember[];
+    /** Active platform accounts that a room manager may add to one room. */
+    roomInviteCandidates(roomId: string, identity: ChatroomIdentity): readonly ChatroomRoomInviteCandidate[];
     /** Maximum accepted JSON body for one text, image, and file room submission. */
     get maxPromptRequestBytes(): number;
     /** Whether identity persistence and the configured shared Session are ready. */
@@ -71,6 +73,8 @@ export declare class ChatroomRuntime {
     renameRoom(roomId: string, title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Promote or demote one room member; only the owner controls administrators. */
     setMemberRole(roomId: string, participantId: string, role: 'admin' | 'member', identity: ChatroomIdentity): Promise<readonly ChatroomMember[]>;
+    /** Add active platform accounts to a room as ordinary members. */
+    addRoomMembers(roomId: string, participantIds: readonly string[], identity: ChatroomIdentity): Promise<readonly ChatroomMember[]>;
     /** Append human chat immediately; wake the Agent only for an explicit AI mention. */
     submit(roomId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
     /** Toggle one participant reaction and replace its room-wide summary. */

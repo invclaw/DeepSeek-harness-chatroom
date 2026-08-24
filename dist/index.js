@@ -1308,6 +1308,18 @@ var ChatroomRuntime = class {
   membersForRoom(roomId) {
     return this.roomMembers(this.requireState(roomId));
   }
+  /** Active platform accounts that a room manager may add to one room. */
+  roomInviteCandidates(roomId, identity) {
+    const state = this.requireState(roomId);
+    this.assertRoomManager(state.record, identity.participantId);
+    const members = new Set(this.roomMembers(state).map((member) => member.participantId));
+    return this.auth.activeAccounts().filter((account) => !members.has(account.participantId)).map((account) => ({
+      participantId: account.participantId,
+      username: account.username,
+      displayName: account.displayName,
+      avatarId: account.avatarId
+    }));
+  }
   /** Maximum accepted JSON body for one text, image, and file room submission. */
   get maxPromptRequestBytes() {
     const { maxImagesPerMessage, maxMessageImageBytes } = this.ctx.attachments.imageLimits;
@@ -1580,6 +1592,38 @@ var ChatroomRuntime = class {
     state.record = record;
     const members = this.roomMembers(state);
     this.broadcast(state, { type: "room-updated", room: publicRoom(record), members });
+    return members;
+  }
+  /** Add active platform accounts to a room as ordinary members. */
+  async addRoomMembers(roomId, participantIds, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    this.assertRoomManager(state.record, identity.participantId);
+    const requested = [...new Set(participantIds)];
+    if (requested.length === 0) throw new ChatroomInputError("\u8BF7\u81F3\u5C11\u9009\u62E9\u4E00\u4F4D\u7528\u6237\u3002");
+    if (requested.length > 100) throw new ChatroomInputError("\u4E00\u6B21\u6700\u591A\u6DFB\u52A0 100 \u4F4D\u7528\u6237\u3002");
+    const accounts = new Map(this.auth.activeAccounts().map((account) => [account.participantId, account]));
+    const selected = requested.map((participantId) => {
+      const account = accounts.get(participantId);
+      if (account === void 0) throw new ChatroomInputError("\u6240\u9009\u7528\u6237\u4E0D\u5B58\u5728\u6216\u5DF2\u505C\u7528\u3002");
+      return account;
+    });
+    const table = this.requireMembers();
+    const now = Date.now();
+    for (const account of selected) {
+      const key = `${roomId}:${account.participantId}`;
+      if (table.get(key) !== void 0) continue;
+      await table.put(key, {
+        roomId,
+        participantId: account.participantId,
+        displayName: account.displayName,
+        avatarId: account.avatarId,
+        joinedAt: now,
+        lastSeenAt: now
+      });
+    }
+    const members = this.roomMembers(state);
+    this.broadcast(state, { type: "room-updated", room: publicRoom(state.record), members });
     return members;
   }
   /** Append human chat immediately; wake the Agent only for an explicit AI mention. */
@@ -3251,14 +3295,27 @@ var ChatroomHttpController = class {
     json(response, 200, { room });
   }
   async handleRoomManagement(request, response) {
+    const identity = this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    if (request.method === "GET") {
+      const url = new URL(request.url ?? "/", "http://chatroom.local");
+      const roomId2 = url.searchParams.get("roomId");
+      if (roomId2 === null || roomId2 === "") throw new ChatroomInputError("\u7F3A\u5C11\u7FA4\u804A\u6807\u8BC6\u3002");
+      const room = this.runtime.rooms.find((item) => item.id === roomId2);
+      if (room === void 0) throw new ChatroomInputError("\u5171\u4EAB\u4F1A\u8BDD\u4E0D\u5B58\u5728\u3002");
+      json(response, 200, {
+        room,
+        members: this.runtime.membersForRoom(roomId2),
+        candidates: this.runtime.roomInviteCandidates(roomId2, identity)
+      });
+      return;
+    }
     if (request.method !== "POST") {
-      methodNotAllowed(response, "POST");
+      methodNotAllowed(response, "GET, POST");
       return;
     }
     assertSameOrigin(request);
-    const identity = this.requireIdentity(request, response);
-    if (identity === void 0) return;
-    const body = await readJson(request, smallRequestLimit(this.config) + 2048);
+    const body = await readJson(request, smallRequestLimit(this.config) + 8192);
     const roomId = fieldString(body, "roomId");
     const action = fieldString(body, "action");
     if (action === "rename") {
@@ -3276,6 +3333,19 @@ var ChatroomHttpController = class {
         identity
       );
       json(response, 200, { room: this.runtime.rooms.find((item) => item.id === roomId), members });
+      return;
+    }
+    if (action === "add-members") {
+      const members = await this.runtime.addRoomMembers(
+        roomId,
+        stringArray(body, "participantIds"),
+        identity
+      );
+      json(response, 200, {
+        room: this.runtime.rooms.find((item) => item.id === roomId),
+        members,
+        candidates: this.runtime.roomInviteCandidates(roomId, identity)
+      });
       return;
     }
     throw new ChatroomInputError("\u7FA4\u7BA1\u7406\u64CD\u4F5C\u65E0\u6548\u3002");
@@ -3607,6 +3677,13 @@ async function readJson(request, limit) {
 function fieldString(body, field) {
   const value = body[field];
   if (typeof value !== "string") throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
+  return value;
+}
+function stringArray(body, field) {
+  const value = body[field];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u6570\u7EC4\u3002`);
+  }
   return value;
 }
 function optionalFieldString(body, field) {
