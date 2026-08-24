@@ -17,6 +17,7 @@ import {
 } from './ChatroomMessageNodeView.js'
 import { installNativePromptIdentity } from './native-prompt.js'
 import { installFreshSessionStart } from './fresh-session.js'
+import { NewGroupSetupDock } from './NewGroupSetupDock.js'
 import { installRemoteConfigurationApi } from './remote-configuration.js'
 import { RoomIdentityAction } from './RoomIdentityAction.js'
 import { ChatroomClientStore } from './store.js'
@@ -240,6 +241,18 @@ export function apply(ctx: ClientContext): void {
       resolveTarget: store.agentTargetForSession.bind(store),
     }),
   }, ChatroomFileAction))
+
+  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock',
+    id: 'chatroom-group-setup',
+    order: -30,
+    inject: () => ({
+      hooks: { chatroom: store },
+      resolveTarget: store.agentTargetForSession.bind(store),
+      loadRoomMemberCandidates: store.loadRoomMemberCandidates,
+      completeGroupSetup: store.completeGroupSetup,
+    }),
+  }, NewGroupSetupDock))
 
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
     name: 'conversation.input.dock',

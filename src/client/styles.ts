@@ -204,6 +204,99 @@ export const CHATROOM_STYLES = `
 .dsh-chatroom-manage-action:hover { color: var(--brand-primary, #4f7cff); border-color: var(--brand-primary, #4f7cff); }
 .dsh-chatroom-manage-action:disabled { cursor: wait; opacity: .58; }
 
+.dsh-chatroom-group-setup {
+  display: grid;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--border-primary, #e5e7eb);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg-primary, #fff) 96%, var(--brand-primary, #4f7cff));
+  color: var(--text-primary, #111827);
+  padding: 14px 16px;
+  box-shadow: 0 12px 34px rgb(15 23 42 / 8%);
+}
+.dsh-chatroom-group-setup-collapsed {
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.dsh-chatroom-group-setup-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--brand-primary, #4f7cff) 12%, var(--bg-primary, #fff));
+  font-size: 21px;
+}
+.dsh-chatroom-group-setup-collapsed > span:nth-child(2),
+.dsh-chatroom-group-setup header > span:first-child { display: grid; gap: 3px; min-width: 0; }
+.dsh-chatroom-group-setup strong { font-size: 14px; }
+.dsh-chatroom-group-setup small { color: var(--text-secondary, #6b7280); font-size: 12px; line-height: 1.45; }
+.dsh-chatroom-group-setup-collapsed > button,
+.dsh-chatroom-group-setup-primary {
+  border: 0;
+  border-radius: 10px;
+  background: var(--brand-primary, #4f7cff);
+  color: #fff;
+  padding: 9px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dsh-chatroom-group-setup header,
+.dsh-chatroom-group-setup footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dsh-chatroom-group-setup header > span:last-child { flex: none; color: var(--brand-primary, #4f7cff); font-size: 12px; }
+.dsh-chatroom-group-setup-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.dsh-chatroom-group-setup-fields label { display: grid; gap: 5px; color: var(--text-secondary, #6b7280); font-size: 12px; }
+.dsh-chatroom-group-setup-fields input {
+  min-width: 0;
+  border: 1px solid var(--border-primary, #d1d5db);
+  border-radius: 10px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #111827);
+  padding: 9px 11px;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.dsh-chatroom-group-setup-fields input:focus { border-color: var(--brand-primary, #4f7cff); }
+.dsh-chatroom-group-setup-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  max-height: min(176px, 24vh);
+  overflow-y: auto;
+}
+.dsh-chatroom-group-setup-list > label {
+  display: grid;
+  grid-template-columns: 18px 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border-radius: 11px;
+  padding: 6px 7px;
+  cursor: pointer;
+}
+.dsh-chatroom-group-setup-list > label:hover { background: var(--bg-secondary, #f3f4f6); }
+.dsh-chatroom-group-setup-list input { width: 16px; height: 16px; margin: 0; accent-color: var(--brand-primary, #4f7cff); }
+.dsh-chatroom-group-setup-list .dsh-chatroom-member-avatar { width: 36px; height: 36px; }
+.dsh-chatroom-group-setup-list label > span:last-child { display: grid; min-width: 0; }
+.dsh-chatroom-group-setup-list label strong,
+.dsh-chatroom-group-setup-list label small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-chatroom-group-setup-list > p { grid-column: 1 / -1; margin: 12px; color: var(--text-secondary, #6b7280); font-size: 12px; text-align: center; }
+.dsh-chatroom-group-setup-secondary {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  padding: 8px 4px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.dsh-chatroom-group-setup button:disabled { cursor: not-allowed; opacity: .45; }
+
 .dsh-chatroom-presence-dot {
   width: 7px;
   height: 7px;
@@ -1047,6 +1140,10 @@ html[data-dsh-chatroom-branch-frame] [data-dsh-chatroom-branch-shell] > :nth-chi
 }
 
 @media (max-width: 640px) {
+  .dsh-chatroom-group-setup-collapsed { grid-template-columns: 38px minmax(0, 1fr); }
+  .dsh-chatroom-group-setup-collapsed > button { grid-column: 1 / -1; width: 100%; }
+  .dsh-chatroom-group-setup-fields,
+  .dsh-chatroom-group-setup-list { grid-template-columns: 1fr; }
   .dsh-chatroom-avatar-grid { grid-template-columns: repeat(4, 1fr); }
   .dsh-chatroom-avatar { flex-basis: 34px; width: 34px; height: 34px; font-size: 19px; }
   .dsh-chatroom-message-column { max-width: calc(100% - 44px); }

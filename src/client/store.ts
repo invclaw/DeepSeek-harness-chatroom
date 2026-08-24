@@ -502,8 +502,31 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     const viewerRole = this.snapshot.members.find(member =>
       member.participantId === this.snapshot.identity?.participantId)?.role
     if (viewerRole === 'owner' || viewerRole === 'admin' || this.snapshot.auth.account?.role === 'super-admin') {
-      void this.loadMemberCandidates()
+      void this.loadRoomMemberCandidates()
     }
+  }
+
+  /** Load active platform accounts available to the current room creation or management surface. */
+  loadRoomMemberCandidates = async (): Promise<void> => {
+    const room = this.snapshot.room
+    if (room === undefined || this.snapshot.managementBusy) return
+    this.set({ managementBusy: true, managementError: undefined })
+    try {
+      const result = await requestJson<ChatroomRoomManagementResponse>(
+        `${CHATROOM_API_PREFIX}/rooms/manage?roomId=${encodeURIComponent(room.id)}`,
+      )
+      if (this.snapshot.room?.id === room.id) this.applyRoomManagement(result)
+    } catch (error) {
+      this.set({ managementBusy: false, managementError: errorMessage(error) })
+    }
+  }
+
+  /** Apply the blank-Session group name and selected members as one user action. */
+  completeGroupSetup = async (title: string, participantIds: readonly string[]): Promise<boolean> => {
+    const room = this.snapshot.room
+    if (room === undefined || title.trim() === '' || participantIds.length === 0) return false
+    if (title.trim() !== room.title && !await this.renameRoom(title)) return false
+    return await this.addRoomMembers(participantIds)
   }
 
   /** Close group management without changing the active room. */
@@ -1237,20 +1260,6 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       managementBusy: false,
       managementError: undefined,
     })
-  }
-
-  private async loadMemberCandidates(): Promise<void> {
-    const room = this.snapshot.room
-    if (room === undefined || this.snapshot.managementBusy) return
-    this.set({ managementBusy: true, managementError: undefined })
-    try {
-      const result = await requestJson<ChatroomRoomManagementResponse>(
-        `${CHATROOM_API_PREFIX}/rooms/manage?roomId=${encodeURIComponent(room.id)}`,
-      )
-      if (this.snapshot.room?.id === room.id) this.applyRoomManagement(result)
-    } catch (error) {
-      this.set({ managementBusy: false, managementError: errorMessage(error) })
-    }
   }
 
   private receiveNotification(notification: ChatroomNotification): void {

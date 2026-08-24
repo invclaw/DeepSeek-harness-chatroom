@@ -174,6 +174,10 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     sendDirect: (text: string) => Promise<boolean>;
     /** Open group management for the active room. */
     openMembers: () => void;
+    /** Load active platform accounts available to the current room creation or management surface. */
+    loadRoomMemberCandidates: () => Promise<void>;
+    /** Apply the blank-Session group name and selected members as one user action. */
+    completeGroupSetup: (title: string, participantIds: readonly string[]) => Promise<boolean>;
     /** Close group management without changing the active room. */
     closeMembers: () => void;
     /** Add selected active platform accounts to the current room. */
@@ -251,7 +255,6 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private receive;
     private replaceReaction;
     private applyRoomManagement;
-    private loadMemberCandidates;
     private receiveNotification;
     private receiveDirectMessage;
     private clearUnread;

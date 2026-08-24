@@ -407,6 +407,38 @@ describe('ChatroomClientStore', () => {
       members: [owner, added], memberCandidates: [], managementBusy: false,
     })
   })
+
+  it('renames a blank shared Session and adds selected accounts as one setup action', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const renamed = { ...room, title: '项目群' }
+    const owner = { ...identity, role: 'owner' as const, joinedAt: 1, lastSeenAt: 2, online: true }
+    const added = {
+      participantId: 'bob-id', username: 'bob-user', displayName: 'Bob', avatarId: 'panda' as const,
+      role: 'member' as const, joinedAt: 3, lastSeenAt: 3, online: false,
+    }
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ room: renamed, members: [owner] }))
+      .mockResolvedValueOnce(jsonResponse({ room: renamed, members: [owner, added] }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    store.activateSession(room.sessionId)
+    FakeEventSource.instances[1]?.emit({
+      type: 'snapshot', room, identity, online: 1, members: [owner], reactions: [], threadPreviews: [],
+    })
+
+    await expect(store.completeGroupSetup('项目群', ['bob-id'])).resolves.toBe(true)
+    expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
+      roomId: 'lobby', action: 'rename', title: '项目群',
+    })
+    expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+      roomId: 'lobby', action: 'add-members', participantIds: ['bob-id'],
+    })
+    expect(store.getSnapshot()).toMatchObject({ room: renamed, members: [owner, added], managementBusy: false })
+  })
 })
 
 function roomInfo() {
