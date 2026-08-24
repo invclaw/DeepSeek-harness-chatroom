@@ -1,39 +1,95 @@
-# DeepSeek Harness Chatroom
+<div align="center">
+  <h1>DeepSeek Harness Chatroom</h1>
+  <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
+  <p><a href="README.zh.md">简体中文</a> · English</p>
+  <p>
+    <img alt="Version 1.1.5" src="https://img.shields.io/badge/version-1.1.5-4f6bff">
+    <img alt="Harness RC7 or later" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
+    <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
+    <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
+  </p>
+</div>
 
-[简体中文](README.zh.md) | English
+Turn every native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Session into a persistent shared room—without replacing the sidebar, conversation stream, Agent runtime, model picker, permission controls, trajectory, or Session log.
 
-An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web plugin that lets multiple browsers create and switch among persistent shared Sessions while retaining the complete native conversation UI.
+<p align="center">
+  <img src="docs/assets/group-chat.jpg" alt="A shared Harness room with avatars, mentions, reactions, images, message actions, and a branch preview" width="100%">
+</p>
+<p align="center"><sub>Human-first chat, native Agent responses, rich media, reactions, and live branch previews in one Session.</sub></p>
 
-## Features
+## Why this plugin
 
-- Optional system-wide accounts with password registration, super-administrator provisioning, disabled-account revocation, password rotation, and one identity reused across rooms
-- Pluggable authentication through local passwords, generic enterprise OIDC Authorization Code + PKCE/nonce callbacks, or the community `dsh-auth` administrator identity
-- A standalone login page and `/auth/verify` contract for an edge `forward_auth`, covering the Harness SPA, APIs, downloads, SSE, and WebSockets instead of relying on a client-side overlay
-- A super-administrator console for registration policy, user creation, roles/status, and encrypted OIDC provider configuration; client secrets are never returned to browsers
-- Durable private text conversations between accounts, visible only to their two participants and delivered through the existing toast, unread, and browser-notification channel
-- Legacy identity mode still supports one first-visit display-name and avatar selection reused across every room through a durable, opaque browser-session cookie
-- Every ordinary Harness Session becomes a shared room on first use, retaining the native new-session and sidebar flows
-- Human-first chat: ordinary messages do not wake the Agent; `@AI` or the configured AI display name explicitly requests a reply
-- RC7's native `@` menu lists AI and current room members together; only `@AI` or the configured AI name wakes the Agent
-- Harness's native live channel synchronizes messages, replies, and execution state
-- Native sidebar, Conversation/Trajectory tabs, reasoning and tool flow, Session log, model selection, and composer
-- Remote deployments can allowlist chatroom participant IDs for the native Models settings page; the bridge exposes only model-configuration methods and keeps Host file opening and every unrelated privileged API disabled
-- Emoji insertion, reply quotes, and authenticated room-file upload/download cards; pure image and file messages render directly without placeholder text bubbles
-- Oversized images are resized before entering Harness's durable attachment store; stop/queue/steer behavior, slash commands, approvals, and question interactions stay native
-- Participant names added on the Host before Session admission, so every browser and the model see the same identity
-- Current identity, online count, and Group management in the native Session header, with no floating room launcher
-- A right-side management drawer where room managers and platform super administrators search and check active platform accounts to add them directly, alongside member avatars, online state, and role controls
-- In-page message toasts, unread title badges, and opt-in browser system notifications across rooms
-- Persistent branch replies in a right-side panel that retains one native Harness runtime and switches its Session in place, including Markdown, image/file upload, model and permission selectors, stop/queue/steer, slash commands, approvals, question interactions, Think/tool trajectory, failure details, and retries
-- Native AI/member `@` candidates inside the branch composer; every branch owns an independent Session, so `@AI` answers, quotes, and tool runs stay inside that branch while chatroom reactions, replies, forwarding, and selection remain available without nested chatroom branches
-- Images remain visible and durable in room and branch history; when a selected model is text-only, only that model request receives deterministic text markers in place of historical images
-- Quiet root-message branch activity with the total reply count and latest three replies, updated live without opening the branch panel
-- Reply, like, and forward stay visible; copy, the full reaction picker, multi-select, and branch live in a clickable overflow menu as well as the context menu, with a full-width branch and bottom action menu on mobile
-- Durable message reactions and selection checkboxes for every human and AI message; merged forwarding is rebuilt from authoritative Session events and retains literal/Markdown text, images, files, quotes, nested forwards, and reaction counts
-- Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
-- No changes to the DeepSeek Harness repository
+| Native Harness, preserved | Collaboration, added | Identity, ready for deployment |
+| --- | --- | --- |
+| Sessions, Agent presets, models, permissions, Think/tool trajectory, approvals, questions, slash commands, stop/queue/steer, and retries stay native. | Shared rooms, presence, mentions, replies, reactions, rich media, forwarding, multi-select, branches, notifications, group management, and private chat. | Local accounts, administrator provisioning, roles, account revocation, `dsh-auth`, enterprise OIDC/SSO, automatic provider redirect, and an edge `forward_auth` contract. |
 
-Version 1.1.5 adds an inline group-creation card to the native blank-Session screen: before the first message, the owner can name the group, search active platform accounts, select several members, and add everyone with one action. Existing conversations, branch Sessions, and established multi-member rooms do not show this card. Version 1.1.4 makes the native New Session action create a distinct Session instead of reusing a branch or human-only room that Harness still classifies as blank, keeps branch Sessions outside Workspace reuse candidates, and shows shared-room creation only while its request is actually pending. Version 1.1.3 replaces copied room invitation links with a searchable multi-select directory of active platform accounts for room managers and platform super administrators; checked users are added to the room immediately. Version 1.1.2 rebuilds **Settings → Chatroom & accounts** as a width-safe native Settings column using Harness theme tokens, labeled account and OIDC fields, responsive member actions, and the same module, hairline, and capsule-control vocabulary as the Models and Agent presets pages. Version 1.1.1 keeps the first AI run on Harness's native turn numbering instead of writing a synthetic setup turn. Version 1.1.0 makes native Harness Sessions shared by default, removes the floating launcher, and moves account and SSO administration into native Settings. An installed `dsh-auth` is the initial default login provider; `local=1` retains local-account recovery.
+The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initialization is asynchronous: chatroom storage, model, or Session failures remain isolated and never prevent Harness Web from starting.
+
+## Product tour
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/assets/new-group-setup.jpg" alt="Create a group from the native blank Session screen"><br>
+      <strong>Create the room before the first message</strong><br>
+      Name the room, search the platform user directory, select several members, and keep the native new-Session composer.
+    </td>
+    <td width="50%">
+      <img src="docs/assets/group-management.jpg" alt="Group management drawer with account directory and room members"><br>
+      <strong>Manage members in place</strong><br>
+      Owners, room administrators, and platform super administrators add known accounts directly and see roles and presence.
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <img src="docs/assets/account-settings.jpg" alt="Native Harness Chatroom and accounts settings page"><br>
+      <strong>Keep administration inside Harness Settings</strong><br>
+      Registration policy, account creation, roles, password rotation, private chat, `dsh-auth`, and OIDC providers follow the native Settings design language.
+    </td>
+  </tr>
+</table>
+
+> Screenshots are captured from the deployed v1.1.5 product UI. No mockups are used.
+
+## Core capabilities
+
+### Shared rooms and human-first AI
+
+- Every ordinary Harness Session becomes a durable room on first use; **New session** always creates a distinct room.
+- Human messages synchronize in real time without waking the Agent. `@AI` or the configured AI display name explicitly requests an Agent reply.
+- The native `@` menu lists the Agent and current room members together. Participant identity is attached on the Host before Session admission, so browsers and the model see the same sender.
+- The Session header shows the current identity, online count, and **Group management**. New-message toasts, title unread counts, and opt-in browser notifications work across rooms.
+
+### Complete native Agent runtime
+
+- The native sidebar, Conversation/Trajectory tabs, composer, model and permission selectors, reasoning/tool flow, Session log, approvals, questions, slash commands, stop/queue/steer, failures, and retries remain intact.
+- Persistent branches open in a right-side panel and own independent Harness Sessions. Branches support Markdown, `@` candidates, images/files, quotes, reactions, forwarding, selection, and the full Agent runtime without nested chatroom branches.
+- Historical images remain durable. For text-only models, only the model request receives deterministic text markers in place of image input; the UI keeps the original media.
+
+### Messaging and media
+
+- Avatars, timestamps, reply quotes, emoji insertion, message reactions, Markdown, image previews, and authenticated file upload/download.
+- Pure image and file messages render directly—no extra “sent an image/file” placeholder bubble. Oversized images are resized before entering Harness attachment storage.
+- Reply, like, branch, and forward are available from the message row; copy, reaction picker, and multi-select remain available from the overflow/context menu, with a mobile bottom sheet.
+- Merged forwarding is rebuilt from authoritative Session events and retains text/Markdown, media, quotes, nested forwards, and reaction counts.
+
+### Accounts, SSO, and private chat
+
+- Optional local password registration, super-administrator account provisioning, roles/status, password rotation, disabled-account revocation, and one identity reused across rooms.
+- Pluggable authentication through local accounts, [`dsh-auth`](https://github.com/hxy91819/dsh-auth), or enterprise OIDC Authorization Code with discovery, PKCE, state, and nonce.
+- The chosen external provider can automatically receive unauthenticated users; `local=1` keeps a local recovery entry.
+- Durable private text conversations are visible only to their two participants and reuse the same unread/toast/browser-notification channel.
+
+<details>
+<summary><strong>Recent releases</strong></summary>
+
+- **1.1.5** — create a group and select platform members directly on the native blank-Session screen.
+- **1.1.4** — guarantee distinct native New Sessions and exclude branch Sessions from blank-Session reuse.
+- **1.1.3** — replace copied invitation links with direct account-directory selection.
+- **1.1.2** — rebuild **Settings → Chatroom & accounts** in the native Harness Settings design language.
+- **1.1.0** — make Harness Sessions shared by default, add account/SSO administration, and prefer installed `dsh-auth` as the initial login provider.
+
+</details>
 
 ## Requirements
 
