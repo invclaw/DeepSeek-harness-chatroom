@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.1.5" src="https://img.shields.io/badge/version-1.1.5-4f6bff">
+    <img alt="版本 1.1.6" src="https://img.shields.io/badge/version-1.1.6-4f6bff">
     <img alt="Harness RC7 或更高" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -83,6 +83,7 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.1.6** — 新建或恢复分支时把分支 Session 挂载到原生 Workspace，保留的 Harness iframe 可以直接选中目标会话，不再等待到超时。
 - **1.1.5** — 在原生空白 Session 首屏直接建群并勾选平台成员。
 - **1.1.4** — 保证原生“新会话”创建独立 Session，并排除分支 Session 的空白会话复用。
 - **1.1.3** — 移除复制邀请链接，改为直接从系统账号目录选择成员。

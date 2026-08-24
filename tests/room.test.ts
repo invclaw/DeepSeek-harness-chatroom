@@ -271,7 +271,7 @@ describe('ChatroomRuntime', () => {
     })
     expect(opened.messages).toEqual([])
     expect(harness.agents[1]?.session.append).toHaveBeenCalledOnce()
-    expect(harness.attached).toEqual(['chatroom-v1-lobby'])
+    expect(harness.attached).toEqual(['chatroom-v1-lobby', opened.thread.sessionId])
 
     await runtime.submitThread(opened.thread.id, bob, '先讨论，不叫 AI')
     expect(harness.agents[1]?.session.append).toHaveBeenCalledTimes(2)

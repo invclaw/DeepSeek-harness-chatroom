@@ -2092,7 +2092,7 @@ var ChatroomRuntime = class {
     const state = this.requireThreadState(threadId);
     if (state.binding !== void 0) return state.binding;
     const parentSessionId = this.requireState(state.record.roomId).record.sessionId;
-    state.activation ??= this.acquireAgent(state.record.sessionId, parentSessionId).then((binding) => {
+    state.activation ??= this.activateSharedSession(state.record.sessionId, parentSessionId).then((binding) => {
       state.binding = binding;
       return binding;
     }).finally(() => {
@@ -2263,9 +2263,12 @@ var ChatroomRuntime = class {
     return await state.activation;
   }
   async activateRoom(state) {
-    const binding = await this.acquireAgent(state.record.sessionId);
+    return await this.activateSharedSession(state.record.sessionId);
+  }
+  async activateSharedSession(sessionId, parentSessionId) {
+    const binding = await this.acquireAgent(sessionId, parentSessionId);
     try {
-      await this.attachWorkspace(state.record.sessionId);
+      await this.attachWorkspace(sessionId);
       return binding;
     } catch (error) {
       await binding.release();

@@ -132,6 +132,7 @@ export declare class ChatroomRuntime {
     private seedConfiguredRoom;
     private ensureRoom;
     private activateRoom;
+    private activateSharedSession;
     private ensureRoomTitle;
     private acquireAgent;
     /** Ensure one shared Session uses native Workspace navigation. */

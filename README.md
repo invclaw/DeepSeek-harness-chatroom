@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.1.5" src="https://img.shields.io/badge/version-1.1.5-4f6bff">
+    <img alt="Version 1.1.6" src="https://img.shields.io/badge/version-1.1.6-4f6bff">
     <img alt="Harness RC7 or later" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -83,6 +83,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.1.6** — attach every new or resumed branch Session to the native Workspace so the retained Harness iframe can select it without timing out.
 - **1.1.5** — create a group and select platform members directly on the native blank-Session screen.
 - **1.1.4** — guarantee distinct native New Sessions and exclude branch Sessions from blank-Session reuse.
 - **1.1.3** — replace copied invitation links with direct account-directory selection.
