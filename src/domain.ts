@@ -98,6 +98,75 @@ export interface ReactionRecord {
   readonly createdAt: number
 }
 
+export type ChatroomAccountRole = 'super-admin' | 'admin' | 'member'
+export type ChatroomAccountStatus = 'active' | 'disabled'
+
+export interface AccountRecord {
+  readonly id: string
+  readonly username: string
+  readonly usernameKey: string
+  readonly displayName: string
+  readonly avatarId: ChatroomAvatarId
+  readonly passwordHash?: string
+  readonly role: ChatroomAccountRole
+  readonly status: ChatroomAccountStatus
+  readonly createdAt: number
+  readonly updatedAt: number
+  readonly lastLoginAt?: number
+}
+
+export interface AuthSessionRecord {
+  readonly userId: string
+  readonly createdAt: number
+  readonly lastSeenAt: number
+  readonly expiresAt: number
+}
+
+export interface AuthSettingsRecord {
+  readonly allowSelfRegistration: boolean
+  readonly updatedAt: number
+}
+
+export interface AuthProviderRecord {
+  readonly id: string
+  readonly type: 'oidc'
+  readonly label: string
+  readonly enabled: boolean
+  readonly issuer: string
+  readonly clientId: string
+  readonly encryptedClientSecret: string
+  readonly scopes: string
+  readonly usernameClaim: string
+  readonly displayNameClaim: string
+  readonly autoCreateUsers: boolean
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+export interface ExternalAccountRecord {
+  readonly providerId: string
+  readonly subject: string
+  readonly userId: string
+  readonly createdAt: number
+}
+
+export interface DirectConversationRecord {
+  readonly id: string
+  readonly participantIds: readonly [string, string]
+  readonly createdAt: number
+  readonly updatedAt: number
+  readonly nextSequence: number
+}
+
+export interface DirectMessageRecord {
+  readonly id: string
+  readonly conversationId: string
+  readonly sequence: number
+  readonly senderId: string
+  readonly text: string
+  readonly createdAt: number
+}
+
 const identitySchema = z.object({
   participantId: z.uuid(),
   displayName: z.string().min(1),
@@ -209,6 +278,72 @@ const reactionSchema = z.object({
   createdAt: nonNegativeSafeInteger,
 }) as z.ZodType<ReactionRecord>
 
+const accountSchema = z.object({
+  id: z.uuid(),
+  username: z.string().min(1),
+  usernameKey: z.string().min(1),
+  displayName: z.string().min(1),
+  avatarId: z.string().refine(isChatroomAvatarId),
+  passwordHash: z.string().min(1).optional(),
+  role: z.union([z.literal('super-admin'), z.literal('admin'), z.literal('member')]),
+  status: z.union([z.literal('active'), z.literal('disabled')]),
+  createdAt: nonNegativeSafeInteger,
+  updatedAt: nonNegativeSafeInteger,
+  lastLoginAt: nonNegativeSafeInteger.optional(),
+}) as z.ZodType<AccountRecord>
+
+const authSessionSchema = z.object({
+  userId: z.uuid(),
+  createdAt: nonNegativeSafeInteger,
+  lastSeenAt: nonNegativeSafeInteger,
+  expiresAt: nonNegativeSafeInteger,
+}) as z.ZodType<AuthSessionRecord>
+
+const authSettingsSchema = z.object({
+  allowSelfRegistration: z.boolean(),
+  updatedAt: nonNegativeSafeInteger,
+}) as z.ZodType<AuthSettingsRecord>
+
+const authProviderSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal('oidc'),
+  label: z.string().min(1),
+  enabled: z.boolean(),
+  issuer: z.string().url(),
+  clientId: z.string().min(1),
+  encryptedClientSecret: z.string().min(1),
+  scopes: z.string().min(1),
+  usernameClaim: z.string().min(1),
+  displayNameClaim: z.string().min(1),
+  autoCreateUsers: z.boolean(),
+  createdAt: nonNegativeSafeInteger,
+  updatedAt: nonNegativeSafeInteger,
+}) as z.ZodType<AuthProviderRecord>
+
+const externalAccountSchema = z.object({
+  providerId: z.string().min(1),
+  subject: z.string().min(1),
+  userId: z.uuid(),
+  createdAt: nonNegativeSafeInteger,
+}) as z.ZodType<ExternalAccountRecord>
+
+const directConversationSchema = z.object({
+  id: z.uuid(),
+  participantIds: z.tuple([z.uuid(), z.uuid()]),
+  createdAt: nonNegativeSafeInteger,
+  updatedAt: nonNegativeSafeInteger,
+  nextSequence: nonNegativeSafeInteger,
+}) as z.ZodType<DirectConversationRecord>
+
+const directMessageSchema = z.object({
+  id: z.uuid(),
+  conversationId: z.uuid(),
+  sequence: nonNegativeSafeInteger,
+  senderId: z.uuid(),
+  text: z.string().min(1),
+  createdAt: nonNegativeSafeInteger,
+}) as z.ZodType<DirectMessageRecord>
+
 /** Durable identities, rooms, and the version-zero message table retained for on-disk compatibility. */
 export const chatroomDomainSpec = defineDomain({
   name: 'chatroom',
@@ -222,5 +357,12 @@ export const chatroomDomainSpec = defineDomain({
     threads: domainTable<string, ThreadRecord>(threadSchema),
     thread_messages: domainTable<string, ThreadMessageRecord>(threadMessageSchema),
     reactions: domainTable<string, ReactionRecord>(reactionSchema),
+    accounts: domainTable<string, AccountRecord>(accountSchema),
+    auth_sessions: domainTable<string, AuthSessionRecord>(authSessionSchema),
+    auth_settings: domainTable<string, AuthSettingsRecord>(authSettingsSchema),
+    auth_providers: domainTable<string, AuthProviderRecord>(authProviderSchema),
+    external_accounts: domainTable<string, ExternalAccountRecord>(externalAccountSchema),
+    direct_conversations: domainTable<string, DirectConversationRecord>(directConversationSchema),
+    direct_messages: domainTable<string, DirectMessageRecord>(directMessageSchema),
   },
 })

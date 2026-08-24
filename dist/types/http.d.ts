@@ -12,6 +12,11 @@ export declare class ChatroomHttpController {
     /** Dispatch one request under a registered chatroom API prefix. */
     handle(request: IncomingMessage, response: ServerResponse): Promise<void>;
     private handleSession;
+    private handleAuthentication;
+    private handleAdministration;
+    private handleAccount;
+    private handleDirect;
+    private handleDirectMessages;
     private handleRooms;
     private handleRoomSelection;
     private handleRoomManagement;
@@ -27,7 +32,10 @@ export declare class ChatroomHttpController {
     private handleConfiguration;
     private sessionPayload;
     private requireIdentity;
+    private requireAccount;
     private token;
+    private authToken;
+    private setAuthCookie;
 }
 /** Whether the remote administrator bridge exposes one API Proxy method. */
 export declare function isRemoteConfigurationMethod(method: string): boolean;

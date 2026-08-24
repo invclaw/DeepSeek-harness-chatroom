@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-chatroom",
-  "version": "0.9.10",
+  "version": "1.0.0",
   "description": "Multi-user AI chatroom plugin for DeepSeek Harness Web",
   "type": "module",
   "main": "dist/index.js",
@@ -68,6 +68,7 @@
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
     "markdown-to-jsx": "9.10.2",
+    "openid-client": "6.8.7",
     "sharp": "^0.35.3",
     "zod": "^4.2.1"
   },

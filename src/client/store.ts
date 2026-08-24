@@ -1,12 +1,21 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
+  ChatroomAccount,
+  ChatroomAdminOverview,
+  ChatroomAuthProviderAdmin,
+  ChatroomAuthState,
+  ChatroomDirectConversation,
+  ChatroomDirectMessage,
+  ChatroomDirectMessageEvent,
+  ChatroomDirectPeer,
+  ChatroomDirectResponse,
   ChatroomErrorResponse,
   ChatroomForwardItem,
   ChatroomIdentity,
   ChatroomInfo,
   ChatroomMember,
   ChatroomNotification,
-  ChatroomNotificationEvent,
+  ChatroomGlobalEvent,
   ChatroomPromptContentPart,
   ChatroomPromptRequest,
   ChatroomPromptResponse,
@@ -26,7 +35,7 @@ import type {
 import type { ChatroomReactionEmoji } from '../reactions.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
 
-export type ChatroomPhase = 'loading' | 'identity-required' | 'ready' | 'error'
+export type ChatroomPhase = 'loading' | 'auth-required' | 'identity-required' | 'ready' | 'error'
 export type ChatroomConnection = 'offline' | 'connecting' | 'online'
 
 /** Browser-owned file waiting to be merged into the next room submission. */
@@ -65,6 +74,7 @@ export interface ChatroomView {
   readonly rooms: readonly ChatroomInfo[]
   readonly room: ChatroomInfo | undefined
   readonly identity: ChatroomIdentity | undefined
+  readonly auth: ChatroomAuthState
   readonly online: number
   readonly members: readonly ChatroomMember[]
   readonly reactions: readonly ChatroomReaction[]
@@ -91,6 +101,20 @@ export interface ChatroomView {
   readonly forwardOpen: boolean
   readonly forwardBusy: boolean
   readonly forwardError: string | undefined
+  readonly accountOpen: boolean
+  readonly accountBusy: boolean
+  readonly accountError: string | undefined
+  readonly adminOpen: boolean
+  readonly adminBusy: boolean
+  readonly adminOverview: ChatroomAdminOverview | undefined
+  readonly adminError: string | undefined
+  readonly directOpen: boolean
+  readonly directBusy: boolean
+  readonly directPeers: readonly ChatroomDirectPeer[]
+  readonly directConversations: readonly ChatroomDirectConversation[]
+  readonly directConversation: ChatroomDirectConversation | undefined
+  readonly directMessages: readonly ChatroomDirectMessage[]
+  readonly directError: string | undefined
 }
 
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
@@ -103,6 +127,13 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     rooms: [],
     room: undefined,
     identity: undefined,
+    auth: {
+      enabled: false,
+      authenticated: true,
+      providers: [],
+      allowSelfRegistration: true,
+      bootstrapRequired: false,
+    },
     online: 0,
     members: [],
     reactions: [],
@@ -129,6 +160,20 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     forwardOpen: false,
     forwardBusy: false,
     forwardError: undefined,
+    accountOpen: false,
+    accountBusy: false,
+    accountError: undefined,
+    adminOpen: false,
+    adminBusy: false,
+    adminOverview: undefined,
+    adminError: undefined,
+    directOpen: false,
+    directBusy: false,
+    directPeers: [],
+    directConversations: [],
+    directConversation: undefined,
+    directMessages: [],
+    directError: undefined,
   }
   private readonly listeners = new Set<() => void>()
   private eventSource: EventSource | undefined
@@ -214,6 +259,220 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   /** Show identity setup or the shared room directory. */
   openRoom = (): void => {
     this.set({ open: true, error: undefined })
+  }
+
+  /** Authenticate one local account and restore its room directory. */
+  login = async (username: string, password: string): Promise<boolean> => {
+    this.set({ phase: 'loading', error: undefined })
+    try {
+      const session = await requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      this.acceptSession(session)
+      return true
+    } catch (error) {
+      this.set({ phase: 'auth-required', open: true, error: errorMessage(error) })
+      return false
+    }
+  }
+
+  /** Register a local member or the bootstrap super administrator. */
+  register = async (input: {
+    username: string
+    password: string
+    displayName: string
+    avatarId: string
+    bootstrapToken?: string
+  }): Promise<boolean> => {
+    this.set({ phase: 'loading', error: undefined })
+    try {
+      const session = await requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      })
+      this.acceptSession(session)
+      return true
+    } catch (error) {
+      this.set({ phase: 'auth-required', open: true, error: errorMessage(error) })
+      return false
+    }
+  }
+
+  /** Revoke the current account session and return to the login gate. */
+  logout = async (): Promise<void> => {
+    try {
+      await requestEmpty(`${CHATROOM_API_PREFIX}/auth/logout`, { method: 'POST' })
+    } finally {
+      this.closeEvents()
+      this.closeNotifications()
+      const auth = this.snapshot.auth
+      this.set({
+        phase: 'auth-required',
+        open: true,
+        rooms: [],
+        room: undefined,
+        identity: undefined,
+        auth: {
+          enabled: auth.enabled,
+          authenticated: false,
+          providers: auth.providers,
+          allowSelfRegistration: auth.allowSelfRegistration,
+          bootstrapRequired: auth.bootstrapRequired,
+        },
+        accountOpen: false,
+        accountError: undefined,
+        adminOpen: false,
+        adminOverview: undefined,
+        directOpen: false,
+        directConversation: undefined,
+        directMessages: [],
+      })
+    }
+  }
+
+  /** Open password and personal account controls. */
+  openAccount = (): void => {
+    if (!this.snapshot.auth.enabled || !this.snapshot.auth.authenticated) return
+    this.set({ accountOpen: true, accountBusy: false, accountError: undefined, adminOpen: false, directOpen: false })
+  }
+
+  closeAccount = (): void => {
+    this.set({ accountOpen: false, accountBusy: false, accountError: undefined })
+  }
+
+  /** Change the current local password and retain the newly rotated session. */
+  changePassword = async (currentPassword: string, newPassword: string): Promise<boolean> => {
+    this.set({ accountBusy: true, accountError: undefined })
+    try {
+      const result = await requestJson<{ account: ChatroomAccount }>(`${CHATROOM_API_PREFIX}/account`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'change-password', currentPassword, newPassword }),
+      })
+      this.set({
+        accountOpen: false,
+        accountBusy: false,
+        accountError: undefined,
+        auth: { ...this.snapshot.auth, account: result.account },
+        identity: result.account,
+      })
+      return true
+    } catch (error) {
+      this.set({ accountBusy: false, accountError: errorMessage(error) })
+      return false
+    }
+  }
+
+  /** Open and load the super-administrator console. */
+  openAdmin = async (): Promise<void> => {
+    if (this.snapshot.auth.account?.role !== 'super-admin') return
+    this.set({ adminOpen: true, adminBusy: true, adminError: undefined, directOpen: false, accountOpen: false })
+    try {
+      const overview = await requestJson<ChatroomAdminOverview>(`${CHATROOM_API_PREFIX}/admin`)
+      this.set({ adminBusy: false, adminOverview: overview })
+    } catch (error) {
+      this.set({ adminBusy: false, adminError: errorMessage(error) })
+    }
+  }
+
+  closeAdmin = (): void => {
+    this.set({ adminOpen: false, adminError: undefined })
+  }
+
+  /** Create a local account from the super-administrator console. */
+  adminCreateUser = async (input: {
+    username: string
+    password: string
+    displayName: string
+    avatarId: string
+    role: 'super-admin' | 'admin' | 'member'
+  }): Promise<boolean> => this.adminMutation({ action: 'create-user', ...input })
+
+  /** Change a platform account role or activation state. */
+  adminUpdateUser = async (
+    userId: string,
+    patch: { role?: 'super-admin' | 'admin' | 'member'; status?: 'active' | 'disabled' },
+  ): Promise<boolean> => this.adminMutation({ action: 'update-user', userId, ...patch })
+
+  /** Change whether new users may register themselves. */
+  adminSetSelfRegistration = async (allowSelfRegistration: boolean): Promise<boolean> =>
+    this.adminMutation({ action: 'settings', allowSelfRegistration })
+
+  /** Add or update one generic enterprise OIDC provider. */
+  adminSaveProvider = async (input: {
+    id: string
+    label: string
+    enabled: boolean
+    issuer: string
+    clientId: string
+    clientSecret?: string
+    scopes: string
+    usernameClaim: string
+    displayNameClaim: string
+    autoCreateUsers: boolean
+  }): Promise<boolean> => this.adminMutation({ action: 'save-provider', ...input })
+
+  adminDeleteProvider = async (providerId: string): Promise<boolean> =>
+    this.adminMutation({ action: 'delete-provider', providerId })
+
+  /** Open the private-message directory. */
+  openDirect = async (peerId?: string): Promise<void> => {
+    this.set({ directOpen: true, directBusy: true, directError: undefined, adminOpen: false, accountOpen: false })
+    try {
+      const response = peerId === undefined
+        ? await requestJson<ChatroomDirectResponse>(`${CHATROOM_API_PREFIX}/direct`)
+        : await requestJson<ChatroomDirectResponse>(`${CHATROOM_API_PREFIX}/direct`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ peerId }),
+        })
+      this.set({
+        directBusy: false,
+        directPeers: response.peers,
+        directConversations: response.conversations,
+        directConversation: response.conversation,
+        directMessages: response.messages ?? [],
+      })
+    } catch (error) {
+      this.set({ directBusy: false, directError: errorMessage(error) })
+    }
+  }
+
+  closeDirect = (): void => {
+    this.set({ directOpen: false, directError: undefined })
+  }
+
+  /** Send one message inside the selected private conversation. */
+  sendDirect = async (text: string): Promise<boolean> => {
+    const conversation = this.snapshot.directConversation
+    if (conversation === undefined || text.trim() === '' || this.snapshot.directBusy) return false
+    this.set({ directBusy: true, directError: undefined })
+    try {
+      const response = await requestJson<{
+        conversation: ChatroomDirectConversation
+        message: ChatroomDirectMessage
+      }>(`${CHATROOM_API_PREFIX}/direct/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: conversation.id, text }),
+      })
+      const messages = this.snapshot.directMessages.some(message => message.id === response.message.id)
+        ? this.snapshot.directMessages
+        : [...this.snapshot.directMessages, response.message]
+      this.set({
+        directBusy: false,
+        directConversation: response.conversation,
+        directMessages: messages,
+        directConversations: replaceDirectConversation(this.snapshot.directConversations, response.conversation),
+      })
+      return true
+    } catch (error) {
+      this.set({ directBusy: false, directError: errorMessage(error) })
+      return false
+    }
   }
 
   /** Open group management for the active room. */
@@ -666,6 +925,41 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     await this.loadSession()
   }
 
+  private async adminMutation(body: Record<string, unknown>): Promise<boolean> {
+    if (this.snapshot.adminBusy) return false
+    this.set({ adminBusy: true, adminError: undefined })
+    try {
+      const response = await requestJson<ChatroomAdminOverview | { overview: ChatroomAdminOverview }>(
+        `${CHATROOM_API_PREFIX}/admin`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      )
+      const overview = 'overview' in response ? response.overview : response
+      this.set({ adminBusy: false, adminOverview: overview })
+      return true
+    } catch (error) {
+      this.set({ adminBusy: false, adminError: errorMessage(error) })
+      return false
+    }
+  }
+
+  private acceptSession(session: ChatroomSessionResponse): void {
+    if (session.identity === null) throw new Error('服务端没有返回登录账号。')
+    this.set({
+      phase: 'ready',
+      open: false,
+      connection: 'offline',
+      rooms: session.rooms,
+      identity: session.identity,
+      auth: sessionAuth(session),
+      error: undefined,
+    })
+    this.openNotifications()
+  }
+
   private selectAndOpen(room: ChatroomInfo): void {
     const rooms = this.snapshot.rooms.some(candidate => candidate.id === room.id)
       ? this.snapshot.rooms.map(candidate => candidate.id === room.id ? room : candidate)
@@ -705,6 +999,23 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     try {
       const session = await requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/session`)
       if (this.stopped) return
+      const auth = sessionAuth(session)
+      if (auth.enabled && !auth.authenticated) {
+        this.closeEvents()
+        this.closeNotifications()
+        this.set({
+          phase: 'auth-required',
+          open: true,
+          connection: 'offline',
+          rooms: [],
+          room: undefined,
+          identity: undefined,
+          auth,
+          online: 0,
+          error: undefined,
+        })
+        return
+      }
       if (session.identity === null) {
         this.closeEvents()
         this.set({
@@ -713,6 +1024,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           rooms: session.rooms,
           room: undefined,
           identity: undefined,
+          auth,
           online: 0,
           error: undefined,
         })
@@ -723,6 +1035,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         connection: 'offline',
         rooms: session.rooms,
         identity: session.identity,
+        auth,
         error: undefined,
       })
       this.openNotifications()
@@ -760,8 +1073,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     source.onmessage = (event) => {
       if (this.notificationSource !== source) return
       try {
-        const parsed = JSON.parse(event.data) as ChatroomNotificationEvent
+        const parsed = JSON.parse(event.data) as ChatroomGlobalEvent
         if (parsed.type === 'notification') this.receiveNotification(parsed.notification)
+        else if (parsed.type === 'direct-message') this.receiveDirectMessage(parsed)
       } catch {
         this.set({ error: '收到无法识别的消息提醒。' })
       }
@@ -849,6 +1163,44 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     globalThis.setTimeout(() => { this.dismissToast(notification.id) }, 6_000)
   }
 
+  private receiveDirectMessage(event: ChatroomDirectMessageEvent): void {
+    const conversations = replaceDirectConversation(this.snapshot.directConversations, event.conversation)
+    const selected = this.snapshot.directConversation?.id === event.conversation.id
+    const messages = !selected || this.snapshot.directMessages.some(message => message.id === event.message.id)
+      ? this.snapshot.directMessages
+      : [...this.snapshot.directMessages, event.message]
+    const own = event.message.senderId === this.snapshot.identity?.participantId
+    const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible'
+    const isCurrent = this.snapshot.directOpen && selected
+    this.set({
+      directConversations: conversations,
+      ...(selected ? { directConversation: event.conversation, directMessages: messages } : {}),
+      unreadCount: own || (isVisible && isCurrent) ? this.snapshot.unreadCount : this.snapshot.unreadCount + 1,
+    })
+    if (!own) {
+      const notification: ChatroomNotification = {
+        id: event.message.id,
+        roomId: `direct:${event.conversation.id}`,
+        roomTitle: '私聊',
+        participantId: event.message.senderId,
+        displayName: event.conversation.peer.displayName,
+        role: 'human',
+        text: event.message.text,
+        createdAt: event.message.createdAt,
+      }
+      const toasts = [...this.snapshot.toasts.filter(item => item.id !== notification.id), notification].slice(-4)
+      this.set({ toasts })
+      if (this.snapshot.notificationsEnabled && typeof Notification !== 'undefined' && !isVisible) {
+        try {
+          new Notification(`${event.conversation.peer.displayName} · 私聊`, { body: event.message.text })
+        } catch (error) {
+          this.set({ notificationsEnabled: false, error: `系统消息提醒失败：${errorMessage(error)}` })
+        }
+      }
+      globalThis.setTimeout(() => { this.dismissToast(notification.id) }, 6_000)
+    }
+  }
+
   private clearUnread(): void {
     if (this.snapshot.unreadCount !== 0) this.set({ unreadCount: 0 })
   }
@@ -878,8 +1230,26 @@ function replaceThreadPreview(
   return [...previews.filter(item => item.thread.id !== preview.thread.id), preview]
 }
 
+function replaceDirectConversation(
+  conversations: readonly ChatroomDirectConversation[],
+  conversation: ChatroomDirectConversation,
+): readonly ChatroomDirectConversation[] {
+  return [conversation, ...conversations.filter(item => item.id !== conversation.id)]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+}
+
 function notificationPermission(): NotificationPermission | 'unsupported' {
   return typeof Notification === 'undefined' ? 'unsupported' : Notification.permission
+}
+
+function sessionAuth(session: ChatroomSessionResponse): ChatroomAuthState {
+  return session.auth ?? {
+    enabled: false,
+    authenticated: true,
+    providers: [],
+    allowSelfRegistration: true,
+    bootstrapRequired: false,
+  }
 }
 
 /** Submit one native composer payload through human-first room admission. */
@@ -936,6 +1306,11 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, credentials: 'same-origin' })
   if (!response.ok) throw await responseError(response)
   return await response.json() as T
+}
+
+async function requestEmpty(url: string, init?: RequestInit): Promise<void> {
+  const response = await fetch(url, { ...init, credentials: 'same-origin' })
+  if (!response.ok) throw await responseError(response)
 }
 
 async function responseError(response: Response): Promise<HttpError> {

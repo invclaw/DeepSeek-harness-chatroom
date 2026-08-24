@@ -1,7 +1,7 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot } from '../types.js';
+import type { ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
-export type ChatroomPhase = 'loading' | 'identity-required' | 'ready' | 'error';
+export type ChatroomPhase = 'loading' | 'auth-required' | 'identity-required' | 'ready' | 'error';
 export type ChatroomConnection = 'offline' | 'connecting' | 'online';
 /** Browser-owned file waiting to be merged into the next room submission. */
 export interface PendingChatroomFile {
@@ -40,6 +40,7 @@ export interface ChatroomView {
     readonly rooms: readonly ChatroomInfo[];
     readonly room: ChatroomInfo | undefined;
     readonly identity: ChatroomIdentity | undefined;
+    readonly auth: ChatroomAuthState;
     readonly online: number;
     readonly members: readonly ChatroomMember[];
     readonly reactions: readonly ChatroomReaction[];
@@ -66,6 +67,20 @@ export interface ChatroomView {
     readonly forwardOpen: boolean;
     readonly forwardBusy: boolean;
     readonly forwardError: string | undefined;
+    readonly accountOpen: boolean;
+    readonly accountBusy: boolean;
+    readonly accountError: string | undefined;
+    readonly adminOpen: boolean;
+    readonly adminBusy: boolean;
+    readonly adminOverview: ChatroomAdminOverview | undefined;
+    readonly adminError: string | undefined;
+    readonly directOpen: boolean;
+    readonly directBusy: boolean;
+    readonly directPeers: readonly ChatroomDirectPeer[];
+    readonly directConversations: readonly ChatroomDirectConversation[];
+    readonly directConversation: ChatroomDirectConversation | undefined;
+    readonly directMessages: readonly ChatroomDirectMessage[];
+    readonly directError: string | undefined;
 }
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
 export declare class ChatroomClientStore implements HostObservable<ChatroomView> {
@@ -97,6 +112,60 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     stop(): void;
     /** Show identity setup or the shared room directory. */
     openRoom: () => void;
+    /** Authenticate one local account and restore its room directory. */
+    login: (username: string, password: string) => Promise<boolean>;
+    /** Register a local member or the bootstrap super administrator. */
+    register: (input: {
+        username: string;
+        password: string;
+        displayName: string;
+        avatarId: string;
+        bootstrapToken?: string;
+    }) => Promise<boolean>;
+    /** Revoke the current account session and return to the login gate. */
+    logout: () => Promise<void>;
+    /** Open password and personal account controls. */
+    openAccount: () => void;
+    closeAccount: () => void;
+    /** Change the current local password and retain the newly rotated session. */
+    changePassword: (currentPassword: string, newPassword: string) => Promise<boolean>;
+    /** Open and load the super-administrator console. */
+    openAdmin: () => Promise<void>;
+    closeAdmin: () => void;
+    /** Create a local account from the super-administrator console. */
+    adminCreateUser: (input: {
+        username: string;
+        password: string;
+        displayName: string;
+        avatarId: string;
+        role: "super-admin" | "admin" | "member";
+    }) => Promise<boolean>;
+    /** Change a platform account role or activation state. */
+    adminUpdateUser: (userId: string, patch: {
+        role?: "super-admin" | "admin" | "member";
+        status?: "active" | "disabled";
+    }) => Promise<boolean>;
+    /** Change whether new users may register themselves. */
+    adminSetSelfRegistration: (allowSelfRegistration: boolean) => Promise<boolean>;
+    /** Add or update one generic enterprise OIDC provider. */
+    adminSaveProvider: (input: {
+        id: string;
+        label: string;
+        enabled: boolean;
+        issuer: string;
+        clientId: string;
+        clientSecret?: string;
+        scopes: string;
+        usernameClaim: string;
+        displayNameClaim: string;
+        autoCreateUsers: boolean;
+    }) => Promise<boolean>;
+    adminDeleteProvider: (providerId: string) => Promise<boolean>;
+    /** Open the private-message directory. */
+    openDirect: (peerId?: string) => Promise<void>;
+    closeDirect: () => void;
+    /** Send one message inside the selected private conversation. */
+    sendDirect: (text: string) => Promise<boolean>;
     /** Open group management for the active room. */
     openMembers: () => void;
     /** Close group management without changing the active room. */
@@ -161,6 +230,8 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     resetIdentity: () => Promise<void>;
     /** Retry identity and directory recovery. */
     retry: () => Promise<void>;
+    private adminMutation;
+    private acceptSession;
     private selectAndOpen;
     private compositionFor;
     private loadSession;
@@ -172,6 +243,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private replaceReaction;
     private applyRoomManagement;
     private receiveNotification;
+    private receiveDirectMessage;
     private clearUnread;
     private updateDocumentTitle;
     private updateActiveDocumentRoom;

@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
+import { ChatroomAuthError, ChatroomAuthRateLimitError } from './auth.js'
+import { renderAuthPage } from './auth-page.js'
 import type { Config } from './config.js'
 import { cookieValue, expiredSessionCookie, sessionCookie } from './cookies.js'
 import { matchChatroomApi } from './routes.js'
@@ -8,6 +10,7 @@ import { ChatroomInputError, ChatroomRuntime } from './room.js'
 import { isChatroomReactionEmoji } from './reactions.js'
 import type {
   ChatroomErrorResponse,
+  ChatroomAccount,
   ChatroomPromptContentPart,
   ChatroomPromptRequest,
   ChatroomForwardItem,
@@ -54,6 +57,26 @@ export class ChatroomHttpController {
       }
       if (route.endpoint === '/session') {
         await this.handleSession(request, response, route.prefix)
+        return
+      }
+      if (route.endpoint.startsWith('/auth/')) {
+        await this.handleAuthentication(request, response, route.prefix, route.endpoint, url)
+        return
+      }
+      if (route.endpoint === '/admin') {
+        await this.handleAdministration(request, response)
+        return
+      }
+      if (route.endpoint === '/account') {
+        await this.handleAccount(request, response)
+        return
+      }
+      if (route.endpoint === '/direct') {
+        await this.handleDirect(request, response)
+        return
+      }
+      if (route.endpoint === '/direct/messages') {
+        await this.handleDirectMessages(request, response)
         return
       }
       if (route.endpoint === '/rooms') {
@@ -110,7 +133,12 @@ export class ChatroomHttpController {
       }
       json(response, 404, { error: '接口不存在。' } satisfies ChatroomErrorResponse)
     } catch (error) {
-      if (error instanceof ChatroomInputError) {
+      if (error instanceof ChatroomAuthRateLimitError) {
+        response.setHeader('Retry-After', String(error.retryAfterSeconds))
+        json(response, 429, { error: error.message } satisfies ChatroomErrorResponse)
+        return
+      }
+      if (error instanceof ChatroomInputError || error instanceof ChatroomAuthError) {
         json(response, 422, { error: error.message } satisfies ChatroomErrorResponse)
         return
       }
@@ -126,10 +154,26 @@ export class ChatroomHttpController {
   private async handleSession(request: IncomingMessage, response: ServerResponse, cookiePath: string): Promise<void> {
     const token = this.token(request)
     if (request.method === 'GET') {
+      if (this.config.authEnabled) {
+        let account = this.runtime.auth.account(this.authToken(request))
+        if (account === undefined) {
+          const adopted = await this.runtime.auth.adoptDshAuth(request.headers)
+          if (adopted !== undefined) {
+            account = adopted.account
+            this.setAuthCookie(response, adopted.token)
+          }
+        }
+        json(response, 200, this.sessionPayload(account ?? null, account))
+        return
+      }
       json(response, 200, this.sessionPayload(this.runtime.identity(token) ?? null))
       return
     }
     if (request.method === 'POST') {
+      if (this.config.authEnabled) {
+        json(response, 409, { error: '登录模式下请在账号设置中修改个人资料。' } satisfies ChatroomErrorResponse)
+        return
+      }
       assertSameOrigin(request)
       const body = await readJson(request, smallRequestLimit(this.config))
       const existing = this.runtime.identity(token)
@@ -153,6 +197,10 @@ export class ChatroomHttpController {
       return
     }
     if (request.method === 'DELETE') {
+      if (this.config.authEnabled) {
+        json(response, 409, { error: '登录模式下请使用退出登录。' } satisfies ChatroomErrorResponse)
+        return
+      }
       assertSameOrigin(request)
       await this.runtime.deleteIdentity(token)
       response.setHeader('Set-Cookie', expiredSessionCookie(this.config.cookieName, cookiePath))
@@ -163,8 +211,262 @@ export class ChatroomHttpController {
     methodNotAllowed(response, 'GET, POST, DELETE')
   }
 
+  private async handleAuthentication(
+    request: IncomingMessage,
+    response: ServerResponse,
+    cookiePath: string,
+    endpoint: string,
+    url: URL,
+  ): Promise<void> {
+    if (endpoint === '/auth/verify') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        methodNotAllowed(response, 'GET, HEAD')
+        return
+      }
+      let account = this.runtime.auth.account(this.authToken(request))
+      if (account === undefined) {
+        const adopted = await this.runtime.auth.adoptDshAuth(request.headers, originalRequestUri(request))
+        if (adopted !== undefined) {
+          account = adopted.account
+          this.setAuthCookie(response, adopted.token)
+        }
+      }
+      if (account === undefined) {
+        const login = `${cookiePath}/auth/page?returnTo=${encodeURIComponent(originalRequestUri(request))}`
+        response.writeHead(401, {
+          'Cache-Control': 'no-store, max-age=0',
+          Vary: 'Cookie',
+          'WWW-Authenticate': 'Session realm="DeepSeek Harness"',
+          'X-Dsh-Auth-Login': login,
+        })
+        response.end()
+        return
+      }
+      response.writeHead(204, {
+        'Cache-Control': 'no-store, max-age=0',
+        Vary: 'Cookie',
+        'X-Dsh-Auth-User-Id': account.participantId,
+        'X-Dsh-Auth-Username': encodeURIComponent(account.username),
+        'X-Dsh-Auth-Roles': account.role,
+      })
+      response.end()
+      return
+    }
+    if (endpoint === '/auth/page') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        methodNotAllowed(response, 'GET, HEAD')
+        return
+      }
+      const returnTo = safeReturnPath(url.searchParams.get('returnTo') ?? '/')
+      let account = this.runtime.auth.account(this.authToken(request))
+      if (account === undefined) {
+        const adopted = await this.runtime.auth.adoptDshAuth(request.headers, returnTo)
+        if (adopted !== undefined) {
+          account = adopted.account
+          this.setAuthCookie(response, adopted.token)
+        }
+      }
+      if (account !== undefined) {
+        response.writeHead(303, { Location: returnTo, 'Cache-Control': 'no-store' })
+        response.end()
+        return
+      }
+      html(response, 200, renderAuthPage(cookiePath, this.runtime.auth.state(), returnTo), request.method === 'HEAD')
+      return
+    }
+    if (endpoint === '/auth/providers' && request.method === 'GET') {
+      const account = this.runtime.auth.account(this.authToken(request))
+      json(response, 200, this.runtime.auth.state(account))
+      return
+    }
+    if (endpoint === '/auth/login' && request.method === 'POST') {
+      assertSameOrigin(request)
+      const body = await readJson(request, 8_192)
+      const result = await this.runtime.auth.login(fieldString(body, 'username'), fieldString(body, 'password'))
+      this.setAuthCookie(response, result.token)
+      json(response, 200, this.sessionPayload(result.account, result.account))
+      return
+    }
+    if (endpoint === '/auth/register' && request.method === 'POST') {
+      assertSameOrigin(request)
+      const body = await readJson(request, 16_384)
+      const result = await this.runtime.auth.register({
+        username: fieldString(body, 'username'),
+        password: fieldString(body, 'password'),
+        displayName: fieldString(body, 'displayName'),
+        ...(optionalFieldString(body, 'avatarId') === undefined ? {} : { avatarId: optionalFieldString(body, 'avatarId')! }),
+        ...(optionalFieldString(body, 'bootstrapToken') === undefined
+          ? {}
+          : { bootstrapToken: optionalFieldString(body, 'bootstrapToken')! }),
+      })
+      this.setAuthCookie(response, result.token)
+      json(response, 201, this.sessionPayload(result.account, result.account))
+      return
+    }
+    if (endpoint === '/auth/logout' && request.method === 'POST') {
+      assertSameOrigin(request)
+      await this.runtime.auth.logout(this.authToken(request))
+      response.setHeader('Set-Cookie', expiredSessionCookie(
+        this.config.authCookieName,
+        '/',
+        this.config.authPublicOrigin.startsWith('https://'),
+      ))
+      response.writeHead(204)
+      response.end()
+      return
+    }
+    const oidcMatch = /^\/auth\/oidc\/([^/]+)\/(start|callback)$/u.exec(endpoint)
+    if (oidcMatch !== null && request.method === 'GET') {
+      const providerId = decodeURIComponent(oidcMatch[1]!)
+      if (oidcMatch[2] === 'start') {
+        const target = await this.runtime.auth.startOidc(providerId, url.searchParams.get('returnTo') ?? '/')
+        response.writeHead(302, { Location: target.href, 'Cache-Control': 'no-store' })
+        response.end()
+        return
+      }
+      const completed = await this.runtime.auth.completeOidc(providerId, publicCallbackUrl(url, this.config))
+      this.setAuthCookie(response, completed.token)
+      response.writeHead(302, { Location: completed.returnTo, 'Cache-Control': 'no-store' })
+      response.end()
+      return
+    }
+    if (endpoint === '/auth/dsh-auth/start' && request.method === 'GET') {
+      const callbackPath = `${cookiePath}/auth/dsh-auth/callback`
+      const target = this.runtime.auth.dshAuthLoginUrl(url.searchParams.get('returnTo') ?? '/', callbackPath)
+      response.writeHead(302, { Location: target.href, 'Cache-Control': 'no-store' })
+      response.end()
+      return
+    }
+    if (endpoint === '/auth/dsh-auth/callback' && request.method === 'GET') {
+      const returnTo = safeReturnPath(url.searchParams.get('returnTo') ?? '/')
+      const adopted = await this.runtime.auth.adoptDshAuth(request.headers, returnTo)
+      if (adopted === undefined) throw new ChatroomAuthError('dsh-auth 登录未完成或已失效。')
+      this.setAuthCookie(response, adopted.token)
+      response.writeHead(302, { Location: returnTo, 'Cache-Control': 'no-store' })
+      response.end()
+      return
+    }
+    methodNotAllowed(response, endpoint.endsWith('/start') || endpoint.endsWith('/callback') ? 'GET' : 'POST')
+  }
+
+  private async handleAdministration(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const actor = this.requireAccount(request, response)
+    if (actor === undefined) return
+    if (request.method === 'GET') {
+      json(response, 200, this.runtime.auth.overview(actor))
+      return
+    }
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'GET, POST')
+      return
+    }
+    assertSameOrigin(request)
+    const body = await readJson(request, 32_768)
+    const action = fieldString(body, 'action')
+    if (action === 'create-user') {
+      const account = await this.runtime.auth.createUser(actor, {
+        username: fieldString(body, 'username'),
+        password: fieldString(body, 'password'),
+        displayName: fieldString(body, 'displayName'),
+        ...(optionalFieldString(body, 'avatarId') === undefined ? {} : { avatarId: optionalFieldString(body, 'avatarId')! }),
+        role: accountRole(body.role),
+      })
+      json(response, 201, { account, overview: this.runtime.auth.overview(actor) })
+      return
+    }
+    if (action === 'update-user') {
+      const account = await this.runtime.auth.updateUser(actor, fieldString(body, 'userId'), {
+        ...(body.role === undefined ? {} : { role: accountRole(body.role) }),
+        ...(body.status === undefined ? {} : { status: accountStatus(body.status) }),
+      })
+      json(response, 200, { account, overview: this.runtime.auth.overview(actor) })
+      return
+    }
+    if (action === 'settings') {
+      await this.runtime.auth.updateSettings(actor, fieldBoolean(body, 'allowSelfRegistration'))
+      json(response, 200, this.runtime.auth.overview(actor))
+      return
+    }
+    if (action === 'save-provider') {
+      const provider = await this.runtime.auth.saveProvider(actor, {
+        id: fieldString(body, 'id'),
+        label: fieldString(body, 'label'),
+        enabled: fieldBoolean(body, 'enabled'),
+        issuer: fieldString(body, 'issuer'),
+        clientId: fieldString(body, 'clientId'),
+        ...(optionalFieldString(body, 'clientSecret') === undefined
+          ? {}
+          : { clientSecret: optionalFieldString(body, 'clientSecret')! }),
+        scopes: fieldString(body, 'scopes'),
+        usernameClaim: fieldString(body, 'usernameClaim'),
+        displayNameClaim: fieldString(body, 'displayNameClaim'),
+        autoCreateUsers: fieldBoolean(body, 'autoCreateUsers'),
+      })
+      json(response, 200, { provider, overview: this.runtime.auth.overview(actor) })
+      return
+    }
+    if (action === 'delete-provider') {
+      await this.runtime.auth.deleteProvider(actor, fieldString(body, 'providerId'))
+      json(response, 200, this.runtime.auth.overview(actor))
+      return
+    }
+    throw new ChatroomAuthError('管理员操作无效。')
+  }
+
+  private async handleAccount(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const actor = this.requireAccount(request, response)
+    if (actor === undefined) return
+    const body = await readJson(request, 4_096)
+    if (fieldString(body, 'action') !== 'change-password') throw new ChatroomAuthError('账号操作无效。')
+    const changed = await this.runtime.auth.changePassword(
+      actor,
+      fieldString(body, 'currentPassword'),
+      fieldString(body, 'newPassword'),
+    )
+    this.setAuthCookie(response, changed.token)
+    json(response, 200, { account: changed.account })
+  }
+
+  private async handleDirect(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    if (request.method === 'GET') {
+      json(response, 200, this.runtime.directDirectory(identity))
+      return
+    }
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'GET, POST')
+      return
+    }
+    assertSameOrigin(request)
+    const body = await readJson(request, 4_096)
+    json(response, 200, await this.runtime.openDirect(fieldString(body, 'peerId'), identity))
+  }
+
+  private async handleDirectMessages(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, this.config.maxMessageTextChars * 4 + 4_096)
+    json(response, 201, await this.runtime.sendDirect(
+      fieldString(body, 'conversationId'),
+      fieldString(body, 'text'),
+      identity,
+    ))
+  }
+
   private async handleRooms(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method === 'GET') {
+      if (this.requireIdentity(request, response) === undefined) return
       json(response, 200, { rooms: this.runtime.rooms } satisfies ChatroomRoomsResponse)
       return
     }
@@ -424,7 +726,8 @@ export class ChatroomHttpController {
     assertSameOrigin(request)
     const identity = this.requireIdentity(request, response)
     if (identity === undefined) return
-    if (!canManageRemoteSettings(this.config, identity.participantId)) {
+    const account = this.config.authEnabled ? this.runtime.auth.account(this.authToken(request)) : undefined
+    if (account?.role !== 'super-admin' && !canManageRemoteSettings(this.config, identity.participantId)) {
       json(response, 403, { error: '当前聊天室身份没有模型设置管理权限。' } satisfies ChatroomErrorResponse)
       return
     }
@@ -442,20 +745,52 @@ export class ChatroomHttpController {
     json(response, upstream.status, payload)
   }
 
-  private sessionPayload(identity: ChatroomSessionResponse['identity']): ChatroomSessionResponse {
-    return { identity, rooms: this.runtime.rooms, room: this.runtime.room }
+  private sessionPayload(
+    identity: ChatroomSessionResponse['identity'],
+    account?: ChatroomAccount,
+  ): ChatroomSessionResponse {
+    return {
+      auth: this.runtime.auth.state(account),
+      identity,
+      rooms: this.config.authEnabled && account === undefined ? [] : this.runtime.rooms,
+      ...(this.config.authEnabled && account === undefined ? {} : { room: this.runtime.room }),
+    }
   }
 
   private requireIdentity(request: IncomingMessage, response: ServerResponse) {
-    const identity = this.runtime.identity(this.token(request))
+    const identity = this.config.authEnabled
+      ? this.runtime.auth.account(this.authToken(request))
+      : this.runtime.identity(this.token(request))
     if (identity === undefined) {
-      json(response, 401, { error: '请先选择聊天室身份。' } satisfies ChatroomErrorResponse)
+      json(response, 401, {
+        error: this.config.authEnabled ? '请先登录。' : '请先选择聊天室身份。',
+      } satisfies ChatroomErrorResponse)
     }
     return identity
   }
 
+  private requireAccount(request: IncomingMessage, response: ServerResponse): ChatroomAccount | undefined {
+    const account = this.runtime.auth.account(this.authToken(request))
+    if (account === undefined) json(response, 401, { error: '请先登录。' } satisfies ChatroomErrorResponse)
+    return account
+  }
+
   private token(request: IncomingMessage): string | undefined {
     return cookieValue(request.headers.cookie, this.config.cookieName)
+  }
+
+  private authToken(request: IncomingMessage): string | undefined {
+    return cookieValue(request.headers.cookie, this.config.authCookieName)
+  }
+
+  private setAuthCookie(response: ServerResponse, token: string): void {
+    response.setHeader('Set-Cookie', sessionCookie(
+      this.config.authCookieName,
+      token,
+      this.config.authSessionMaxAgeSeconds,
+      '/',
+      this.config.authPublicOrigin.startsWith('https://'),
+    ))
   }
 }
 
@@ -499,6 +834,19 @@ function json(response: ServerResponse, status: number, payload: unknown): void 
     'Cache-Control': 'no-store',
   })
   response.end(body)
+}
+
+function html(response: ServerResponse, status: number, body: string, head: boolean): void {
+  response.writeHead(status, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store, max-age=0',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+  })
+  response.end(head ? undefined : body)
 }
 
 function methodNotAllowed(response: ServerResponse, allow: string): void {
@@ -553,6 +901,29 @@ function optionalFieldString(body: Record<string, unknown>, field: string): stri
   if (value === undefined) return undefined
   if (typeof value !== 'string') throw new ChatroomInputError(`字段 ${field} 必须是字符串。`)
   return value
+}
+
+function fieldBoolean(body: Record<string, unknown>, field: string): boolean {
+  const value = body[field]
+  if (typeof value !== 'boolean') throw new ChatroomInputError(`字段 ${field} 必须是布尔值。`)
+  return value
+}
+
+function accountRole(value: unknown): 'super-admin' | 'admin' | 'member' {
+  if (value !== 'super-admin' && value !== 'admin' && value !== 'member') {
+    throw new ChatroomInputError('账号角色无效。')
+  }
+  return value
+}
+
+function accountStatus(value: unknown): 'active' | 'disabled' {
+  if (value !== 'active' && value !== 'disabled') throw new ChatroomInputError('账号状态无效。')
+  return value
+}
+
+function publicCallbackUrl(url: URL, config: Config): URL {
+  if (config.authPublicOrigin === '') throw new ChatroomAuthError('管理员尚未配置企业 SSO 的公网访问地址。')
+  return new URL(`${url.pathname}${url.search}`, config.authPublicOrigin)
 }
 
 function forwardItems(value: unknown): readonly ChatroomForwardItem[] {
@@ -719,4 +1090,14 @@ function forwardImageRequest(value: unknown): ChatroomForwardImageRequest {
 
 function smallRequestLimit(config: Config): number {
   return Math.max(config.maxDisplayNameChars, config.maxRoomTitleChars) * 4 + 1_024
+}
+
+function originalRequestUri(request: IncomingMessage): string {
+  const original = request.headers['x-original-uri'] ?? request.headers['x-forwarded-uri']
+  return safeReturnPath(typeof original === 'string' ? original : '/')
+}
+
+function safeReturnPath(value: string): string {
+  if (!value.startsWith('/') || value.startsWith('//') || /[\r\n]/u.test(value)) return '/'
+  return value.slice(0, 2_048)
 }

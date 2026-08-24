@@ -19,6 +19,16 @@ export interface Config {
     settingsAdminParticipantIds: string[];
     maxSettingsRequestBytes: number;
     sseHeartbeatMs: number;
+    authEnabled: boolean;
+    authCookieName: string;
+    authSessionMaxAgeSeconds: number;
+    authSecret: string;
+    authPublicOrigin: string;
+    authBootstrapToken: string;
+    authAllowSelfRegistration: boolean;
+    authDshAuthHeaders: boolean;
+    authDshAuthVerifyUrl: string;
+    authDshAuthLoginPath: string;
 }
 export declare const Config: z<Config>;
 /** Validate relationships Schemastery cannot express by individual fields. */

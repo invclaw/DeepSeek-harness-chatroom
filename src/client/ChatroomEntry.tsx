@@ -4,6 +4,7 @@ import { CHATROOM_AVATARS, chatroomAvatar, type ChatroomAvatarId } from '../avat
 import type { ChatroomClientStore, ChatroomView } from './store.js'
 import type { ChatroomForwardItem, ChatroomReplyReference } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
+import { CHATROOM_API_PREFIX } from '../routes.js'
 import { ChatroomPanels } from './ChatroomPanels.js'
 
 interface ChatroomEntryInjected {
@@ -11,6 +12,12 @@ interface ChatroomEntryInjected {
   openRoom(): void
   closeRoom(): void
   join(displayName: string, avatarId: string): Promise<void>
+  login(username: string, password: string): Promise<boolean>
+  register(input: { username: string; password: string; displayName: string; avatarId: string; bootstrapToken?: string }): Promise<boolean>
+  logout(): Promise<void>
+  openAccount(): void
+  closeAccount(): void
+  changePassword(currentPassword: string, newPassword: string): Promise<boolean>
   selectRoom(roomId: string): Promise<void>
   createRoom(title: string): Promise<void>
   resetIdentity(): Promise<void>
@@ -30,6 +37,16 @@ interface ChatroomEntryInjected {
   forwardSelected(targetRoomId: string): Promise<boolean>
   toggleMessageSelection(roomId: string, message: ChatroomForwardItem): void
   clearMessageSelection(): void
+  openAdmin(): Promise<void>
+  closeAdmin(): void
+  adminCreateUser(input: { username: string; password: string; displayName: string; avatarId: string; role: 'super-admin' | 'admin' | 'member' }): Promise<boolean>
+  adminUpdateUser(userId: string, patch: { role?: 'super-admin' | 'admin' | 'member'; status?: 'active' | 'disabled' }): Promise<boolean>
+  adminSetSelfRegistration(value: boolean): Promise<boolean>
+  adminSaveProvider(input: { id: string; label: string; enabled: boolean; issuer: string; clientId: string; clientSecret?: string; scopes: string; usernameClaim: string; displayNameClaim: string; autoCreateUsers: boolean }): Promise<boolean>
+  adminDeleteProvider(providerId: string): Promise<boolean>
+  openDirect(peerId?: string): Promise<void>
+  closeDirect(): void
+  sendDirect(text: string): Promise<boolean>
 }
 
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected
@@ -55,6 +72,7 @@ export function ChatroomEntry(props: ChatroomEntryProps): JSX.Element | null {
   return (
     <>
       <div className="dsh-chatroom-dialog-layer" data-dsh-chatroom-entry data-testid="chatroom-dialog">
+        {room.phase === 'auth-required' && <AuthStep room={room} login={props.login} register={props.register} />}
         {room.phase === 'identity-required' && <IdentityStep room={room} join={props.join} close={props.closeRoom} />}
         {room.phase === 'loading' && <StatusCard title="正在载入共享会话" detail="正在恢复此浏览器的身份与会话目录…" close={props.closeRoom} />}
         {room.phase === 'ready' && room.identity !== undefined && (
@@ -63,6 +81,10 @@ export function ChatroomEntry(props: ChatroomEntryProps): JSX.Element | null {
             selectRoom={props.selectRoom}
             createRoom={props.createRoom}
             resetIdentity={props.resetIdentity}
+            logout={props.logout}
+            openAccount={props.openAccount}
+            openAdmin={props.openAdmin}
+            openDirect={props.openDirect}
             close={props.closeRoom}
           />
         )}
@@ -78,6 +100,79 @@ export function ChatroomEntry(props: ChatroomEntryProps): JSX.Element | null {
       </div>
       {panels}
     </>
+  )
+}
+
+function AuthStep({
+  room,
+  login,
+  register,
+}: {
+  room: ChatroomView
+  login(username: string, password: string): Promise<boolean>
+  register(input: { username: string; password: string; displayName: string; avatarId: string; bootstrapToken?: string }): Promise<boolean>
+}): JSX.Element {
+  const registrationAvailable = room.auth.bootstrapRequired || room.auth.allowSelfRegistration
+  const [mode, setMode] = useState<'login' | 'register'>(room.auth.bootstrapRequired ? 'register' : 'login')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [bootstrapToken, setBootstrapToken] = useState('')
+  const [avatarId, setAvatarId] = useState<ChatroomAvatarId>(CHATROOM_AVATARS[0].id)
+  const returnTo = typeof location === 'undefined' ? '/' : `${location.pathname}${location.search}`
+  return (
+    <section className="dsh-chatroom-card dsh-chatroom-auth-card" aria-label="系统登录">
+      <div className="dsh-chatroom-auth-brand"><strong>DeepSeek Harness</strong><span>团队协作平台</span></div>
+      <h2>{mode === 'login' ? '登录' : room.auth.bootstrapRequired ? '创建超级管理员' : '注册账号'}</h2>
+      <div className="dsh-chatroom-auth-tabs">
+        <button type="button" data-active={mode === 'login'} onClick={() => { setMode('login') }}>登录</button>
+        {registrationAvailable && <button type="button" data-active={mode === 'register'} onClick={() => { setMode('register') }}>注册</button>}
+      </div>
+      <form onSubmit={(event) => {
+        event.preventDefault()
+        if (mode === 'login') void login(username, password)
+        else void register({
+          username,
+          password,
+          displayName,
+          avatarId,
+          ...(room.auth.bootstrapRequired ? { bootstrapToken } : {}),
+        })
+      }}>
+        <label>账号<input autoFocus autoComplete="username" value={username} onChange={event => { setUsername(event.target.value) }} /></label>
+        <label>密码<input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={event => { setPassword(event.target.value) }} /></label>
+        {mode === 'register' && <>
+          <label>显示名称<input value={displayName} onChange={event => { setDisplayName(event.target.value) }} /></label>
+          {room.auth.bootstrapRequired && <label>初始化口令<input type="password" value={bootstrapToken} onChange={event => { setBootstrapToken(event.target.value) }} /></label>}
+          <fieldset className="dsh-chatroom-avatar-fieldset">
+            <legend>选择头像</legend>
+            <div className="dsh-chatroom-avatar-grid" role="radiogroup" aria-label="选择头像">
+              {CHATROOM_AVATARS.map(avatar => <button
+                className="dsh-chatroom-avatar-choice"
+                data-avatar={avatar.id}
+                data-selected={avatar.id === avatarId}
+                key={avatar.id}
+                type="button"
+                role="radio"
+                aria-checked={avatar.id === avatarId}
+                onClick={() => { setAvatarId(avatar.id) }}
+              >{avatar.emoji}</button>)}
+            </div>
+          </fieldset>
+        </>}
+        <button className="dsh-chatroom-button" type="submit" disabled={username.trim() === '' || password === '' || (mode === 'register' && displayName.trim() === '')}>
+          {mode === 'login' ? '登录' : '创建账号'}
+        </button>
+      </form>
+      {room.auth.providers.length > 0 && <div className="dsh-chatroom-sso-list">
+        <span>或使用企业账号</span>
+        {room.auth.providers.map(provider => <a
+          key={provider.id}
+          href={`${CHATROOM_API_PREFIX}/auth/${provider.type === 'oidc' ? `oidc/${encodeURIComponent(provider.id)}` : 'dsh-auth'}/start?returnTo=${encodeURIComponent(returnTo)}`}
+        >使用 {provider.label} 登录</a>)}
+      </div>}
+      {room.error !== undefined && <div className="dsh-chatroom-error" role="alert">{room.error}</div>}
+    </section>
   )
 }
 
@@ -137,12 +232,20 @@ function RoomStep({
   selectRoom,
   createRoom,
   resetIdentity,
+  logout,
+  openAccount,
+  openAdmin,
+  openDirect,
   close,
 }: {
   room: ChatroomView
   selectRoom(roomId: string): Promise<void>
   createRoom(title: string): Promise<void>
   resetIdentity(): Promise<void>
+  logout(): Promise<void>
+  openAccount(): void
+  openAdmin(): Promise<void>
+  openDirect(peerId?: string): Promise<void>
   close(): void
 }): JSX.Element {
   const [title, setTitle] = useState('')
@@ -182,7 +285,14 @@ function RoomStep({
       </form>
       <div className="dsh-chatroom-card-footer">
         <span>当前身份：{room.identity === undefined ? '' : `${chatroomAvatar(room.identity.avatarId, room.identity.participantId).emoji} ${room.identity.displayName}`}</span>
-        <button type="button" onClick={() => { void resetIdentity() }}>更换身份</button>
+        <div>
+          <button type="button" onClick={() => { void openDirect() }}>私聊</button>
+          {room.auth.enabled && <button type="button" onClick={openAccount}>账号设置</button>}
+          {room.auth.account?.role === 'super-admin' && <button type="button" onClick={() => { void openAdmin() }}>系统管理</button>}
+          {room.auth.enabled
+            ? <button type="button" onClick={() => { void logout() }}>退出登录</button>
+            : <button type="button" onClick={() => { void resetIdentity() }}>更换身份</button>}
+        </div>
       </div>
       {room.error !== undefined && <div className="dsh-chatroom-error" role="alert">{room.error}</div>}
     </div>

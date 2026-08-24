@@ -11,11 +11,11 @@ export function cookieValue(header: string | undefined, name: string): string | 
 }
 
 /** Build the persistent HttpOnly identity cookie. */
-export function sessionCookie(name: string, token: string, maxAgeSeconds: number, path: string): string {
-  return `${name}=${token}; Path=${path}; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Strict`
+export function sessionCookie(name: string, token: string, maxAgeSeconds: number, path: string, secure = false): string {
+  return `${name}=${token}; Path=${path}; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`
 }
 
 /** Expire the current browser identity. */
-export function expiredSessionCookie(name: string, path: string): string {
-  return `${name}=; Path=${path}; Max-Age=0; HttpOnly; SameSite=Strict`
+export function expiredSessionCookie(name: string, path: string, secure = false): string {
+  return `${name}=; Path=${path}; Max-Age=0; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`
 }

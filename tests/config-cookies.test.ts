@@ -61,5 +61,15 @@ function validConfig(): Config {
     maxImageSidePixels: 4_096,
     settingsAdminParticipantIds: [], maxSettingsRequestBytes: 1024 * 1024,
     sseHeartbeatMs: 15_000,
+    authEnabled: false,
+    authCookieName: 'dsh_chatroom_auth',
+    authSessionMaxAgeSeconds: 2_592_000,
+    authSecret: '',
+    authPublicOrigin: '',
+    authBootstrapToken: '',
+    authAllowSelfRegistration: true,
+    authDshAuthHeaders: false,
+    authDshAuthVerifyUrl: '',
+    authDshAuthLoginPath: '/auth/login',
   }
 }

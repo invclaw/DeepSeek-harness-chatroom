@@ -3,11 +3,54 @@ import type { ChatroomAvatarId } from './avatars.js';
 import type { ChatroomReactionEmoji } from './reactions.js';
 export type ChatroomMessageRole = 'human' | 'ai';
 export type ChatroomMemberRole = 'owner' | 'admin' | 'member';
+export type ChatroomAccountRole = 'super-admin' | 'admin' | 'member';
+export type ChatroomAccountStatus = 'active' | 'disabled';
 /** Public participant identity bound to one opaque browser session. */
 export interface ChatroomIdentity {
     readonly participantId: string;
     readonly displayName: string;
     readonly avatarId: ChatroomAvatarId;
+}
+/** Signed-in platform account projected without credential material. */
+export interface ChatroomAccount extends ChatroomIdentity {
+    readonly username: string;
+    readonly role: ChatroomAccountRole;
+    readonly status: ChatroomAccountStatus;
+    readonly createdAt: number;
+    readonly lastLoginAt?: number;
+}
+/** One enabled external sign-in choice. */
+export interface ChatroomAuthProvider {
+    readonly id: string;
+    readonly type: 'oidc' | 'dsh-auth';
+    readonly label: string;
+}
+/** Authentication state returned before any room data is exposed. */
+export interface ChatroomAuthState {
+    readonly enabled: boolean;
+    readonly authenticated: boolean;
+    readonly account?: ChatroomAccount;
+    readonly providers: readonly ChatroomAuthProvider[];
+    readonly allowSelfRegistration: boolean;
+    readonly bootstrapRequired: boolean;
+}
+/** Super-administrator view of one configurable OIDC provider. */
+export interface ChatroomAuthProviderAdmin extends ChatroomAuthProvider {
+    readonly enabled: boolean;
+    readonly issuer: string;
+    readonly clientId: string;
+    readonly hasClientSecret: boolean;
+    readonly scopes: string;
+    readonly usernameClaim: string;
+    readonly displayNameClaim: string;
+    readonly autoCreateUsers: boolean;
+}
+/** Super-administrator snapshot for account and provider management. */
+export interface ChatroomAdminOverview {
+    readonly users: readonly ChatroomAccount[];
+    readonly providers: readonly ChatroomAuthProviderAdmin[];
+    readonly allowSelfRegistration: boolean;
+    readonly oidcCallbackBase: string;
 }
 /** One room member projected with current presence. */
 export interface ChatroomMember extends ChatroomIdentity {
@@ -114,10 +157,38 @@ export interface ChatroomRoomManageResponse {
 }
 /** Initial identity lookup result. */
 export interface ChatroomSessionResponse {
+    readonly auth: ChatroomAuthState;
     readonly identity: ChatroomIdentity | null;
     readonly rooms: readonly ChatroomInfo[];
-    /** Configured legacy room retained during rolling browser bundle upgrades. */
-    readonly room: ChatroomInfo;
+    /** Configured legacy room retained during rolling browser bundle upgrades after authentication. */
+    readonly room?: ChatroomInfo;
+}
+/** One peer available for private messaging. */
+export interface ChatroomDirectPeer extends ChatroomIdentity {
+    readonly username: string;
+}
+/** Private two-account conversation metadata. */
+export interface ChatroomDirectConversation {
+    readonly id: string;
+    readonly peer: ChatroomDirectPeer;
+    readonly createdAt: number;
+    readonly updatedAt: number;
+}
+/** One durable private text message. */
+export interface ChatroomDirectMessage {
+    readonly id: string;
+    readonly conversationId: string;
+    readonly sequence: number;
+    readonly senderId: string;
+    readonly text: string;
+    readonly createdAt: number;
+}
+/** Private-message directory and the selected conversation history. */
+export interface ChatroomDirectResponse {
+    readonly peers: readonly ChatroomDirectPeer[];
+    readonly conversations: readonly ChatroomDirectConversation[];
+    readonly conversation?: ChatroomDirectConversation;
+    readonly messages?: readonly ChatroomDirectMessage[];
 }
 /** Room directory response. */
 export interface ChatroomRoomsResponse {
@@ -262,6 +333,13 @@ export interface ChatroomNotificationEvent {
     readonly type: 'notification';
     readonly notification: ChatroomNotification;
 }
+/** One private message delivered to both authenticated participants. */
+export interface ChatroomDirectMessageEvent {
+    readonly type: 'direct-message';
+    readonly conversation: ChatroomDirectConversation;
+    readonly message: ChatroomDirectMessage;
+}
+export type ChatroomGlobalEvent = ChatroomNotificationEvent | ChatroomDirectMessageEvent;
 export type ChatroomServerEvent = ChatroomSnapshotEvent | ChatroomPresenceEvent | ChatroomThreadMessageEvent | ChatroomReactionEvent | ChatroomRoomUpdatedEvent;
 /** Browser-visible error envelope. */
 export interface ChatroomErrorResponse {

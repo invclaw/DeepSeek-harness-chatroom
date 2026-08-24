@@ -36,6 +36,68 @@ describe('native chatroom integration', () => {
     expect(screen.getByLabelText('鲸鱼').getAttribute('aria-checked')).toBe('true')
   })
 
+  it('renders the login gate and submits local credentials', () => {
+    const login = vi.fn(async () => true)
+    renderEntry(view({
+      open: true,
+      phase: 'auth-required',
+      rooms: [],
+      room: undefined,
+      identity: undefined,
+      auth: {
+        enabled: true,
+        authenticated: false,
+        providers: [{ id: 'company', type: 'oidc', label: '企业统一登录' }],
+        allowSelfRegistration: true,
+        bootstrapRequired: false,
+      },
+    }), { login })
+    fireEvent.change(screen.getByLabelText('账号'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'alice password 123' } })
+    fireEvent.click(screen.getAllByRole('button', { name: '登录' }).at(-1)!)
+    expect(login).toHaveBeenCalledWith('alice', 'alice password 123')
+    expect(screen.getByText('使用 企业统一登录 登录')).toBeTruthy()
+  })
+
+  it('shows super-administrator account controls and isolated direct messages', () => {
+    const adminUpdateUser = vi.fn(async () => true)
+    const sendDirect = vi.fn(async () => true)
+    const owner = {
+      participantId: 'alice-id', username: 'alice', displayName: 'Alice', avatarId: 'whale' as const,
+      role: 'super-admin' as const, status: 'active' as const, createdAt: 1,
+    }
+    renderEntry(view({
+      auth: {
+        enabled: true, authenticated: true, account: owner, providers: [],
+        allowSelfRegistration: true, bootstrapRequired: false,
+      },
+      adminOpen: true,
+      adminOverview: {
+        users: [owner], providers: [], allowSelfRegistration: true,
+        oidcCallbackBase: 'https://chat.example.com/plugins/deepseek-harness-chatroom/api/auth/oidc/',
+      },
+      directOpen: true,
+      directPeers: [{ participantId: 'bob-id', username: 'bob-user', displayName: 'Bob', avatarId: 'panda' }],
+      directConversations: [{
+        id: 'direct-1', peer: { participantId: 'bob-id', username: 'bob-user', displayName: 'Bob', avatarId: 'panda' },
+        createdAt: 1, updatedAt: 2,
+      }],
+      directConversation: {
+        id: 'direct-1', peer: { participantId: 'bob-id', username: 'bob-user', displayName: 'Bob', avatarId: 'panda' },
+        createdAt: 1, updatedAt: 2,
+      },
+      directMessages: [{
+        id: 'message-1', conversationId: 'direct-1', sequence: 1, senderId: 'bob-id', text: '私聊内容', createdAt: 2,
+      }],
+    }), { adminUpdateUser, sendDirect })
+    expect(screen.getByTestId('chatroom-admin')).toBeTruthy()
+    expect(screen.getByText('@alice')).toBeTruthy()
+    expect(screen.getByText('私聊内容')).toBeTruthy()
+    fireEvent.change(screen.getByPlaceholderText('给 Bob 发消息'), { target: { value: '收到' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(sendDirect).toHaveBeenCalledWith('收到')
+  })
+
   it('lists existing rooms and creates a new independent shared Session', () => {
     const selectRoom = vi.fn(async () => undefined)
     const createRoom = vi.fn(async () => undefined)
@@ -212,6 +274,13 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     rooms: [room],
     room,
     identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' },
+    auth: {
+      enabled: false,
+      authenticated: true,
+      providers: [],
+      allowSelfRegistration: true,
+      bootstrapRequired: false,
+    },
     online: 1,
     members: [],
     reactions: [],
@@ -236,6 +305,20 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     forwardOpen: false,
     forwardBusy: false,
     forwardError: undefined,
+    accountOpen: false,
+    accountBusy: false,
+    accountError: undefined,
+    adminOpen: false,
+    adminBusy: false,
+    adminOverview: undefined,
+    adminError: undefined,
+    directOpen: false,
+    directBusy: false,
+    directPeers: [],
+    directConversations: [],
+    directConversation: undefined,
+    directMessages: [],
+    directError: undefined,
     ...patch,
   }
 }
@@ -275,6 +358,22 @@ function entry(
     forwardSelected={vi.fn(async () => true)}
     toggleMessageSelection={vi.fn()}
     clearMessageSelection={vi.fn()}
+    login={vi.fn(async () => true)}
+    register={vi.fn(async () => true)}
+    logout={vi.fn(async () => undefined)}
+    openAccount={vi.fn()}
+    closeAccount={vi.fn()}
+    changePassword={vi.fn(async () => true)}
+    openAdmin={vi.fn(async () => undefined)}
+    closeAdmin={vi.fn()}
+    adminCreateUser={vi.fn(async () => true)}
+    adminUpdateUser={vi.fn(async () => true)}
+    adminSetSelfRegistration={vi.fn(async () => true)}
+    adminSaveProvider={vi.fn(async () => true)}
+    adminDeleteProvider={vi.fn(async () => true)}
+    openDirect={vi.fn(async () => undefined)}
+    closeDirect={vi.fn()}
+    sendDirect={vi.fn(async () => true)}
     {...overrides}
   />
 }

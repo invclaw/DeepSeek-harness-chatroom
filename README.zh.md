@@ -6,7 +6,12 @@
 
 ## 功能
 
-- 首次访问统一选择显示名称和头像；后续进入任何共享群都通过不透明浏览器会话 Cookie 自动恢复，无需重复设置
+- 可选的整站账号体系：支持密码注册、超级管理员统一建号、账号停用与会话撤销、修改密码，并在所有群聊间复用同一身份
+- 可插拔认证：本地账号密码、通用企业 OIDC 授权码 + PKCE/nonce 回调，以及社区 `dsh-auth` 管理员身份均可接入
+- 提供独立登录页和供网关 `forward_auth` 调用的 `/auth/verify`，可覆盖 Harness 页面、API、下载、SSE 和 WebSocket，不依赖前端遮罩充当安全边界
+- 超级管理员后台统一管理注册策略、创建用户、角色/启停状态和 OIDC 提供方；Client Secret 加密保存且绝不回传浏览器
+- 账号之间支持持久私聊，只有会话双方可见，并复用页内提醒、未读数和浏览器系统通知
+- 关闭认证时继续保留旧的首次显示名称和头像选择；后续进入任何共享群都通过不透明浏览器会话 Cookie 自动恢复
 - 共享会话目录支持创建和切换多个相互独立的持久 Harness Session
 - 普通消息只用于人类聊天；明确输入 `@AI` 或 `@DeepSeek`（可配置名称）时才触发 Agent 回复
 - RC7 原生 `@` 候选菜单同时提供 AI 和当前群成员；只有 `@AI` 或配置的 AI 名称会触发 Agent
@@ -29,7 +34,7 @@
 - 房间异步初始化：模型、存储或 Session 初始化失败只会让聊天室离线，不会阻碍 Harness Web 启动
 - 不修改 DeepSeek Harness 主仓库
 
-0.9.10 在原生真人消息气泡中将聊天室提及显示为字面量 `@名字`，不再显示为 Harness 引用图标，同时保留原生候选菜单和模型可见文本。0.9.9 从经过鉴权的原生 Session 事件重建分支主题，因此图片和文件主题会保留真实内容，不再降级成占位文字；已有的媒体分支在再次打开时会一次性补全。0.9.8 保留一套 Harness 原生分支运行时，新分支只在该运行时内切换 Session，因此只有首次打开分支需要初始化 Web 客户端。切换过程使用精确 Session ID 和可容纳原生标题截断的主题前缀校验，并清理分支间不应继承的待发送文件和引用。
+1.0.0 新增账号与认证平台、超级管理员后台、通用 OIDC 与 `dsh-auth` 适配、整站网关校验、密码修改和账号私聊。0.9.10 在原生真人消息气泡中将聊天室提及显示为字面量 `@名字`，不再显示为 Harness 引用图标，同时保留原生候选菜单和模型可见文本。
 
 ## 环境要求
 
@@ -72,6 +77,14 @@ pnpm dsh --profile web
     cwd: !!js process.env.DSH_CHATROOM_CWD ?? process.cwd()
     agentPreset: standard
     settingsAdminParticipantIds: !!js (process.env.DSH_CHATROOM_SETTINGS_ADMIN_IDS ?? '').split(',').map(value => value.trim()).filter(Boolean)
+    authEnabled: !!js Boolean(process.env.DSH_CHATROOM_AUTH_SECRET)
+    authSecret: !!js process.env.DSH_CHATROOM_AUTH_SECRET ?? ''
+    authPublicOrigin: !!js process.env.DSH_CHATROOM_AUTH_PUBLIC_ORIGIN ?? ''
+    authBootstrapToken: !!js process.env.DSH_CHATROOM_AUTH_BOOTSTRAP_TOKEN ?? ''
+    authAllowSelfRegistration: !!js process.env.DSH_CHATROOM_SELF_REGISTRATION !== 'disabled'
+    authDshAuthHeaders: !!js process.env.DSH_CHATROOM_DSH_AUTH_HEADERS === 'enabled'
+    authDshAuthVerifyUrl: !!js process.env.DSH_CHATROOM_DSH_AUTH_VERIFY_URL ?? ''
+    authDshAuthLoginPath: !!js process.env.DSH_CHATROOM_DSH_AUTH_LOGIN_PATH ?? '/auth/login'
 ```
 
 需要调整时，在 Web profile 的 `cordis.patch.yml` 覆盖配置：
@@ -99,7 +112,37 @@ pnpm dsh --profile web
       - 当前管理员身份的-participant-id
     maxSettingsRequestBytes: 1048576
     sseHeartbeatMs: 15000
+    authEnabled: true
+    authCookieName: dsh_chatroom_auth
+    authSessionMaxAgeSeconds: 2592000
+    authSecret: 至少包含32个UTF-8字节的随机密钥
+    authPublicOrigin: https://chat.example.com
+    authBootstrapToken: 一次性超级管理员初始化口令
+    authAllowSelfRegistration: true
+    authDshAuthHeaders: false
+    authDshAuthVerifyUrl: ''
+    authDshAuthLoginPath: /auth/login
 ```
+
+`authSecret` 用于加密 OIDC Client Secret，必须稳定保存在 Git 之外。本地密码使用带随机盐的 scrypt。第一次密码注册必须填写 `authBootstrapToken`，该账号会成为初始超级管理员；后续注册遵循“系统管理”里的动态策略。登录失败有内存限流，停用账号会撤销其全部会话，修改密码会轮换当前会话并撤销旧会话。认证 Cookie 是随机值，服务端只保存 SHA-256 摘要，使用 `HttpOnly`、`SameSite=Strict`、根路径，并在 `authPublicOrigin` 为 HTTPS 时加上 `Secure`。
+
+### 企业 OIDC 与 dsh-auth
+
+OIDC 提供方在“系统管理”中添加，界面显示的回调地址必须原样登记到企业身份平台。发现与授权码交换使用 OIDC discovery、PKCE、state 和 nonce；Client Secret 使用 `authSecret` 派生的 AES-256-GCM 密钥加密，不会回显到管理界面。
+
+要在保留本地多用户账号的同时复用 [`dsh-auth`](https://github.com/hxy91819/dsh-auth)，需让它的 `/auth/*` 路由继续在同一公网 Origin 可访问，并将 `DSH_CHATROOM_DSH_AUTH_VERIFY_URL` 指向它的回环 `/auth/verify`（如果插件运行在同一个 Harness listener，通常为 `http://127.0.0.1:3080/auth/verify`）。聊天室只把浏览器中的 dsh-auth Cookie 转发给该回环校验接口，并把验证成功的管理员导入为本地超级管理员。`DSH_CHATROOM_DSH_AUTH_HEADERS=enabled` 则直接信任代理注入的 `X-Dsh-Auth-*`，适用于已有 dsh-auth 托管网关的部署，网关必须先删除客户端伪造的同名 Header。dsh-auth 外层网关本身只允许它的单一管理员通过；若还要允许本地成员账号登录，应使用“回环校验适配”，而不是把单用户 dsh-auth 放在最外层。
+
+### 整站网关保护
+
+仅启用插件账号 API 并不能自动保护一个直接暴露公网的 Harness。生产部署必须让 Harness 只监听回环地址，并在公网 TLS 代理中完成以下规则：
+
+1. 公网直接访问 `/plugins/deepseek-harness-chatroom/api/auth/verify` 固定返回 `404`。
+2. 只放行明确的登录、注册、退出、`/auth/page`、`/auth/providers`、OIDC 与 dsh-auth 回调路由。
+3. 其余 Harness 页面、静态资源、API、插件、SSE、下载和 WebSocket 都先向上述 verify 地址发起内部 `forward_auth` 子请求。
+4. 用 `X-Original-URI` 传递原始地址；只对顶层页面请求把 `401 + X-Dsh-Auth-Login` 转成 `303`，并把校验响应中的 `Set-Cookie` 返回浏览器。
+5. 删除客户端传入的 `X-Dsh-Auth-User-Id`、`X-Dsh-Auth-Username` 和 `X-Dsh-Auth-Roles`，再复制校验通过的值。
+
+校验成功返回 `204` 和服务端身份 Header，未登录返回 `401` 和独立登录页位置。认证提供方异常不会阻碍 Harness 启动：插件路由仍会立即注册，自己的存储未就绪时返回 `503`，OIDC 或 dsh-auth 登录失败只影响对应登录请求。
 
 `settingsAdminParticipantIds` 默认为空，远程浏览器因此不能读取或修改 Harness 配置。生产部署可通过逗号分隔的 `DSH_CHATROOM_SETTINGS_ADMIN_IDS` 环境变量设置白名单；当前身份的 `participantId` 可从已登录浏览器请求 `/plugins/deepseek-harness-chatroom/api/session` 的响应中读取。修改显示名称或头像不会改变该 ID；重置聊天室身份会生成新 ID，需要同步更新白名单。远程模型设置请求还必须携带有效的 HttpOnly 聊天室 Cookie 并通过同源检查。
 
@@ -109,7 +152,7 @@ API 路由会立即注册，在存储和 Session 就绪前返回 `503`。初始�
 
 ## 浏览器身份与安全
 
-浏览器收到随机 256 位令牌，Cookie 使用 `HttpOnly`、`SameSite=Strict`，且仅作用于聊天室 API。服务端只保存令牌的 SHA-256 摘要。刷新页面或重启 Harness 会恢复同一身份，直到 Cookie 过期或用户在共享会话目录中更换身份。
+认证关闭时，旧版浏览器身份仍使用仅作用于聊天室 API 的随机 256 位 `HttpOnly`、`SameSite=Strict` Cookie；它只能标识参与者，不构成访问控制。认证启用后，前述账号 Cookie 是群聊、文件、图片、模型设置管理、通知和私聊的唯一身份依据。
 
 显示名称只是房间展示身份，不是账号认证。远程模型设置授权只比较服务端从 HttpOnly Cookie 解析出的不透明 `participantId`，不相信可修改的显示名称。配置代理沿用 Harness API Proxy 的 schema 校验、机密脱敏和 revision 冲突检查；密钥值只允许写入且不会回传，`settings.openDocument`、Session、文件系统及其他特权接口不在代理列表内。所有能进入房间的人仍能向所选 Agent preset 提交输入，并可能使用该 preset 提供的工具。面向非完全可信成员时，应使用受限 preset 和范围尽可能小的 `cwd`。
 

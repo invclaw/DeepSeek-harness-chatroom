@@ -7,6 +7,18 @@ interface ChatroomEntryInjected {
     openRoom(): void;
     closeRoom(): void;
     join(displayName: string, avatarId: string): Promise<void>;
+    login(username: string, password: string): Promise<boolean>;
+    register(input: {
+        username: string;
+        password: string;
+        displayName: string;
+        avatarId: string;
+        bootstrapToken?: string;
+    }): Promise<boolean>;
+    logout(): Promise<void>;
+    openAccount(): void;
+    closeAccount(): void;
+    changePassword(currentPassword: string, newPassword: string): Promise<boolean>;
     selectRoom(roomId: string): Promise<void>;
     createRoom(title: string): Promise<void>;
     resetIdentity(): Promise<void>;
@@ -26,6 +38,36 @@ interface ChatroomEntryInjected {
     forwardSelected(targetRoomId: string): Promise<boolean>;
     toggleMessageSelection(roomId: string, message: ChatroomForwardItem): void;
     clearMessageSelection(): void;
+    openAdmin(): Promise<void>;
+    closeAdmin(): void;
+    adminCreateUser(input: {
+        username: string;
+        password: string;
+        displayName: string;
+        avatarId: string;
+        role: 'super-admin' | 'admin' | 'member';
+    }): Promise<boolean>;
+    adminUpdateUser(userId: string, patch: {
+        role?: 'super-admin' | 'admin' | 'member';
+        status?: 'active' | 'disabled';
+    }): Promise<boolean>;
+    adminSetSelfRegistration(value: boolean): Promise<boolean>;
+    adminSaveProvider(input: {
+        id: string;
+        label: string;
+        enabled: boolean;
+        issuer: string;
+        clientId: string;
+        clientSecret?: string;
+        scopes: string;
+        usernameClaim: string;
+        displayNameClaim: string;
+        autoCreateUsers: boolean;
+    }): Promise<boolean>;
+    adminDeleteProvider(providerId: string): Promise<boolean>;
+    openDirect(peerId?: string): Promise<void>;
+    closeDirect(): void;
+    sendDirect(text: string): Promise<boolean>;
 }
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected;
 /** Additive shared-session launcher, identity setup, and room directory. */

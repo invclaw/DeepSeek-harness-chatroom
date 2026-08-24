@@ -16,10 +16,9 @@ import {
   restoreParentSessionSelection,
   switchBranchFrame,
 } from './branch-frame.js'
-import type { ChatroomView } from './store.js'
+import { ChatroomAccountPanels, type ChatroomAccountPanelProps } from './ChatroomAccountPanels.js'
 
-interface ChatroomPanelsProps {
-  readonly room: ChatroomView
+interface ChatroomPanelsProps extends ChatroomAccountPanelProps {
   closeMembers(): void
   renameRoom?(title: string): Promise<boolean>
   setMemberRole?(participantId: string, role: 'admin' | 'member'): Promise<boolean>
@@ -50,6 +49,7 @@ export function ChatroomPanels(props: ChatroomPanelsProps): JSX.Element {
   return (
     <>
       <ToastStack toasts={props.room.toasts} dismiss={props.dismissToast} />
+      <ChatroomAccountPanels {...props} />
       {props.room.membersOpen && <MemberPanel {...props} />}
       {mountedThread !== undefined && <ThreadPanel
         {...props}

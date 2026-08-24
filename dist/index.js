@@ -19,7 +19,17 @@ var Config = z.object({
   maxImageSidePixels: z.number().step(1).min(512).max(16384).default(4096),
   settingsAdminParticipantIds: z.array(z.string().min(1).max(128)).default([]),
   maxSettingsRequestBytes: z.number().step(1).min(1024).max(8 * 1024 * 1024).default(1024 * 1024),
-  sseHeartbeatMs: z.number().step(1).min(5e3).max(12e4).default(15e3)
+  sseHeartbeatMs: z.number().step(1).min(5e3).max(12e4).default(15e3),
+  authEnabled: z.boolean().default(false),
+  authCookieName: z.string().pattern(/^[A-Za-z0-9_]+$/u).default("dsh_chatroom_auth"),
+  authSessionMaxAgeSeconds: z.number().step(1).min(300).max(31536e3).default(2592e3),
+  authSecret: z.string().default(""),
+  authPublicOrigin: z.string().default(""),
+  authBootstrapToken: z.string().default(""),
+  authAllowSelfRegistration: z.boolean().default(true),
+  authDshAuthHeaders: z.boolean().default(false),
+  authDshAuthVerifyUrl: z.string().default(""),
+  authDshAuthLoginPath: z.string().default("/auth/login")
 });
 function validateConfig(config) {
   if (!isAbsolute(config.cwd)) {
@@ -28,47 +38,47 @@ function validateConfig(config) {
   if (config.maxMessageFileBytes < config.maxFileBytes) {
     throw new Error("chatroom: maxMessageFileBytes must be greater than or equal to maxFileBytes");
   }
+  if (config.authEnabled && Buffer.byteLength(config.authSecret, "utf8") < 32) {
+    throw new Error("chatroom: authSecret must contain at least 32 UTF-8 bytes when authentication is enabled");
+  }
+  if (config.authEnabled && config.authBootstrapToken === "" && !config.authDshAuthHeaders && config.authDshAuthVerifyUrl === "") {
+    throw new Error("chatroom: authBootstrapToken or a dsh-auth adapter is required to create the first super administrator");
+  }
+  if (config.authPublicOrigin !== "") {
+    const origin = new URL(config.authPublicOrigin);
+    if (origin.origin !== config.authPublicOrigin || origin.protocol !== "https:") {
+      throw new Error("chatroom: authPublicOrigin must be an HTTPS origin without a path");
+    }
+  }
+  if (config.authDshAuthVerifyUrl !== "") {
+    if (config.authPublicOrigin === "") {
+      throw new Error("chatroom: authPublicOrigin is required with authDshAuthVerifyUrl");
+    }
+    const verify = new URL(config.authDshAuthVerifyUrl);
+    const loopback = verify.hostname === "127.0.0.1" || verify.hostname === "[::1]" || verify.hostname === "localhost";
+    if (!loopback || verify.protocol !== "http:" || verify.username !== "" || verify.password !== "" || verify.hash !== "") {
+      throw new Error("chatroom: authDshAuthVerifyUrl must be an uncredentialed loopback HTTP URL");
+    }
+  }
+  if (!config.authDshAuthLoginPath.startsWith("/") || config.authDshAuthLoginPath.startsWith("//") || /[?#\r\n]/u.test(config.authDshAuthLoginPath)) {
+    throw new Error("chatroom: authDshAuthLoginPath must be an absolute public path without a query or fragment");
+  }
 }
 
 // src/http.ts
 import { toFetchHandler } from "@deepseek-ai/dsh-host-apiproxy";
 
-// src/cookies.ts
-function cookieValue(header, name2) {
-  if (header === void 0) return void 0;
-  for (const part of header.split(";")) {
-    const index = part.indexOf("=");
-    if (index < 0 || part.slice(0, index).trim() !== name2) continue;
-    const value = part.slice(index + 1).trim();
-    return /^[A-Za-z0-9_-]+$/u.test(value) ? value : void 0;
-  }
-  return void 0;
-}
-function sessionCookie(name2, token, maxAgeSeconds, path) {
-  return `${name2}=${token}; Path=${path}; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Strict`;
-}
-function expiredSessionCookie(name2, path) {
-  return `${name2}=; Path=${path}; Max-Age=0; HttpOnly; SameSite=Strict`;
-}
-
-// src/routes.ts
-var CHATROOM_API_PREFIX = "/plugins/deepseek-harness-chatroom/api";
-var LEGACY_CHATROOM_API_PREFIX = "/chatroom/api";
-var CHATROOM_API_PREFIXES = [CHATROOM_API_PREFIX, LEGACY_CHATROOM_API_PREFIX];
-function matchChatroomApi(pathname) {
-  for (const prefix of CHATROOM_API_PREFIXES) {
-    if (pathname === prefix) return { prefix, endpoint: "" };
-    if (pathname.startsWith(`${prefix}/`)) return { prefix, endpoint: pathname.slice(prefix.length) };
-  }
-  return void 0;
-}
-
-// src/room.ts
-import { createHash, randomBytes, randomUUID } from "crypto";
-import { resolveSessionPreset } from "@deepseek-ai/dsh-agent-presets";
-import { AttachmentError } from "@deepseek-ai/dsh-attachment";
-import { createUserMessage } from "@deepseek-ai/dsh-llm";
-import { SessionId } from "@deepseek-ai/dsh-session";
+// src/auth.ts
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  randomUUID,
+  scrypt as deriveScrypt,
+  timingSafeEqual
+} from "crypto";
+import * as oidc from "openid-client";
 
 // src/avatars.ts
 var CHATROOM_AVATARS = [
@@ -89,6 +99,779 @@ function fallbackAvatarId(seed) {
   for (const character of seed) hash = hash * 31 + character.codePointAt(0) >>> 0;
   return CHATROOM_AVATARS[hash % CHATROOM_AVATARS.length].id;
 }
+
+// src/auth.ts
+var SCRYPT_N = 32768;
+var SCRYPT_R = 8;
+var SCRYPT_P = 1;
+var PASSWORD_MIN_POINTS = 12;
+var PASSWORD_MAX_POINTS = 128;
+var PASSWORD_MAX_BYTES = 1024;
+var USERNAME_MAX_POINTS = 64;
+var DISPLAY_NAME_MAX_POINTS = 80;
+var PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
+var LOGIN_WINDOW_MS = 6e4;
+var LOGIN_MAX_ATTEMPTS = 5;
+var LOGIN_BLOCK_MS = 5 * 6e4;
+var LOGIN_MAX_KEYS = 1e4;
+var ChatroomAuthError = class extends Error {
+};
+var ChatroomAuthRateLimitError = class extends ChatroomAuthError {
+  constructor(retryAfterSeconds) {
+    super(`\u767B\u5F55\u5C1D\u8BD5\u8FC7\u591A\uFF0C\u8BF7\u5728 ${String(retryAfterSeconds)} \u79D2\u540E\u91CD\u8BD5\u3002`);
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+  retryAfterSeconds;
+};
+var ChatroomAuth = class {
+  constructor(config, accounts, sessions, settingsTable, providersTable, externalAccounts) {
+    this.config = config;
+    this.accounts = accounts;
+    this.sessions = sessions;
+    this.settingsTable = settingsTable;
+    this.providersTable = providersTable;
+    this.externalAccounts = externalAccounts;
+    this.encryptionKey = createHash("sha256").update(config.authSecret).digest();
+  }
+  config;
+  accounts;
+  sessions;
+  settingsTable;
+  providersTable;
+  externalAccounts;
+  pendingOidc = /* @__PURE__ */ new Map();
+  oidcConfigurations = /* @__PURE__ */ new Map();
+  loginBuckets = /* @__PURE__ */ new Map();
+  accountAdmission = Promise.resolve();
+  encryptionKey;
+  /** Seed dynamic settings and remove expired login sessions. */
+  async start(now = Date.now()) {
+    if (this.settingsTable.get("auth") === void 0) {
+      await this.settingsTable.put("auth", {
+        allowSelfRegistration: this.config.authAllowSelfRegistration,
+        updatedAt: now
+      });
+    }
+    for (const [key, session] of this.sessions.entries()) {
+      if (session.expiresAt <= now || this.accounts.get(session.userId)?.status !== "active") {
+        await this.sessions.delete(key);
+      }
+    }
+  }
+  /** Resolve one local opaque token without trusting browser-supplied identity fields. */
+  account(token, now = Date.now()) {
+    if (!this.config.authEnabled || token === void 0) return void 0;
+    const session = this.sessions.get(secretHash(token));
+    if (session === void 0 || session.expiresAt <= now) return void 0;
+    const account = this.accounts.get(session.userId);
+    return account?.status === "active" ? publicAccount(account) : void 0;
+  }
+  /** Browser-safe authentication state; unauthenticated callers receive no room metadata. */
+  state(account) {
+    const enabled = this.config.authEnabled;
+    return {
+      enabled,
+      authenticated: !enabled || account !== void 0,
+      ...account === void 0 ? {} : { account },
+      providers: enabled ? this.providers() : [],
+      allowSelfRegistration: this.settings().allowSelfRegistration,
+      bootstrapRequired: enabled && this.accounts.size === 0
+    };
+  }
+  /** Enabled external sign-in choices shown on the login form. */
+  providers() {
+    const providers = [];
+    if (this.config.authDshAuthVerifyUrl !== "" && this.config.authPublicOrigin !== "") {
+      providers.push({ id: "dsh-auth", type: "dsh-auth", label: "DeepSeek Harness \u7BA1\u7406\u5458" });
+    }
+    for (const [, provider] of this.providersTable.entries()) {
+      if (provider.enabled) providers.push({ id: provider.id, type: "oidc", label: provider.label });
+    }
+    return providers.sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+  }
+  /** Register the bootstrap super administrator or a policy-permitted member account. */
+  async register(input) {
+    return await this.serializeAccounts(async () => {
+      this.assertEnabled();
+      const first = this.accounts.size === 0;
+      if (first) {
+        if (!secureTextEqual(input.bootstrapToken ?? "", this.config.authBootstrapToken)) {
+          throw new ChatroomAuthError("\u9996\u6B21\u6CE8\u518C\u9700\u8981\u6B63\u786E\u7684\u8D85\u7EA7\u7BA1\u7406\u5458\u521D\u59CB\u5316\u53E3\u4EE4\u3002");
+        }
+      } else if (!this.settings().allowSelfRegistration) {
+        throw new ChatroomAuthError("\u5F53\u524D\u7CFB\u7EDF\u5DF2\u5173\u95ED\u81EA\u4E3B\u6CE8\u518C\uFF0C\u8BF7\u8054\u7CFB\u7BA1\u7406\u5458\u521B\u5EFA\u8D26\u53F7\u3002");
+      }
+      const account = await this.createAccount({
+        ...input,
+        role: first ? "super-admin" : "member"
+      });
+      return { token: await this.issueSession(account.id), account: publicAccount(account) };
+    });
+  }
+  /** Verify local credentials and issue a new opaque session. */
+  async login(username, password) {
+    this.assertEnabled();
+    const normalized = normalizeUsername(username);
+    const now = Date.now();
+    const retryAfter = this.consumeLoginAttempt(normalized.key, now);
+    if (retryAfter !== void 0) {
+      throw new ChatroomAuthRateLimitError(retryAfter);
+    }
+    const account = this.findUsername(normalized.key);
+    const expected = account?.passwordHash ?? await dummyPasswordHash();
+    const matches = await verifyPassword(password, expected);
+    if (!matches || account === void 0 || account.status !== "active" || account.passwordHash === void 0) {
+      throw new ChatroomAuthError("\u8D26\u53F7\u6216\u5BC6\u7801\u4E0D\u6B63\u786E\u3002");
+    }
+    this.loginBuckets.delete(normalized.key);
+    const updated = { ...account, lastLoginAt: now, updatedAt: now };
+    await this.accounts.put(account.id, updated);
+    return { token: await this.issueSession(account.id), account: publicAccount(updated) };
+  }
+  /** Revoke only the supplied browser session. */
+  async logout(token) {
+    if (token !== void 0) await this.sessions.delete(secretHash(token));
+  }
+  /** Replace one local password after verifying the current credential and revoke older sessions. */
+  async changePassword(actor, currentPassword, newPassword) {
+    return await this.serializeAccounts(async () => {
+      const current = this.accounts.get(actor.participantId);
+      if (current === void 0 || current.status !== "active") throw new ChatroomAuthError("\u8D26\u53F7\u4E0D\u5B58\u5728\u6216\u5DF2\u505C\u7528\u3002");
+      if (current.passwordHash === void 0) {
+        throw new ChatroomAuthError("\u8BE5\u8D26\u53F7\u7531\u5916\u90E8\u8EAB\u4EFD\u63D0\u4F9B\u65B9\u7BA1\u7406\uFF0C\u4E0D\u80FD\u5728\u6B64\u4FEE\u6539\u5BC6\u7801\u3002");
+      }
+      if (!await verifyPassword(currentPassword, current.passwordHash)) {
+        throw new ChatroomAuthError("\u5F53\u524D\u5BC6\u7801\u4E0D\u6B63\u786E\u3002");
+      }
+      const passwordHash = await hashPassword(newPassword);
+      const updated = { ...current, passwordHash, updatedAt: Date.now() };
+      await this.accounts.put(current.id, updated);
+      await this.revokeUserSessions(current.id);
+      return { token: await this.issueSession(current.id), account: publicAccount(updated) };
+    });
+  }
+  /** Adopt dsh-auth's verified administrator headers as an external super administrator. */
+  async adoptDshAuth(headers, originalUri = "/") {
+    if (!this.config.authEnabled || !this.config.authDshAuthHeaders && this.config.authDshAuthVerifyUrl === "") return void 0;
+    const verified = await this.dshAuthIdentity(headers, originalUri);
+    if (verified === void 0) return void 0;
+    const roles = verified.roles.split(",").map((value) => value.trim());
+    if (!roles.includes("admin")) return void 0;
+    let username;
+    try {
+      username = decodeURIComponent(verified.encodedUsername);
+    } catch {
+      throw new ChatroomAuthError("dsh-auth \u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u7BA1\u7406\u5458\u540D\u79F0\u3002");
+    }
+    const account = await this.externalAccount("dsh-auth", verified.subject, username, username, true);
+    return { token: await this.issueSession(account.id), account: publicAccount(account) };
+  }
+  /** Public dsh-auth password-login location returning through the local adapter. */
+  dshAuthLoginUrl(returnTo, callbackPath) {
+    if (this.config.authPublicOrigin === "" || !this.config.authDshAuthHeaders && this.config.authDshAuthVerifyUrl === "") {
+      throw new ChatroomAuthError("dsh-auth \u767B\u5F55\u5C1A\u672A\u914D\u7F6E\u3002");
+    }
+    const callback = new URL(callbackPath, this.config.authPublicOrigin);
+    callback.searchParams.set("returnTo", safeReturnTo(returnTo));
+    const login = new URL(this.config.authDshAuthLoginPath, this.config.authPublicOrigin);
+    login.searchParams.set("returnTo", `${callback.pathname}${callback.search}`);
+    return login;
+  }
+  /** Build one PKCE and nonce-protected enterprise OIDC authorization redirect. */
+  async startOidc(providerId, returnTo) {
+    this.assertEnabled();
+    const provider = this.requireProvider(providerId);
+    if (this.config.authPublicOrigin === "") {
+      throw new ChatroomAuthError("\u7BA1\u7406\u5458\u5C1A\u672A\u914D\u7F6E\u4F01\u4E1A SSO \u7684\u516C\u7F51\u8BBF\u95EE\u5730\u5740\u3002");
+    }
+    const configuration = await this.oidcConfiguration(provider);
+    const codeVerifier = oidc.randomPKCECodeVerifier();
+    const codeChallenge = await oidc.calculatePKCECodeChallenge(codeVerifier);
+    const state = oidc.randomState();
+    const nonce = oidc.randomNonce();
+    this.pruneOidc();
+    this.pendingOidc.set(state, {
+      providerId,
+      codeVerifier,
+      nonce,
+      returnTo: safeReturnTo(returnTo),
+      expiresAt: Date.now() + 10 * 6e4
+    });
+    return oidc.buildAuthorizationUrl(configuration, {
+      redirect_uri: this.callbackUrl(providerId),
+      scope: provider.scopes,
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+      state,
+      nonce
+    });
+  }
+  /** Exchange and validate one OIDC callback, then bind or create its local account. */
+  async completeOidc(providerId, currentUrl) {
+    this.assertEnabled();
+    const state = currentUrl.searchParams.get("state") ?? "";
+    const pending = this.pendingOidc.get(state);
+    this.pendingOidc.delete(state);
+    if (pending === void 0 || pending.providerId !== providerId || pending.expiresAt <= Date.now()) {
+      throw new ChatroomAuthError("\u4F01\u4E1A\u767B\u5F55\u8BF7\u6C42\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u53D1\u8D77\u767B\u5F55\u3002");
+    }
+    const provider = this.requireProvider(providerId);
+    const configuration = await this.oidcConfiguration(provider);
+    const tokens = await oidc.authorizationCodeGrant(configuration, currentUrl, {
+      pkceCodeVerifier: pending.codeVerifier,
+      expectedState: state,
+      expectedNonce: pending.nonce,
+      idTokenExpected: true
+    });
+    const claims = tokens.claims();
+    if (claims?.sub === void 0) throw new ChatroomAuthError("\u4F01\u4E1A\u8EAB\u4EFD\u6CA1\u6709\u8FD4\u56DE\u7A33\u5B9A\u7684\u7528\u6237\u6807\u8BC6\u3002");
+    const username = claimText(claims, provider.usernameClaim) ?? claimText(claims, "preferred_username") ?? claimText(claims, "email") ?? claims.sub;
+    const displayName = claimText(claims, provider.displayNameClaim) ?? claimText(claims, "name") ?? username;
+    const account = await this.externalAccount(provider.id, claims.sub, username, displayName, provider.autoCreateUsers);
+    return {
+      token: await this.issueSession(account.id),
+      account: publicAccount(account),
+      returnTo: pending.returnTo
+    };
+  }
+  /** Super-administrator account, policy, and OIDC configuration snapshot. */
+  overview(actor) {
+    this.assertSuperAdmin(actor);
+    const users = [...this.accounts.entries()].map(([, account]) => publicAccount(account)).sort((left, right) => left.username.localeCompare(right.username, "zh-CN"));
+    const providers = [...this.providersTable.entries()].map(([, provider]) => adminProvider(provider)).sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+    return {
+      users,
+      providers,
+      allowSelfRegistration: this.settings().allowSelfRegistration,
+      oidcCallbackBase: this.config.authPublicOrigin === "" ? "" : `${this.config.authPublicOrigin}/plugins/deepseek-harness-chatroom/api/auth/oidc/`
+    };
+  }
+  /** Create one local account from the super-administrator console. */
+  async createUser(actor, input) {
+    this.assertSuperAdmin(actor);
+    return await this.serializeAccounts(async () => publicAccount(await this.createAccount({ ...input, role: input.role ?? "member" })));
+  }
+  /** Change global role or activation state without allowing the final super administrator to disappear. */
+  async updateUser(actor, userId, patch) {
+    this.assertSuperAdmin(actor);
+    return await this.serializeAccounts(async () => {
+      const current = this.accounts.get(userId);
+      if (current === void 0) throw new ChatroomAuthError("\u8D26\u53F7\u4E0D\u5B58\u5728\u3002");
+      const role = patch.role ?? current.role;
+      const status = patch.status ?? current.status;
+      if (current.role === "super-admin" && current.status === "active" && (role !== "super-admin" || status !== "active") && this.activeSuperAdmins() <= 1) {
+        throw new ChatroomAuthError("\u7CFB\u7EDF\u5FC5\u987B\u81F3\u5C11\u4FDD\u7559\u4E00\u4F4D\u542F\u7528\u7684\u8D85\u7EA7\u7BA1\u7406\u5458\u3002");
+      }
+      const next = { ...current, role, status, updatedAt: Date.now() };
+      await this.accounts.put(userId, next);
+      if (status === "disabled") await this.revokeUserSessions(userId);
+      return publicAccount(next);
+    });
+  }
+  /** Enable or disable autonomous password registration. */
+  async updateSettings(actor, allowSelfRegistration) {
+    this.assertSuperAdmin(actor);
+    await this.settingsTable.put("auth", { allowSelfRegistration, updatedAt: Date.now() });
+  }
+  /** Add or replace one encrypted generic OIDC provider. */
+  async saveProvider(actor, input) {
+    this.assertSuperAdmin(actor);
+    const id = input.id.trim().toLowerCase();
+    if (!PROVIDER_ID_PATTERN.test(id) || id === "dsh-auth" || id === "password") {
+      throw new ChatroomAuthError("\u8BA4\u8BC1\u63D0\u4F9B\u65B9 ID \u53EA\u80FD\u4F7F\u7528\u5C0F\u5199\u5B57\u6BCD\u3001\u6570\u5B57\u3001\u4E0B\u5212\u7EBF\u548C\u8FDE\u5B57\u7B26\u3002");
+    }
+    let issuer;
+    try {
+      issuer = new URL(input.issuer);
+    } catch {
+      throw new ChatroomAuthError("OIDC Issuer \u5FC5\u987B\u662F\u6709\u6548\u7684 HTTPS URL\u3002");
+    }
+    if (issuer.protocol !== "https:" || issuer.username !== "" || issuer.password !== "" || issuer.hash !== "") {
+      throw new ChatroomAuthError("OIDC Issuer \u5FC5\u987B\u662F HTTPS URL\u3002");
+    }
+    const existing = this.providersTable.get(id);
+    const secret = input.clientSecret === void 0 || input.clientSecret === "" ? existing?.encryptedClientSecret : this.encrypt(input.clientSecret);
+    if (secret === void 0) throw new ChatroomAuthError("\u65B0\u8BA4\u8BC1\u63D0\u4F9B\u65B9\u5FC5\u987B\u586B\u5199 Client Secret\u3002");
+    const now = Date.now();
+    const provider = {
+      id,
+      type: "oidc",
+      label: normalizeLabel(input.label, "\u63D0\u4F9B\u65B9\u540D\u79F0"),
+      enabled: input.enabled,
+      issuer: issuer.href.replace(/\/$/u, ""),
+      clientId: normalizeOpaque(input.clientId, "Client ID"),
+      encryptedClientSecret: secret,
+      scopes: normalizeScopes(input.scopes),
+      usernameClaim: normalizeClaim(input.usernameClaim),
+      displayNameClaim: normalizeClaim(input.displayNameClaim),
+      autoCreateUsers: input.autoCreateUsers,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
+    await this.providersTable.put(id, provider);
+    this.oidcConfigurations.delete(id);
+    return adminProvider(provider);
+  }
+  /** Remove one OIDC provider without deleting accounts already linked to it. */
+  async deleteProvider(actor, providerId) {
+    this.assertSuperAdmin(actor);
+    await this.providersTable.delete(providerId);
+    this.oidcConfigurations.delete(providerId);
+  }
+  /** Active public accounts for user search and private messaging. */
+  activeAccounts() {
+    return [...this.accounts.entries()].map(([, value]) => value).filter((value) => value.status === "active").map(publicAccount).sort((left, right) => left.displayName.localeCompare(right.displayName, "zh-CN"));
+  }
+  async createAccount(input) {
+    const username = normalizeUsername(input.username);
+    if (this.findUsername(username.key) !== void 0) throw new ChatroomAuthError("\u8BE5\u8D26\u53F7\u540D\u5DF2\u88AB\u4F7F\u7528\u3002");
+    const displayName = normalizeDisplayName(input.displayName);
+    const passwordHash = await hashPassword(input.password);
+    const id = randomUUID();
+    if (input.avatarId !== void 0 && !isChatroomAvatarId(input.avatarId)) {
+      throw new ChatroomAuthError("\u8BF7\u9009\u62E9\u6709\u6548\u7684\u5934\u50CF\u3002");
+    }
+    const now = Date.now();
+    const account = {
+      id,
+      username: username.value,
+      usernameKey: username.key,
+      displayName,
+      avatarId: input.avatarId ?? fallbackAvatarId(id),
+      passwordHash,
+      role: input.role ?? "member",
+      status: "active",
+      createdAt: now,
+      updatedAt: now
+    };
+    await this.accounts.put(id, account);
+    return account;
+  }
+  async externalAccount(providerId, subject, suggestedUsername, suggestedDisplayName, autoCreate) {
+    return await this.serializeAccounts(async () => this.resolveExternalAccount(
+      providerId,
+      subject,
+      suggestedUsername,
+      suggestedDisplayName,
+      autoCreate
+    ));
+  }
+  async resolveExternalAccount(providerId, subject, suggestedUsername, suggestedDisplayName, autoCreate) {
+    const key = externalKey(providerId, subject);
+    const linked = this.externalAccounts.get(key);
+    if (linked !== void 0) {
+      const account2 = this.accounts.get(linked.userId);
+      if (account2 === void 0 || account2.status !== "active") throw new ChatroomAuthError("\u8BE5\u4F01\u4E1A\u8D26\u53F7\u5DF2\u505C\u7528\u3002");
+      const updated = { ...account2, lastLoginAt: Date.now(), updatedAt: Date.now() };
+      await this.accounts.put(account2.id, updated);
+      return updated;
+    }
+    if (!autoCreate) throw new ChatroomAuthError("\u8BE5\u4F01\u4E1A\u8D26\u53F7\u5C1A\u672A\u7531\u7BA1\u7406\u5458\u5F00\u901A\u3002");
+    const base = normalizeUsername(suggestedUsername);
+    let candidate = base.value;
+    let candidateKey = base.key;
+    for (let suffix = 2; this.findUsername(candidateKey) !== void 0; suffix += 1) {
+      candidate = `${base.value.slice(0, Math.max(1, USERNAME_MAX_POINTS - String(suffix).length - 1))}-${String(suffix)}`;
+      candidateKey = candidate.toLowerCase();
+    }
+    const id = randomUUID();
+    const now = Date.now();
+    const account = {
+      id,
+      username: candidate,
+      usernameKey: candidateKey,
+      displayName: normalizeDisplayName(suggestedDisplayName),
+      avatarId: fallbackAvatarId(id),
+      role: providerId === "dsh-auth" ? "super-admin" : "member",
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+      lastLoginAt: now
+    };
+    await this.accounts.put(id, account);
+    await this.externalAccounts.put(key, { providerId, subject, userId: id, createdAt: now });
+    return account;
+  }
+  async serializeAccounts(operation) {
+    const result = this.accountAdmission.then(operation);
+    this.accountAdmission = result.then(() => void 0, () => void 0);
+    return await result;
+  }
+  async issueSession(userId) {
+    const token = randomBytes(32).toString("base64url");
+    const now = Date.now();
+    await this.sessions.put(secretHash(token), {
+      userId,
+      createdAt: now,
+      lastSeenAt: now,
+      expiresAt: now + this.config.authSessionMaxAgeSeconds * 1e3
+    });
+    return token;
+  }
+  settings() {
+    return this.settingsTable.get("auth") ?? {
+      allowSelfRegistration: this.config.authAllowSelfRegistration,
+      updatedAt: 0
+    };
+  }
+  findUsername(usernameKey) {
+    return [...this.accounts.entries()].find(([, account]) => account.usernameKey === usernameKey)?.[1];
+  }
+  activeSuperAdmins() {
+    return [...this.accounts.entries()].filter(([, account]) => account.role === "super-admin" && account.status === "active").length;
+  }
+  async revokeUserSessions(userId) {
+    for (const [key, session] of this.sessions.entries()) {
+      if (session.userId === userId) await this.sessions.delete(key);
+    }
+  }
+  requireProvider(providerId) {
+    const provider = this.providersTable.get(providerId);
+    if (provider === void 0 || !provider.enabled) throw new ChatroomAuthError("\u8BA4\u8BC1\u63D0\u4F9B\u65B9\u4E0D\u5B58\u5728\u6216\u672A\u542F\u7528\u3002");
+    return provider;
+  }
+  async oidcConfiguration(provider) {
+    const cached = this.oidcConfigurations.get(provider.id);
+    if (cached?.updatedAt === provider.updatedAt) return cached.value;
+    const value = await oidc.discovery(
+      new URL(provider.issuer),
+      provider.clientId,
+      this.decrypt(provider.encryptedClientSecret),
+      void 0,
+      { timeout: 10 }
+    );
+    this.oidcConfigurations.set(provider.id, { updatedAt: provider.updatedAt, value });
+    return value;
+  }
+  async dshAuthIdentity(headers, originalUri) {
+    if (this.config.authDshAuthHeaders) {
+      const direct = dshIdentityHeaders(
+        singleHeader(headers["x-dsh-auth-user-id"]),
+        singleHeader(headers["x-dsh-auth-username"]),
+        singleHeader(headers["x-dsh-auth-roles"])
+      );
+      if (direct !== void 0) return direct;
+    }
+    if (this.config.authDshAuthVerifyUrl === "") return void 0;
+    const publicOrigin = new URL(this.config.authPublicOrigin);
+    let verified;
+    try {
+      verified = await fetch(this.config.authDshAuthVerifyUrl, {
+        method: "GET",
+        headers: {
+          ...headers.cookie === void 0 ? {} : { cookie: headers.cookie },
+          "x-forwarded-host": publicOrigin.host,
+          "x-forwarded-proto": publicOrigin.protocol.slice(0, -1),
+          "x-real-ip": "127.0.0.1",
+          "x-original-method": "GET",
+          "x-original-uri": safeReturnTo(originalUri)
+        },
+        signal: AbortSignal.timeout(5e3)
+      });
+    } catch {
+      return void 0;
+    }
+    if (verified.status !== 204) return void 0;
+    return dshIdentityHeaders(
+      verified.headers.get("x-dsh-auth-user-id") ?? void 0,
+      verified.headers.get("x-dsh-auth-username") ?? void 0,
+      verified.headers.get("x-dsh-auth-roles") ?? void 0
+    );
+  }
+  consumeLoginAttempt(key, now) {
+    for (const [candidate, bucket2] of this.loginBuckets) {
+      if (bucket2.blockedUntil <= now && (bucket2.attempts.at(-1) ?? 0) <= now - LOGIN_WINDOW_MS) {
+        this.loginBuckets.delete(candidate);
+      }
+    }
+    let bucket = this.loginBuckets.get(key);
+    if (bucket === void 0) {
+      if (this.loginBuckets.size >= LOGIN_MAX_KEYS) return Math.ceil(LOGIN_WINDOW_MS / 1e3);
+      bucket = { attempts: [], blockedUntil: 0 };
+      this.loginBuckets.set(key, bucket);
+    }
+    if (bucket.blockedUntil > now) return Math.max(1, Math.ceil((bucket.blockedUntil - now) / 1e3));
+    while ((bucket.attempts[0] ?? Number.POSITIVE_INFINITY) <= now - LOGIN_WINDOW_MS) bucket.attempts.shift();
+    if (bucket.attempts.length >= LOGIN_MAX_ATTEMPTS) {
+      bucket.blockedUntil = now + LOGIN_BLOCK_MS;
+      return Math.ceil(LOGIN_BLOCK_MS / 1e3);
+    }
+    bucket.attempts.push(now);
+    return void 0;
+  }
+  callbackUrl(providerId) {
+    return `${this.config.authPublicOrigin}/plugins/deepseek-harness-chatroom/api/auth/oidc/${encodeURIComponent(providerId)}/callback`;
+  }
+  pruneOidc() {
+    const now = Date.now();
+    for (const [state, pending] of this.pendingOidc) {
+      if (pending.expiresAt <= now) this.pendingOidc.delete(state);
+    }
+  }
+  encrypt(value) {
+    const nonce = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", this.encryptionKey, nonce);
+    const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+    return `${nonce.toString("base64url")}.${cipher.getAuthTag().toString("base64url")}.${ciphertext.toString("base64url")}`;
+  }
+  decrypt(value) {
+    const [nonceValue, tagValue, ciphertextValue] = value.split(".");
+    if (nonceValue === void 0 || tagValue === void 0 || ciphertextValue === void 0) {
+      throw new Error("chatroom: encrypted OIDC client secret is invalid");
+    }
+    const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey, Buffer.from(nonceValue, "base64url"));
+    decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+    return Buffer.concat([
+      decipher.update(Buffer.from(ciphertextValue, "base64url")),
+      decipher.final()
+    ]).toString("utf8");
+  }
+  assertEnabled() {
+    if (!this.config.authEnabled) throw new ChatroomAuthError("\u7CFB\u7EDF\u767B\u5F55\u5C1A\u672A\u542F\u7528\u3002");
+  }
+  assertSuperAdmin(actor) {
+    if (actor.role !== "super-admin" || actor.status !== "active") {
+      throw new ChatroomAuthError("\u53EA\u6709\u8D85\u7EA7\u7BA1\u7406\u5458\u53EF\u4EE5\u6267\u884C\u6B64\u64CD\u4F5C\u3002");
+    }
+  }
+};
+function publicAccount(account) {
+  return {
+    participantId: account.id,
+    username: account.username,
+    displayName: account.displayName,
+    avatarId: account.avatarId,
+    role: account.role,
+    status: account.status,
+    createdAt: account.createdAt,
+    ...account.lastLoginAt === void 0 ? {} : { lastLoginAt: account.lastLoginAt }
+  };
+}
+function adminProvider(provider) {
+  return {
+    id: provider.id,
+    type: "oidc",
+    label: provider.label,
+    enabled: provider.enabled,
+    issuer: provider.issuer,
+    clientId: provider.clientId,
+    hasClientSecret: true,
+    scopes: provider.scopes,
+    usernameClaim: provider.usernameClaim,
+    displayNameClaim: provider.displayNameClaim,
+    autoCreateUsers: provider.autoCreateUsers
+  };
+}
+function normalizeUsername(value) {
+  const normalized = value.normalize("NFC").trim();
+  const points = Array.from(normalized).length;
+  if (points < 3 || points > USERNAME_MAX_POINTS || /[\p{C}\p{Z}]/u.test(normalized)) {
+    throw new ChatroomAuthError("\u8D26\u53F7\u540D\u9700\u8981 3\u201364 \u4E2A\u5B57\u7B26\uFF0C\u4E14\u4E0D\u80FD\u5305\u542B\u7A7A\u767D\u6216\u63A7\u5236\u5B57\u7B26\u3002");
+  }
+  return { value: normalized, key: normalized.toLowerCase() };
+}
+function normalizeDisplayName(value) {
+  const normalized = value.normalize("NFC").trim();
+  const points = Array.from(normalized).length;
+  if (points < 1 || points > DISPLAY_NAME_MAX_POINTS || /\p{C}/u.test(normalized)) {
+    throw new ChatroomAuthError("\u663E\u793A\u540D\u79F0\u9700\u8981 1\u201380 \u4E2A\u5B57\u7B26\u3002");
+  }
+  return normalized;
+}
+function normalizeLabel(value, label) {
+  const normalized = value.normalize("NFC").trim();
+  if (normalized === "" || Array.from(normalized).length > 80 || /\p{C}/u.test(normalized)) {
+    throw new ChatroomAuthError(`${label}\u9700\u8981 1\u201380 \u4E2A\u5B57\u7B26\u3002`);
+  }
+  return normalized;
+}
+function normalizeOpaque(value, label) {
+  const normalized = value.trim();
+  if (normalized === "" || normalized.length > 512 || /\p{C}/u.test(normalized)) {
+    throw new ChatroomAuthError(`${label}\u65E0\u6548\u3002`);
+  }
+  return normalized;
+}
+function normalizeClaim(value) {
+  const normalized = value.trim();
+  if (!/^[A-Za-z0-9_.:-]{1,128}$/u.test(normalized)) throw new ChatroomAuthError("OIDC Claim \u540D\u79F0\u65E0\u6548\u3002");
+  return normalized;
+}
+function normalizeScopes(value) {
+  const scopes = value.trim().split(/\s+/u).filter(Boolean);
+  if (!scopes.includes("openid")) scopes.unshift("openid");
+  if (scopes.length > 20 || scopes.some((scope) => !/^[\x21-\x7E]+$/u.test(scope))) {
+    throw new ChatroomAuthError("OIDC Scopes \u65E0\u6548\u3002");
+  }
+  return [...new Set(scopes)].join(" ");
+}
+function assertPassword(password) {
+  const points = Array.from(password).length;
+  if (points < PASSWORD_MIN_POINTS || points > PASSWORD_MAX_POINTS || Buffer.byteLength(password, "utf8") > PASSWORD_MAX_BYTES) {
+    throw new ChatroomAuthError("\u5BC6\u7801\u9700\u8981 12\u2013128 \u4E2A\u5B57\u7B26\uFF0C\u4E14\u4E0D\u80FD\u8D85\u8FC7 1024 \u5B57\u8282\u3002");
+  }
+}
+async function hashPassword(password) {
+  assertPassword(password);
+  const salt = randomBytes(16);
+  const key = await scrypt(password, salt);
+  return `$scrypt$ln=15,r=${String(SCRYPT_R)},p=${String(SCRYPT_P)}$${salt.toString("base64url")}$${key.toString("base64url")}`;
+}
+async function verifyPassword(password, encoded) {
+  const match = /^\$scrypt\$ln=15,r=8,p=1\$([A-Za-z0-9_-]+)\$([A-Za-z0-9_-]+)$/u.exec(encoded);
+  if (match === null) return false;
+  const salt = Buffer.from(match[1], "base64url");
+  const expected = Buffer.from(match[2], "base64url");
+  if (salt.length !== 16 || expected.length !== 32) return false;
+  const actual = await scrypt(password, salt);
+  return timingSafeEqual(actual, expected);
+}
+function scrypt(password, salt) {
+  return new Promise((resolve, reject) => {
+    deriveScrypt(password, salt, 32, {
+      N: SCRYPT_N,
+      r: SCRYPT_R,
+      p: SCRYPT_P,
+      maxmem: 64 * 1024 * 1024
+    }, (error, derived) => {
+      if (error !== null) reject(error);
+      else resolve(derived);
+    });
+  });
+}
+var dummyHash;
+function dummyPasswordHash() {
+  dummyHash ??= hashPassword("chatroom-invalid-password");
+  return dummyHash;
+}
+function secretHash(value) {
+  return createHash("sha256").update(value).digest("base64url");
+}
+function externalKey(providerId, subject) {
+  return secretHash(`${providerId}\0${subject}`);
+}
+function secureTextEqual(left, right) {
+  const leftDigest = createHash("sha256").update(left).digest();
+  const rightDigest = createHash("sha256").update(right).digest();
+  return timingSafeEqual(leftDigest, rightDigest) && left !== "" && right !== "";
+}
+function singleHeader(value) {
+  return typeof value === "string" && value.length <= 1024 ? value : void 0;
+}
+function dshIdentityHeaders(subject, encodedUsername, roles) {
+  if (subject === void 0 || encodedUsername === void 0 || roles === void 0 || subject === "" || encodedUsername === "" || roles === "") return void 0;
+  return { subject, encodedUsername, roles };
+}
+function safeReturnTo(value) {
+  if (!value.startsWith("/") || value.startsWith("//") || /[\r\n]/u.test(value)) return "/";
+  return value.slice(0, 2048);
+}
+function claimText(claims, name2) {
+  const value = claims[name2];
+  return typeof value === "string" && value !== "" ? value : void 0;
+}
+
+// src/auth-page.ts
+function renderAuthPage(prefix, state, returnTo) {
+  const registration = state.bootstrapRequired || state.allowSelfRegistration;
+  const initialMode = state.bootstrapRequired ? "register" : "login";
+  const providerLinks = state.providers.map((provider) => {
+    const route = provider.type === "oidc" ? `${prefix}/auth/oidc/${encodeURIComponent(provider.id)}/start` : `${prefix}/auth/dsh-auth/start`;
+    return `<a class="provider" href="${escapeHtml(route)}?returnTo=${encodeURIComponent(returnTo)}">\u4F7F\u7528 ${escapeHtml(provider.label)} \u767B\u5F55</a>`;
+  }).join("");
+  const data = scriptJson({ prefix, returnTo, initialMode, bootstrapRequired: state.bootstrapRequired });
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>\u767B\u5F55 \xB7 DeepSeek Harness</title>
+<style>
+:root{color-scheme:light dark;font-family:Inter,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;background:#f4f6fb;color:#172033}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:28px;background:radial-gradient(circle at 20% 10%,#dce7ff 0,transparent 36%),#f4f6fb}
+main{width:min(440px,100%);background:rgba(255,255,255,.94);border:1px solid #dce1eb;border-radius:24px;padding:34px;box-shadow:0 24px 70px rgba(31,50,92,.16)}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:30px}.mark{display:grid;place-items:center;width:44px;height:44px;border-radius:14px;background:#2f65e8;color:white;font-size:22px}.brand strong{display:block;font-size:19px}.brand span{color:#748096;font-size:13px}
+h1{font-size:28px;margin:0 0 8px}p{margin:0 0 24px;color:#68748b;line-height:1.6}.tabs{display:grid;grid-template-columns:1fr 1fr;background:#edf1f8;border-radius:12px;padding:4px;margin-bottom:20px}.tabs button{border:0;border-radius:9px;padding:10px;background:transparent;color:#667086;font-weight:650}.tabs button[aria-selected=true]{background:white;color:#172033;box-shadow:0 2px 8px rgba(34,49,84,.1)}
+form{display:grid;gap:14px}label{display:grid;gap:7px;font-size:14px;font-weight:650}input{width:100%;border:1px solid #cfd6e3;border-radius:12px;padding:12px 14px;background:white;color:#172033;font:inherit;outline:0}input:focus{border-color:#4a76e8;box-shadow:0 0 0 3px #dfe8ff}.primary{border:0;border-radius:12px;padding:13px;background:#3267e8;color:white;font:inherit;font-weight:700;cursor:pointer}.primary:disabled{opacity:.55;cursor:wait}.providers{display:grid;gap:10px;margin-top:22px;padding-top:22px;border-top:1px solid #e2e6ee}.providers>span{text-align:center;color:#8690a2;font-size:13px}.provider{text-decoration:none;text-align:center;border:1px solid #cfd6e3;border-radius:12px;padding:11px;color:#29354d;font-weight:650}.error{display:none;margin-top:16px;padding:11px 13px;border-radius:10px;background:#fff0f0;color:#c53434;font-size:14px}.error[data-open=true]{display:block}.bootstrap{padding:11px 13px;border-radius:10px;background:#fff8df;color:#795d10;font-size:13px;line-height:1.5}
+@media(prefers-color-scheme:dark){:root{background:#101216;color:#f0f3f8}body{background:radial-gradient(circle at 20% 10%,#1c315e 0,transparent 36%),#101216}main{background:rgba(24,27,34,.96);border-color:#333945}.tabs{background:#252a34}.tabs button[aria-selected=true]{background:#373d49;color:white}input{background:#16191f;border-color:#454c5a;color:white}.provider{border-color:#454c5a;color:#e7ebf2}.providers{border-color:#383e49}}
+</style>
+</head>
+<body>
+<main>
+  <div class="brand"><span class="mark">\u2726</span><span><strong>DeepSeek Harness</strong><span>\u56E2\u961F\u534F\u4F5C\u5E73\u53F0</span></span></div>
+  <h1>${state.bootstrapRequired ? "\u521B\u5EFA\u8D85\u7EA7\u7BA1\u7406\u5458" : "\u6B22\u8FCE\u56DE\u6765"}</h1>
+  <p>${state.bootstrapRequired ? "\u4F7F\u7528\u90E8\u7F72\u65F6\u751F\u6210\u7684\u521D\u59CB\u5316\u53E3\u4EE4\u521B\u5EFA\u7CFB\u7EDF\u7684\u7B2C\u4E00\u4F4D\u8D85\u7EA7\u7BA1\u7406\u5458\u3002" : "\u767B\u5F55\u540E\u53EF\u8FDB\u5165\u7FA4\u804A\u3001AI \u4F1A\u8BDD\u548C\u79C1\u804A\u3002"}</p>
+  ${registration ? `<div class="tabs" role="tablist"><button type="button" data-mode="login" role="tab">\u767B\u5F55</button><button type="button" data-mode="register" role="tab">${state.bootstrapRequired ? "\u521D\u59CB\u5316" : "\u6CE8\u518C"}</button></div>` : ""}
+  <form id="auth-form">
+    <label>\u8D26\u53F7<input name="username" autocomplete="username" minlength="3" maxlength="64" required autofocus></label>
+    <label>\u5BC6\u7801<input name="password" type="password" autocomplete="current-password" minlength="12" maxlength="128" required></label>
+    <div data-register hidden><label>\u663E\u793A\u540D\u79F0<input name="displayName" maxlength="80"></label></div>
+    ${state.bootstrapRequired ? '<div data-register hidden><label>\u8D85\u7EA7\u7BA1\u7406\u5458\u521D\u59CB\u5316\u53E3\u4EE4<input name="bootstrapToken" type="password" autocomplete="off"></label></div><div class="bootstrap" data-register hidden>\u521D\u59CB\u5316\u53E3\u4EE4\u53EA\u7528\u4E8E\u521B\u5EFA\u7B2C\u4E00\u4F4D\u8D85\u7EA7\u7BA1\u7406\u5458\uFF0C\u521B\u5EFA\u6210\u529F\u540E\u4E0D\u4F1A\u5B58\u5165\u6D4F\u89C8\u5668\u3002</div>' : ""}
+    <button class="primary" type="submit">\u7EE7\u7EED</button>
+  </form>
+  ${providerLinks === "" ? "" : `<div class="providers"><span>\u6216\u4F7F\u7528\u5176\u4ED6\u8EAB\u4EFD\u767B\u5F55</span>${providerLinks}</div>`}
+  <div class="error" id="error" role="alert"></div>
+</main>
+<script id="auth-data" type="application/json">${data}</script>
+<script>
+const data=JSON.parse(document.getElementById('auth-data').textContent);let mode=data.initialMode;
+const form=document.getElementById('auth-form'),error=document.getElementById('error'),submit=form.querySelector('button[type=submit]');
+function render(){document.querySelectorAll('[data-mode]').forEach(button=>button.setAttribute('aria-selected',String(button.dataset.mode===mode)));document.querySelectorAll('[data-register]').forEach(node=>{node.hidden=mode!=='register'});form.password.autocomplete=mode==='login'?'current-password':'new-password';submit.textContent=mode==='login'?'\u767B\u5F55':data.bootstrapRequired?'\u521B\u5EFA\u8D85\u7EA7\u7BA1\u7406\u5458':'\u6CE8\u518C\u5E76\u767B\u5F55';error.dataset.open='false'}
+document.querySelectorAll('[data-mode]').forEach(button=>button.addEventListener('click',()=>{mode=button.dataset.mode;render()}));
+form.addEventListener('submit',async event=>{event.preventDefault();submit.disabled=true;error.dataset.open='false';const values=Object.fromEntries(new FormData(form));const body=mode==='login'?{username:values.username,password:values.password}:{username:values.username,password:values.password,displayName:values.displayName,bootstrapToken:values.bootstrapToken};try{const response=await fetch(data.prefix+'/auth/'+mode,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});if(!response.ok){const result=await response.json().catch(()=>({}));throw new Error(result.error||'\u767B\u5F55\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002')}location.replace(data.returnTo)}catch(reason){error.textContent=reason instanceof Error?reason.message:'\u767B\u5F55\u5931\u8D25\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002';error.dataset.open='true';submit.disabled=false}});render();
+</script>
+</body>
+</html>`;
+}
+function escapeHtml(value) {
+  return value.replace(/[&<>"']/gu, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[character]);
+}
+function scriptJson(value) {
+  return JSON.stringify(value).replace(/</gu, "\\u003c").replace(/\u2028/gu, "\\u2028").replace(/\u2029/gu, "\\u2029");
+}
+
+// src/cookies.ts
+function cookieValue(header, name2) {
+  if (header === void 0) return void 0;
+  for (const part of header.split(";")) {
+    const index = part.indexOf("=");
+    if (index < 0 || part.slice(0, index).trim() !== name2) continue;
+    const value = part.slice(index + 1).trim();
+    return /^[A-Za-z0-9_-]+$/u.test(value) ? value : void 0;
+  }
+  return void 0;
+}
+function sessionCookie(name2, token, maxAgeSeconds, path, secure = false) {
+  return `${name2}=${token}; Path=${path}; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
+}
+function expiredSessionCookie(name2, path, secure = false) {
+  return `${name2}=; Path=${path}; Max-Age=0; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
+}
+
+// src/routes.ts
+var CHATROOM_API_PREFIX = "/plugins/deepseek-harness-chatroom/api";
+var LEGACY_CHATROOM_API_PREFIX = "/chatroom/api";
+var CHATROOM_API_PREFIXES = [CHATROOM_API_PREFIX, LEGACY_CHATROOM_API_PREFIX];
+function matchChatroomApi(pathname) {
+  for (const prefix of CHATROOM_API_PREFIXES) {
+    if (pathname === prefix) return { prefix, endpoint: "" };
+    if (pathname.startsWith(`${prefix}/`)) return { prefix, endpoint: pathname.slice(prefix.length) };
+  }
+  return void 0;
+}
+
+// src/room.ts
+import { createHash as createHash2, randomBytes as randomBytes2, randomUUID as randomUUID2 } from "crypto";
+import { resolveSessionPreset } from "@deepseek-ai/dsh-agent-presets";
+import { AttachmentError } from "@deepseek-ai/dsh-attachment";
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
+import { SessionId } from "@deepseek-ai/dsh-session";
 
 // src/domain.ts
 import { z as z2 } from "zod";
@@ -203,6 +986,65 @@ var reactionSchema = z2.object({
   participantId: z2.string().min(1),
   createdAt: nonNegativeSafeInteger
 });
+var accountSchema = z2.object({
+  id: z2.uuid(),
+  username: z2.string().min(1),
+  usernameKey: z2.string().min(1),
+  displayName: z2.string().min(1),
+  avatarId: z2.string().refine(isChatroomAvatarId),
+  passwordHash: z2.string().min(1).optional(),
+  role: z2.union([z2.literal("super-admin"), z2.literal("admin"), z2.literal("member")]),
+  status: z2.union([z2.literal("active"), z2.literal("disabled")]),
+  createdAt: nonNegativeSafeInteger,
+  updatedAt: nonNegativeSafeInteger,
+  lastLoginAt: nonNegativeSafeInteger.optional()
+});
+var authSessionSchema = z2.object({
+  userId: z2.uuid(),
+  createdAt: nonNegativeSafeInteger,
+  lastSeenAt: nonNegativeSafeInteger,
+  expiresAt: nonNegativeSafeInteger
+});
+var authSettingsSchema = z2.object({
+  allowSelfRegistration: z2.boolean(),
+  updatedAt: nonNegativeSafeInteger
+});
+var authProviderSchema = z2.object({
+  id: z2.string().min(1),
+  type: z2.literal("oidc"),
+  label: z2.string().min(1),
+  enabled: z2.boolean(),
+  issuer: z2.string().url(),
+  clientId: z2.string().min(1),
+  encryptedClientSecret: z2.string().min(1),
+  scopes: z2.string().min(1),
+  usernameClaim: z2.string().min(1),
+  displayNameClaim: z2.string().min(1),
+  autoCreateUsers: z2.boolean(),
+  createdAt: nonNegativeSafeInteger,
+  updatedAt: nonNegativeSafeInteger
+});
+var externalAccountSchema = z2.object({
+  providerId: z2.string().min(1),
+  subject: z2.string().min(1),
+  userId: z2.uuid(),
+  createdAt: nonNegativeSafeInteger
+});
+var directConversationSchema = z2.object({
+  id: z2.uuid(),
+  participantIds: z2.tuple([z2.uuid(), z2.uuid()]),
+  createdAt: nonNegativeSafeInteger,
+  updatedAt: nonNegativeSafeInteger,
+  nextSequence: nonNegativeSafeInteger
+});
+var directMessageSchema = z2.object({
+  id: z2.uuid(),
+  conversationId: z2.uuid(),
+  sequence: nonNegativeSafeInteger,
+  senderId: z2.uuid(),
+  text: z2.string().min(1),
+  createdAt: nonNegativeSafeInteger
+});
 var chatroomDomainSpec = defineDomain({
   name: "chatroom",
   version: 0,
@@ -214,7 +1056,14 @@ var chatroomDomainSpec = defineDomain({
     members: domainTable(memberSchema),
     threads: domainTable(threadSchema),
     thread_messages: domainTable(threadMessageSchema),
-    reactions: domainTable(reactionSchema)
+    reactions: domainTable(reactionSchema),
+    accounts: domainTable(accountSchema),
+    auth_sessions: domainTable(authSessionSchema),
+    auth_settings: domainTable(authSettingsSchema),
+    auth_providers: domainTable(authProviderSchema),
+    external_accounts: domainTable(externalAccountSchema),
+    direct_conversations: domainTable(directConversationSchema),
+    direct_messages: domainTable(directMessageSchema)
   }
 });
 
@@ -382,6 +1231,9 @@ var ChatroomRuntime = class {
   threads;
   threadMessages;
   reactions;
+  directConversations;
+  directMessages;
+  authentication;
   states = /* @__PURE__ */ new Map();
   threadStates = /* @__PURE__ */ new Map();
   notificationClients = /* @__PURE__ */ new Set();
@@ -416,6 +1268,11 @@ var ChatroomRuntime = class {
   get isReady() {
     return this.ready && !this.stopping;
   }
+  /** Account and provider manager initialized with the chatroom storage domain. */
+  get auth() {
+    if (this.authentication === void 0) throw new Error("chatroom authentication is not ready");
+    return this.authentication;
+  }
   /** Whether one model request belongs to a room or branch Session owned by this runtime. */
   ownsSession(sessionId) {
     return [...this.states.values()].some((state) => state.record.sessionId === sessionId) || [...this.threadStates.values()].some((state) => state.record.sessionId === sessionId);
@@ -431,6 +1288,17 @@ var ChatroomRuntime = class {
     this.threads = domain.table("threads");
     this.threadMessages = domain.table("thread_messages");
     this.reactions = domain.table("reactions");
+    this.directConversations = domain.table("direct_conversations");
+    this.directMessages = domain.table("direct_messages");
+    this.authentication = new ChatroomAuth(
+      this.config,
+      domain.table("accounts"),
+      domain.table("auth_sessions"),
+      domain.table("auth_settings"),
+      domain.table("auth_providers"),
+      domain.table("external_accounts")
+    );
+    await this.authentication.start();
     await this.seedConfiguredRoom();
     for (const [, record] of this.requireRoomRecords().entries()) {
       this.states.set(record.id, newRoomState(record));
@@ -475,6 +1343,9 @@ var ChatroomRuntime = class {
     this.threads = void 0;
     this.threadMessages = void 0;
     this.reactions = void 0;
+    this.directConversations = void 0;
+    this.directMessages = void 0;
+    this.authentication = void 0;
   }
   /** Resolve an opaque cookie token to its durable identity. */
   identity(token) {
@@ -485,10 +1356,10 @@ var ChatroomRuntime = class {
   /** Mint and durably bind a new browser identity. */
   async createIdentity(displayName, avatarId) {
     this.assertReady();
-    const normalized = normalizeDisplayName(displayName, this.config.maxDisplayNameChars);
-    const token = randomBytes(32).toString("base64url");
+    const normalized = normalizeDisplayName2(displayName, this.config.maxDisplayNameChars);
+    const token = randomBytes2(32).toString("base64url");
     const now = Date.now();
-    const participantId = randomUUID();
+    const participantId = randomUUID2();
     if (avatarId !== void 0 && !isChatroomAvatarId(avatarId)) throw new ChatroomInputError("\u8BF7\u9009\u62E9\u6709\u6548\u7684\u5934\u50CF\u3002");
     const record = {
       participantId,
@@ -506,7 +1377,7 @@ var ChatroomRuntime = class {
     const key = tokenHash(token);
     const existing = this.requireIdentities().get(key);
     if (existing === void 0) throw new ChatroomInputError("\u804A\u5929\u5BA4\u8EAB\u4EFD\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u8FDB\u5165\u3002");
-    const normalized = normalizeDisplayName(displayName, this.config.maxDisplayNameChars);
+    const normalized = normalizeDisplayName2(displayName, this.config.maxDisplayNameChars);
     if (avatarId !== void 0 && !isChatroomAvatarId(avatarId)) throw new ChatroomInputError("\u8BF7\u9009\u62E9\u6709\u6548\u7684\u5934\u50CF\u3002");
     const record = {
       ...existing,
@@ -536,7 +1407,7 @@ var ChatroomRuntime = class {
   /** Create and activate one independent shared Harness Session. */
   async createRoom(title, identity) {
     this.assertReady();
-    const id = randomUUID();
+    const id = randomUUID2();
     const record = {
       id,
       title: normalizeRoomTitle(title, this.config.maxRoomTitleChars),
@@ -631,7 +1502,7 @@ var ChatroomRuntime = class {
       }
       await this.touchMember(roomId, identity);
       this.notify({
-        id: randomUUID(),
+        id: randomUUID2(),
         roomId,
         roomTitle: state.record.title,
         participantId: identity.participantId,
@@ -695,7 +1566,7 @@ var ChatroomRuntime = class {
       }), { surfaceOp: "append" });
       await this.touchMember(targetRoomId, identity);
       this.notify({
-        id: randomUUID(),
+        id: randomUUID2(),
         roomId: targetRoomId,
         roomTitle: target.record.title,
         participantId: identity.participantId,
@@ -801,6 +1672,85 @@ var ChatroomRuntime = class {
       this.notificationClients.delete(client);
     };
   }
+  /** List active peers and private conversations visible only to the requesting account. */
+  directDirectory(identity) {
+    this.assertReady();
+    const peers = this.auth.activeAccounts().filter((account) => account.participantId !== identity.participantId).map((account) => ({
+      participantId: account.participantId,
+      username: account.username,
+      displayName: account.displayName,
+      avatarId: account.avatarId
+    }));
+    const conversations = [...this.requireDirectConversations().entries()].map(([, conversation]) => conversation).filter((conversation) => conversation.participantIds.includes(identity.participantId)).map((conversation) => this.publicDirectConversation(conversation, identity.participantId)).sort((left, right) => right.updatedAt - left.updatedAt);
+    return { peers, conversations };
+  }
+  /** Create or reopen one two-account private conversation. */
+  async openDirect(peerId, identity) {
+    this.assertReady();
+    if (peerId === identity.participantId) throw new ChatroomInputError("\u4E0D\u80FD\u548C\u81EA\u5DF1\u53D1\u8D77\u79C1\u804A\u3002");
+    if (!this.auth.activeAccounts().some((account) => account.participantId === peerId)) {
+      throw new ChatroomInputError("\u79C1\u804A\u5BF9\u8C61\u4E0D\u5B58\u5728\u6216\u5DF2\u505C\u7528\u3002");
+    }
+    const participants = [identity.participantId, peerId].sort();
+    let record = [...this.requireDirectConversations().entries()].find(([, candidate]) => candidate.participantIds[0] === participants[0] && candidate.participantIds[1] === participants[1])?.[1];
+    if (record === void 0) {
+      const now = Date.now();
+      record = {
+        id: randomUUID2(),
+        participantIds: participants,
+        createdAt: now,
+        updatedAt: now,
+        nextSequence: 1
+      };
+      await this.requireDirectConversations().put(record.id, record);
+    }
+    return {
+      ...this.directDirectory(identity),
+      conversation: this.publicDirectConversation(record, identity.participantId),
+      messages: this.directMessageHistory(record.id)
+    };
+  }
+  /** Append one private text message and notify only its two participants. */
+  async sendDirect(conversationId, text, identity) {
+    this.assertReady();
+    const existing = this.requireDirectConversations().get(conversationId);
+    if (existing === void 0 || !existing.participantIds.includes(identity.participantId)) {
+      throw new ChatroomInputError("\u79C1\u804A\u4E0D\u5B58\u5728\u6216\u4F60\u65E0\u6743\u8BBF\u95EE\u3002");
+    }
+    const normalized = text.normalize("NFC").trim();
+    if (normalized === "" || Array.from(normalized).length > this.config.maxMessageTextChars || /\u0000/u.test(normalized)) {
+      throw new ChatroomInputError("\u79C1\u804A\u6D88\u606F\u4E3A\u7A7A\u6216\u8FC7\u957F\u3002");
+    }
+    const now = Date.now();
+    const updated = await this.requireDirectConversations().update(conversationId, (current) => ({
+      ...current,
+      updatedAt: now,
+      nextSequence: current.nextSequence + 1
+    }));
+    const message = {
+      id: randomUUID2(),
+      conversationId,
+      sequence: updated.nextSequence - 1,
+      senderId: identity.participantId,
+      text: normalized,
+      createdAt: now
+    };
+    await this.requireDirectMessages().put(
+      `${conversationId}:${String(message.sequence).padStart(12, "0")}:${message.id}`,
+      message
+    );
+    const event = {
+      type: "direct-message",
+      conversation: this.publicDirectConversation(updated, identity.participantId),
+      message: publicDirectMessage(message)
+    };
+    for (const client of [...this.notificationClients]) {
+      if (!updated.participantIds.includes(client.participantId)) continue;
+      const projected = client.participantId === identity.participantId ? event : { ...event, conversation: this.publicDirectConversation(updated, client.participantId) };
+      if (!writeNotificationSse(client.response, projected)) this.notificationClients.delete(client);
+    }
+    return { conversation: event.conversation, message: event.message };
+  }
   /** Create or reopen a branch rooted at one native room message. */
   async openThread(roomId, identity, root) {
     this.assertReady();
@@ -852,7 +1802,7 @@ var ChatroomRuntime = class {
       const files = durable.flatMap((block) => block.type === "text" ? projectFileText(block.text).files : []);
       const sequence = this.nextThreadSequence(threadId);
       const record = {
-        id: randomUUID(),
+        id: randomUUID2(),
         threadId,
         sequence,
         role: "human",
@@ -922,7 +1872,7 @@ var ChatroomRuntime = class {
     });
   }
   async createThread(roomId, identity, resolved) {
-    const id = randomUUID();
+    const id = randomUUID2();
     const { root } = resolved;
     const record = {
       id,
@@ -1010,7 +1960,7 @@ var ChatroomRuntime = class {
   async recordThreadAssistant(state, text, createdAt) {
     const room = this.requireState(state.record.roomId);
     const record = {
-      id: randomUUID(),
+      id: randomUUID2(),
       threadId: state.record.id,
       sequence: this.nextThreadSequence(state.record.id),
       role: "ai",
@@ -1121,6 +2071,25 @@ var ChatroomRuntime = class {
       if (client.participantId === notification.participantId) continue;
       if (!writeNotificationSse(client.response, event)) this.notificationClients.delete(client);
     }
+  }
+  publicDirectConversation(record, viewerId) {
+    const peerId = record.participantIds.find((id) => id !== viewerId);
+    const account = this.auth.activeAccounts().find((candidate) => candidate.participantId === peerId);
+    if (peerId === void 0 || account === void 0) throw new ChatroomInputError("\u79C1\u804A\u5BF9\u8C61\u4E0D\u5B58\u5728\u6216\u5DF2\u505C\u7528\u3002");
+    return {
+      id: record.id,
+      peer: {
+        participantId: account.participantId,
+        username: account.username,
+        displayName: account.displayName,
+        avatarId: account.avatarId
+      },
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt
+    };
+  }
+  directMessageHistory(conversationId) {
+    return [...this.requireDirectMessages().entries()].map(([, message]) => message).filter((message) => message.conversationId === conversationId).sort((left, right) => left.sequence - right.sequence).map(publicDirectMessage);
   }
   async seedConfiguredRoom() {
     const records = this.requireRoomRecords();
@@ -1285,7 +2254,7 @@ var ChatroomRuntime = class {
   }
   fileRecord(roomId, identity, part, data) {
     return {
-      id: randomUUID(),
+      id: randomUUID2(),
       roomId,
       participantId: identity.participantId,
       displayName: identity.displayName,
@@ -1370,6 +2339,14 @@ var ChatroomRuntime = class {
     if (this.reactions === void 0) throw new Error("chatroom reaction storage is unavailable");
     return this.reactions;
   }
+  requireDirectConversations() {
+    if (this.directConversations === void 0) throw new Error("chatroom direct conversation storage is unavailable");
+    return this.directConversations;
+  }
+  requireDirectMessages() {
+    if (this.directMessages === void 0) throw new Error("chatroom direct message storage is unavailable");
+    return this.directMessages;
+  }
   requireThreadState(threadId) {
     const state = this.threadStates.get(threadId);
     if (state === void 0) throw new ChatroomInputError("\u5206\u652F\u4F1A\u8BDD\u4E0D\u5B58\u5728\u3002");
@@ -1451,7 +2428,7 @@ function publicThreadMessage(record) {
     ...record.avatarId === void 0 ? {} : { avatarId: record.avatarId }
   };
 }
-function normalizeDisplayName(value, maxChars) {
+function normalizeDisplayName2(value, maxChars) {
   const normalized = value.trim().replace(/\s+/gu, " ");
   if (normalized === "") throw new ChatroomInputError("\u8BF7\u8F93\u5165\u8EAB\u4EFD\u540D\u79F0\u3002");
   if ([...normalized].length > maxChars) throw new ChatroomInputError(`\u8EAB\u4EFD\u540D\u79F0\u4E0D\u80FD\u8D85\u8FC7 ${maxChars} \u4E2A\u5B57\u7B26\u3002`);
@@ -1648,10 +2625,20 @@ function formatMegabytes(bytes) {
   return `${Math.ceil(bytes / 1024 / 1024)} MB`;
 }
 function tokenHash(token) {
-  return createHash("sha256").update(token).digest("hex");
+  return createHash2("sha256").update(token).digest("hex");
 }
 function onlineCount(state) {
   return new Set([...state.clients].map((client) => client.participantId)).size;
+}
+function publicDirectMessage(record) {
+  return {
+    id: record.id,
+    conversationId: record.conversationId,
+    sequence: record.sequence,
+    senderId: record.senderId,
+    text: record.text,
+    createdAt: record.createdAt
+  };
 }
 function writeSse(response, event) {
   if (response.destroyed || response.writableEnded) return false;
@@ -1709,6 +2696,26 @@ var ChatroomHttpController = class {
         await this.handleSession(request, response, route.prefix);
         return;
       }
+      if (route.endpoint.startsWith("/auth/")) {
+        await this.handleAuthentication(request, response, route.prefix, route.endpoint, url);
+        return;
+      }
+      if (route.endpoint === "/admin") {
+        await this.handleAdministration(request, response);
+        return;
+      }
+      if (route.endpoint === "/account") {
+        await this.handleAccount(request, response);
+        return;
+      }
+      if (route.endpoint === "/direct") {
+        await this.handleDirect(request, response);
+        return;
+      }
+      if (route.endpoint === "/direct/messages") {
+        await this.handleDirectMessages(request, response);
+        return;
+      }
       if (route.endpoint === "/rooms") {
         await this.handleRooms(request, response);
         return;
@@ -1763,7 +2770,12 @@ var ChatroomHttpController = class {
       }
       json(response, 404, { error: "\u63A5\u53E3\u4E0D\u5B58\u5728\u3002" });
     } catch (error) {
-      if (error instanceof ChatroomInputError) {
+      if (error instanceof ChatroomAuthRateLimitError) {
+        response.setHeader("Retry-After", String(error.retryAfterSeconds));
+        json(response, 429, { error: error.message });
+        return;
+      }
+      if (error instanceof ChatroomInputError || error instanceof ChatroomAuthError) {
         json(response, 422, { error: error.message });
         return;
       }
@@ -1778,10 +2790,26 @@ var ChatroomHttpController = class {
   async handleSession(request, response, cookiePath) {
     const token = this.token(request);
     if (request.method === "GET") {
+      if (this.config.authEnabled) {
+        let account = this.runtime.auth.account(this.authToken(request));
+        if (account === void 0) {
+          const adopted = await this.runtime.auth.adoptDshAuth(request.headers);
+          if (adopted !== void 0) {
+            account = adopted.account;
+            this.setAuthCookie(response, adopted.token);
+          }
+        }
+        json(response, 200, this.sessionPayload(account ?? null, account));
+        return;
+      }
       json(response, 200, this.sessionPayload(this.runtime.identity(token) ?? null));
       return;
     }
     if (request.method === "POST") {
+      if (this.config.authEnabled) {
+        json(response, 409, { error: "\u767B\u5F55\u6A21\u5F0F\u4E0B\u8BF7\u5728\u8D26\u53F7\u8BBE\u7F6E\u4E2D\u4FEE\u6539\u4E2A\u4EBA\u8D44\u6599\u3002" });
+        return;
+      }
       assertSameOrigin(request);
       const body = await readJson(request, smallRequestLimit(this.config));
       const existing = this.runtime.identity(token);
@@ -1805,6 +2833,10 @@ var ChatroomHttpController = class {
       return;
     }
     if (request.method === "DELETE") {
+      if (this.config.authEnabled) {
+        json(response, 409, { error: "\u767B\u5F55\u6A21\u5F0F\u4E0B\u8BF7\u4F7F\u7528\u9000\u51FA\u767B\u5F55\u3002" });
+        return;
+      }
       assertSameOrigin(request);
       await this.runtime.deleteIdentity(token);
       response.setHeader("Set-Cookie", expiredSessionCookie(this.config.cookieName, cookiePath));
@@ -1814,8 +2846,247 @@ var ChatroomHttpController = class {
     }
     methodNotAllowed(response, "GET, POST, DELETE");
   }
+  async handleAuthentication(request, response, cookiePath, endpoint, url) {
+    if (endpoint === "/auth/verify") {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        methodNotAllowed(response, "GET, HEAD");
+        return;
+      }
+      let account = this.runtime.auth.account(this.authToken(request));
+      if (account === void 0) {
+        const adopted = await this.runtime.auth.adoptDshAuth(request.headers, originalRequestUri(request));
+        if (adopted !== void 0) {
+          account = adopted.account;
+          this.setAuthCookie(response, adopted.token);
+        }
+      }
+      if (account === void 0) {
+        const login = `${cookiePath}/auth/page?returnTo=${encodeURIComponent(originalRequestUri(request))}`;
+        response.writeHead(401, {
+          "Cache-Control": "no-store, max-age=0",
+          Vary: "Cookie",
+          "WWW-Authenticate": 'Session realm="DeepSeek Harness"',
+          "X-Dsh-Auth-Login": login
+        });
+        response.end();
+        return;
+      }
+      response.writeHead(204, {
+        "Cache-Control": "no-store, max-age=0",
+        Vary: "Cookie",
+        "X-Dsh-Auth-User-Id": account.participantId,
+        "X-Dsh-Auth-Username": encodeURIComponent(account.username),
+        "X-Dsh-Auth-Roles": account.role
+      });
+      response.end();
+      return;
+    }
+    if (endpoint === "/auth/page") {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        methodNotAllowed(response, "GET, HEAD");
+        return;
+      }
+      const returnTo = safeReturnPath(url.searchParams.get("returnTo") ?? "/");
+      let account = this.runtime.auth.account(this.authToken(request));
+      if (account === void 0) {
+        const adopted = await this.runtime.auth.adoptDshAuth(request.headers, returnTo);
+        if (adopted !== void 0) {
+          account = adopted.account;
+          this.setAuthCookie(response, adopted.token);
+        }
+      }
+      if (account !== void 0) {
+        response.writeHead(303, { Location: returnTo, "Cache-Control": "no-store" });
+        response.end();
+        return;
+      }
+      html(response, 200, renderAuthPage(cookiePath, this.runtime.auth.state(), returnTo), request.method === "HEAD");
+      return;
+    }
+    if (endpoint === "/auth/providers" && request.method === "GET") {
+      const account = this.runtime.auth.account(this.authToken(request));
+      json(response, 200, this.runtime.auth.state(account));
+      return;
+    }
+    if (endpoint === "/auth/login" && request.method === "POST") {
+      assertSameOrigin(request);
+      const body = await readJson(request, 8192);
+      const result = await this.runtime.auth.login(fieldString(body, "username"), fieldString(body, "password"));
+      this.setAuthCookie(response, result.token);
+      json(response, 200, this.sessionPayload(result.account, result.account));
+      return;
+    }
+    if (endpoint === "/auth/register" && request.method === "POST") {
+      assertSameOrigin(request);
+      const body = await readJson(request, 16384);
+      const result = await this.runtime.auth.register({
+        username: fieldString(body, "username"),
+        password: fieldString(body, "password"),
+        displayName: fieldString(body, "displayName"),
+        ...optionalFieldString(body, "avatarId") === void 0 ? {} : { avatarId: optionalFieldString(body, "avatarId") },
+        ...optionalFieldString(body, "bootstrapToken") === void 0 ? {} : { bootstrapToken: optionalFieldString(body, "bootstrapToken") }
+      });
+      this.setAuthCookie(response, result.token);
+      json(response, 201, this.sessionPayload(result.account, result.account));
+      return;
+    }
+    if (endpoint === "/auth/logout" && request.method === "POST") {
+      assertSameOrigin(request);
+      await this.runtime.auth.logout(this.authToken(request));
+      response.setHeader("Set-Cookie", expiredSessionCookie(
+        this.config.authCookieName,
+        "/",
+        this.config.authPublicOrigin.startsWith("https://")
+      ));
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    const oidcMatch = /^\/auth\/oidc\/([^/]+)\/(start|callback)$/u.exec(endpoint);
+    if (oidcMatch !== null && request.method === "GET") {
+      const providerId = decodeURIComponent(oidcMatch[1]);
+      if (oidcMatch[2] === "start") {
+        const target = await this.runtime.auth.startOidc(providerId, url.searchParams.get("returnTo") ?? "/");
+        response.writeHead(302, { Location: target.href, "Cache-Control": "no-store" });
+        response.end();
+        return;
+      }
+      const completed = await this.runtime.auth.completeOidc(providerId, publicCallbackUrl(url, this.config));
+      this.setAuthCookie(response, completed.token);
+      response.writeHead(302, { Location: completed.returnTo, "Cache-Control": "no-store" });
+      response.end();
+      return;
+    }
+    if (endpoint === "/auth/dsh-auth/start" && request.method === "GET") {
+      const callbackPath = `${cookiePath}/auth/dsh-auth/callback`;
+      const target = this.runtime.auth.dshAuthLoginUrl(url.searchParams.get("returnTo") ?? "/", callbackPath);
+      response.writeHead(302, { Location: target.href, "Cache-Control": "no-store" });
+      response.end();
+      return;
+    }
+    if (endpoint === "/auth/dsh-auth/callback" && request.method === "GET") {
+      const returnTo = safeReturnPath(url.searchParams.get("returnTo") ?? "/");
+      const adopted = await this.runtime.auth.adoptDshAuth(request.headers, returnTo);
+      if (adopted === void 0) throw new ChatroomAuthError("dsh-auth \u767B\u5F55\u672A\u5B8C\u6210\u6216\u5DF2\u5931\u6548\u3002");
+      this.setAuthCookie(response, adopted.token);
+      response.writeHead(302, { Location: returnTo, "Cache-Control": "no-store" });
+      response.end();
+      return;
+    }
+    methodNotAllowed(response, endpoint.endsWith("/start") || endpoint.endsWith("/callback") ? "GET" : "POST");
+  }
+  async handleAdministration(request, response) {
+    const actor = this.requireAccount(request, response);
+    if (actor === void 0) return;
+    if (request.method === "GET") {
+      json(response, 200, this.runtime.auth.overview(actor));
+      return;
+    }
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "GET, POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const body = await readJson(request, 32768);
+    const action = fieldString(body, "action");
+    if (action === "create-user") {
+      const account = await this.runtime.auth.createUser(actor, {
+        username: fieldString(body, "username"),
+        password: fieldString(body, "password"),
+        displayName: fieldString(body, "displayName"),
+        ...optionalFieldString(body, "avatarId") === void 0 ? {} : { avatarId: optionalFieldString(body, "avatarId") },
+        role: accountRole(body.role)
+      });
+      json(response, 201, { account, overview: this.runtime.auth.overview(actor) });
+      return;
+    }
+    if (action === "update-user") {
+      const account = await this.runtime.auth.updateUser(actor, fieldString(body, "userId"), {
+        ...body.role === void 0 ? {} : { role: accountRole(body.role) },
+        ...body.status === void 0 ? {} : { status: accountStatus(body.status) }
+      });
+      json(response, 200, { account, overview: this.runtime.auth.overview(actor) });
+      return;
+    }
+    if (action === "settings") {
+      await this.runtime.auth.updateSettings(actor, fieldBoolean(body, "allowSelfRegistration"));
+      json(response, 200, this.runtime.auth.overview(actor));
+      return;
+    }
+    if (action === "save-provider") {
+      const provider = await this.runtime.auth.saveProvider(actor, {
+        id: fieldString(body, "id"),
+        label: fieldString(body, "label"),
+        enabled: fieldBoolean(body, "enabled"),
+        issuer: fieldString(body, "issuer"),
+        clientId: fieldString(body, "clientId"),
+        ...optionalFieldString(body, "clientSecret") === void 0 ? {} : { clientSecret: optionalFieldString(body, "clientSecret") },
+        scopes: fieldString(body, "scopes"),
+        usernameClaim: fieldString(body, "usernameClaim"),
+        displayNameClaim: fieldString(body, "displayNameClaim"),
+        autoCreateUsers: fieldBoolean(body, "autoCreateUsers")
+      });
+      json(response, 200, { provider, overview: this.runtime.auth.overview(actor) });
+      return;
+    }
+    if (action === "delete-provider") {
+      await this.runtime.auth.deleteProvider(actor, fieldString(body, "providerId"));
+      json(response, 200, this.runtime.auth.overview(actor));
+      return;
+    }
+    throw new ChatroomAuthError("\u7BA1\u7406\u5458\u64CD\u4F5C\u65E0\u6548\u3002");
+  }
+  async handleAccount(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const actor = this.requireAccount(request, response);
+    if (actor === void 0) return;
+    const body = await readJson(request, 4096);
+    if (fieldString(body, "action") !== "change-password") throw new ChatroomAuthError("\u8D26\u53F7\u64CD\u4F5C\u65E0\u6548\u3002");
+    const changed = await this.runtime.auth.changePassword(
+      actor,
+      fieldString(body, "currentPassword"),
+      fieldString(body, "newPassword")
+    );
+    this.setAuthCookie(response, changed.token);
+    json(response, 200, { account: changed.account });
+  }
+  async handleDirect(request, response) {
+    const identity = this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    if (request.method === "GET") {
+      json(response, 200, this.runtime.directDirectory(identity));
+      return;
+    }
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "GET, POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const body = await readJson(request, 4096);
+    json(response, 200, await this.runtime.openDirect(fieldString(body, "peerId"), identity));
+  }
+  async handleDirectMessages(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const body = await readJson(request, this.config.maxMessageTextChars * 4 + 4096);
+    json(response, 201, await this.runtime.sendDirect(
+      fieldString(body, "conversationId"),
+      fieldString(body, "text"),
+      identity
+    ));
+  }
   async handleRooms(request, response) {
     if (request.method === "GET") {
+      if (this.requireIdentity(request, response) === void 0) return;
       json(response, 200, { rooms: this.runtime.rooms });
       return;
     }
@@ -2055,7 +3326,8 @@ var ChatroomHttpController = class {
     assertSameOrigin(request);
     const identity = this.requireIdentity(request, response);
     if (identity === void 0) return;
-    if (!canManageRemoteSettings(this.config, identity.participantId)) {
+    const account = this.config.authEnabled ? this.runtime.auth.account(this.authToken(request)) : void 0;
+    if (account?.role !== "super-admin" && !canManageRemoteSettings(this.config, identity.participantId)) {
       json(response, 403, { error: "\u5F53\u524D\u804A\u5929\u5BA4\u8EAB\u4EFD\u6CA1\u6709\u6A21\u578B\u8BBE\u7F6E\u7BA1\u7406\u6743\u9650\u3002" });
       return;
     }
@@ -2072,18 +3344,42 @@ var ChatroomHttpController = class {
     if (method === "settings.describe") hideHostDocumentCapability(payload);
     json(response, upstream.status, payload);
   }
-  sessionPayload(identity) {
-    return { identity, rooms: this.runtime.rooms, room: this.runtime.room };
+  sessionPayload(identity, account) {
+    return {
+      auth: this.runtime.auth.state(account),
+      identity,
+      rooms: this.config.authEnabled && account === void 0 ? [] : this.runtime.rooms,
+      ...this.config.authEnabled && account === void 0 ? {} : { room: this.runtime.room }
+    };
   }
   requireIdentity(request, response) {
-    const identity = this.runtime.identity(this.token(request));
+    const identity = this.config.authEnabled ? this.runtime.auth.account(this.authToken(request)) : this.runtime.identity(this.token(request));
     if (identity === void 0) {
-      json(response, 401, { error: "\u8BF7\u5148\u9009\u62E9\u804A\u5929\u5BA4\u8EAB\u4EFD\u3002" });
+      json(response, 401, {
+        error: this.config.authEnabled ? "\u8BF7\u5148\u767B\u5F55\u3002" : "\u8BF7\u5148\u9009\u62E9\u804A\u5929\u5BA4\u8EAB\u4EFD\u3002"
+      });
     }
     return identity;
   }
+  requireAccount(request, response) {
+    const account = this.runtime.auth.account(this.authToken(request));
+    if (account === void 0) json(response, 401, { error: "\u8BF7\u5148\u767B\u5F55\u3002" });
+    return account;
+  }
   token(request) {
     return cookieValue(request.headers.cookie, this.config.cookieName);
+  }
+  authToken(request) {
+    return cookieValue(request.headers.cookie, this.config.authCookieName);
+  }
+  setAuthCookie(response, token) {
+    response.setHeader("Set-Cookie", sessionCookie(
+      this.config.authCookieName,
+      token,
+      this.config.authSessionMaxAgeSeconds,
+      "/",
+      this.config.authPublicOrigin.startsWith("https://")
+    ));
   }
 };
 var REMOTE_CONFIGURATION_METHODS = /* @__PURE__ */ new Set([
@@ -2120,6 +3416,18 @@ function json(response, status, payload) {
     "Cache-Control": "no-store"
   });
   response.end(body);
+}
+function html(response, status, body, head) {
+  response.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": Buffer.byteLength(body),
+    "Cache-Control": "no-store, max-age=0",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY"
+  });
+  response.end(head ? void 0 : body);
 }
 function methodNotAllowed(response, allow) {
   response.setHeader("Allow", allow);
@@ -2169,6 +3477,25 @@ function optionalFieldString(body, field) {
   if (value === void 0) return void 0;
   if (typeof value !== "string") throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
   return value;
+}
+function fieldBoolean(body, field) {
+  const value = body[field];
+  if (typeof value !== "boolean") throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5E03\u5C14\u503C\u3002`);
+  return value;
+}
+function accountRole(value) {
+  if (value !== "super-admin" && value !== "admin" && value !== "member") {
+    throw new ChatroomInputError("\u8D26\u53F7\u89D2\u8272\u65E0\u6548\u3002");
+  }
+  return value;
+}
+function accountStatus(value) {
+  if (value !== "active" && value !== "disabled") throw new ChatroomInputError("\u8D26\u53F7\u72B6\u6001\u65E0\u6548\u3002");
+  return value;
+}
+function publicCallbackUrl(url, config) {
+  if (config.authPublicOrigin === "") throw new ChatroomAuthError("\u7BA1\u7406\u5458\u5C1A\u672A\u914D\u7F6E\u4F01\u4E1A SSO \u7684\u516C\u7F51\u8BBF\u95EE\u5730\u5740\u3002");
+  return new URL(`${url.pathname}${url.search}`, config.authPublicOrigin);
 }
 function forwardItems(value) {
   if (!Array.isArray(value)) throw new ChatroomInputError("\u8F6C\u53D1\u6D88\u606F\u5217\u8868\u65E0\u6548\u3002");
@@ -2321,6 +3648,14 @@ function forwardImageRequest(value) {
 }
 function smallRequestLimit(config) {
   return Math.max(config.maxDisplayNameChars, config.maxRoomTitleChars) * 4 + 1024;
+}
+function originalRequestUri(request) {
+  const original = request.headers["x-original-uri"] ?? request.headers["x-forwarded-uri"];
+  return safeReturnPath(typeof original === "string" ? original : "/");
+}
+function safeReturnPath(value) {
+  if (!value.startsWith("/") || value.startsWith("//") || /[\r\n]/u.test(value)) return "/";
+  return value.slice(0, 2048);
 }
 
 // src/model-history.ts

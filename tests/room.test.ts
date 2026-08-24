@@ -107,6 +107,35 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
+  it('keeps direct conversations private to their two authenticated accounts', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, {
+      ...config(),
+      authEnabled: true,
+      authSecret: 'a secure test secret with at least 32 bytes',
+      authPublicOrigin: 'https://chat.example.com',
+      authBootstrapToken: 'bootstrap-token',
+    })
+    await runtime.start()
+    const alice = (await runtime.auth.register({
+      username: 'alice', password: 'alice password 123', displayName: 'Alice', bootstrapToken: 'bootstrap-token',
+    })).account
+    const bob = (await runtime.auth.register({
+      username: 'bob-user', password: 'bob password 1234', displayName: 'Bob',
+    })).account
+    const charlie = (await runtime.auth.register({
+      username: 'charlie', password: 'charlie password 123', displayName: 'Charlie',
+    })).account
+
+    const opened = await runtime.openDirect(bob.participantId, alice)
+    const sent = await runtime.sendDirect(opened.conversation!.id, '只给 Bob 的消息', alice)
+    expect(sent.message).toMatchObject({ sequence: 1, senderId: alice.participantId, text: '只给 Bob 的消息' })
+    expect((await runtime.openDirect(alice.participantId, bob)).messages).toEqual([sent.message])
+    await expect(runtime.sendDirect(opened.conversation!.id, '越权读取', charlie)).rejects.toThrow('无权访问')
+    expect(runtime.directDirectory(charlie).conversations).toEqual([])
+    await runtime.stop()
+  })
+
   it('stores downloadable files and keeps a model-readable reply line', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
@@ -558,5 +587,15 @@ function config(): Config {
     settingsAdminParticipantIds: [],
     maxSettingsRequestBytes: 1024 * 1024,
     sseHeartbeatMs: 15_000,
+    authEnabled: false,
+    authCookieName: 'dsh_chatroom_auth',
+    authSessionMaxAgeSeconds: 2_592_000,
+    authSecret: '',
+    authPublicOrigin: '',
+    authBootstrapToken: '',
+    authAllowSelfRegistration: true,
+    authDshAuthHeaders: false,
+    authDshAuthVerifyUrl: '',
+    authDshAuthLoginPath: '/auth/login',
   }
 }

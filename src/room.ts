@@ -11,10 +11,13 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-title'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
+import { ChatroomAuth } from './auth.js'
 import type { Config } from './config.js'
 import { isChatroomAvatarId, fallbackAvatarId } from './avatars.js'
 import {
   chatroomDomainSpec,
+  type DirectConversationRecord,
+  type DirectMessageRecord,
   type FileRecord,
   type IdentityRecord,
   type MemberRecord,
@@ -36,6 +39,11 @@ import {
 } from './message.js'
 import { CHATROOM_REACTION_EMOJIS, type ChatroomReactionEmoji } from './reactions.js'
 import type {
+  ChatroomDirectConversation,
+  ChatroomDirectMessage,
+  ChatroomDirectMessageEvent,
+  ChatroomDirectPeer,
+  ChatroomDirectResponse,
   ChatroomFileReference,
   ChatroomForwardBundle,
   ChatroomForwardContentPart,
@@ -110,6 +118,9 @@ export class ChatroomRuntime {
   private threads: KvTable<string, ThreadRecord> | undefined
   private threadMessages: KvTable<string, ThreadMessageRecord> | undefined
   private reactions: KvTable<string, ReactionRecord> | undefined
+  private directConversations: KvTable<string, DirectConversationRecord> | undefined
+  private directMessages: KvTable<string, DirectMessageRecord> | undefined
+  private authentication: ChatroomAuth | undefined
   private readonly states = new Map<string, RoomState>()
   private readonly threadStates = new Map<string, ThreadState>()
   private readonly notificationClients = new Set<NotificationClient>()
@@ -158,6 +169,12 @@ export class ChatroomRuntime {
     return this.ready && !this.stopping
   }
 
+  /** Account and provider manager initialized with the chatroom storage domain. */
+  get auth(): ChatroomAuth {
+    if (this.authentication === undefined) throw new Error('chatroom authentication is not ready')
+    return this.authentication
+  }
+
   /** Whether one model request belongs to a room or branch Session owned by this runtime. */
   ownsSession(sessionId: string): boolean {
     return [...this.states.values()].some(state => state.record.sessionId === sessionId)
@@ -175,6 +192,17 @@ export class ChatroomRuntime {
     this.threads = domain.table('threads')
     this.threadMessages = domain.table('thread_messages')
     this.reactions = domain.table('reactions')
+    this.directConversations = domain.table('direct_conversations')
+    this.directMessages = domain.table('direct_messages')
+    this.authentication = new ChatroomAuth(
+      this.config,
+      domain.table('accounts'),
+      domain.table('auth_sessions'),
+      domain.table('auth_settings'),
+      domain.table('auth_providers'),
+      domain.table('external_accounts'),
+    )
+    await this.authentication.start()
     await this.seedConfiguredRoom()
     for (const [, record] of this.requireRoomRecords().entries()) {
       this.states.set(record.id, newRoomState(record))
@@ -220,6 +248,9 @@ export class ChatroomRuntime {
     this.threads = undefined
     this.threadMessages = undefined
     this.reactions = undefined
+    this.directConversations = undefined
+    this.directMessages = undefined
+    this.authentication = undefined
   }
 
   /** Resolve an opaque cookie token to its durable identity. */
@@ -606,6 +637,100 @@ export class ChatroomRuntime {
     const client: NotificationClient = { participantId: identity.participantId, response }
     this.notificationClients.add(client)
     return () => { this.notificationClients.delete(client) }
+  }
+
+  /** List active peers and private conversations visible only to the requesting account. */
+  directDirectory(identity: ChatroomIdentity): ChatroomDirectResponse {
+    this.assertReady()
+    const peers = this.auth.activeAccounts()
+      .filter(account => account.participantId !== identity.participantId)
+      .map(account => ({
+        participantId: account.participantId,
+        username: account.username,
+        displayName: account.displayName,
+        avatarId: account.avatarId,
+      } satisfies ChatroomDirectPeer))
+    const conversations = [...this.requireDirectConversations().entries()]
+      .map(([, conversation]) => conversation)
+      .filter(conversation => conversation.participantIds.includes(identity.participantId))
+      .map(conversation => this.publicDirectConversation(conversation, identity.participantId))
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+    return { peers, conversations }
+  }
+
+  /** Create or reopen one two-account private conversation. */
+  async openDirect(peerId: string, identity: ChatroomIdentity): Promise<ChatroomDirectResponse> {
+    this.assertReady()
+    if (peerId === identity.participantId) throw new ChatroomInputError('不能和自己发起私聊。')
+    if (!this.auth.activeAccounts().some(account => account.participantId === peerId)) {
+      throw new ChatroomInputError('私聊对象不存在或已停用。')
+    }
+    const participants = [identity.participantId, peerId].sort() as [string, string]
+    let record = [...this.requireDirectConversations().entries()].find(([, candidate]) =>
+      candidate.participantIds[0] === participants[0] && candidate.participantIds[1] === participants[1])?.[1]
+    if (record === undefined) {
+      const now = Date.now()
+      record = {
+        id: randomUUID(),
+        participantIds: participants,
+        createdAt: now,
+        updatedAt: now,
+        nextSequence: 1,
+      }
+      await this.requireDirectConversations().put(record.id, record)
+    }
+    return {
+      ...this.directDirectory(identity),
+      conversation: this.publicDirectConversation(record, identity.participantId),
+      messages: this.directMessageHistory(record.id),
+    }
+  }
+
+  /** Append one private text message and notify only its two participants. */
+  async sendDirect(conversationId: string, text: string, identity: ChatroomIdentity): Promise<{
+    conversation: ChatroomDirectConversation
+    message: ChatroomDirectMessage
+  }> {
+    this.assertReady()
+    const existing = this.requireDirectConversations().get(conversationId)
+    if (existing === undefined || !existing.participantIds.includes(identity.participantId)) {
+      throw new ChatroomInputError('私聊不存在或你无权访问。')
+    }
+    const normalized = text.normalize('NFC').trim()
+    if (normalized === '' || Array.from(normalized).length > this.config.maxMessageTextChars || /\u0000/u.test(normalized)) {
+      throw new ChatroomInputError('私聊消息为空或过长。')
+    }
+    const now = Date.now()
+    const updated = await this.requireDirectConversations().update(conversationId, current => ({
+      ...current,
+      updatedAt: now,
+      nextSequence: current.nextSequence + 1,
+    }))
+    const message: DirectMessageRecord = {
+      id: randomUUID(),
+      conversationId,
+      sequence: updated.nextSequence - 1,
+      senderId: identity.participantId,
+      text: normalized,
+      createdAt: now,
+    }
+    await this.requireDirectMessages().put(
+      `${conversationId}:${String(message.sequence).padStart(12, '0')}:${message.id}`,
+      message,
+    )
+    const event: ChatroomDirectMessageEvent = {
+      type: 'direct-message',
+      conversation: this.publicDirectConversation(updated, identity.participantId),
+      message: publicDirectMessage(message),
+    }
+    for (const client of [...this.notificationClients]) {
+      if (!updated.participantIds.includes(client.participantId)) continue
+      const projected = client.participantId === identity.participantId
+        ? event
+        : { ...event, conversation: this.publicDirectConversation(updated, client.participantId) }
+      if (!writeNotificationSse(client.response, projected)) this.notificationClients.delete(client)
+    }
+    return { conversation: event.conversation, message: event.message }
   }
 
   /** Create or reopen a branch rooted at one native room message. */
@@ -997,6 +1122,34 @@ export class ChatroomRuntime {
     }
   }
 
+  private publicDirectConversation(
+    record: DirectConversationRecord,
+    viewerId: string,
+  ): ChatroomDirectConversation {
+    const peerId = record.participantIds.find(id => id !== viewerId)
+    const account = this.auth.activeAccounts().find(candidate => candidate.participantId === peerId)
+    if (peerId === undefined || account === undefined) throw new ChatroomInputError('私聊对象不存在或已停用。')
+    return {
+      id: record.id,
+      peer: {
+        participantId: account.participantId,
+        username: account.username,
+        displayName: account.displayName,
+        avatarId: account.avatarId,
+      },
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    }
+  }
+
+  private directMessageHistory(conversationId: string): readonly ChatroomDirectMessage[] {
+    return [...this.requireDirectMessages().entries()]
+      .map(([, message]) => message)
+      .filter(message => message.conversationId === conversationId)
+      .sort((left, right) => left.sequence - right.sequence)
+      .map(publicDirectMessage)
+  }
+
   private async seedConfiguredRoom(): Promise<void> {
     const records = this.requireRoomRecords()
     const existing = records.get(this.config.roomId)
@@ -1279,6 +1432,16 @@ export class ChatroomRuntime {
   private requireReactions(): KvTable<string, ReactionRecord> {
     if (this.reactions === undefined) throw new Error('chatroom reaction storage is unavailable')
     return this.reactions
+  }
+
+  private requireDirectConversations(): KvTable<string, DirectConversationRecord> {
+    if (this.directConversations === undefined) throw new Error('chatroom direct conversation storage is unavailable')
+    return this.directConversations
+  }
+
+  private requireDirectMessages(): KvTable<string, DirectMessageRecord> {
+    if (this.directMessages === undefined) throw new Error('chatroom direct message storage is unavailable')
+    return this.directMessages
   }
 
   private requireThreadState(threadId: string): ThreadState {
@@ -1612,6 +1775,17 @@ function onlineCount(state: RoomState): number {
   return new Set([...state.clients].map(client => client.participantId)).size
 }
 
+function publicDirectMessage(record: DirectMessageRecord): ChatroomDirectMessage {
+  return {
+    id: record.id,
+    conversationId: record.conversationId,
+    sequence: record.sequence,
+    senderId: record.senderId,
+    text: record.text,
+    createdAt: record.createdAt,
+  }
+}
+
 function writeSse(response: ServerResponse, event: ChatroomServerEvent): boolean {
   if (response.destroyed || response.writableEnded) return false
   try {
@@ -1622,7 +1796,10 @@ function writeSse(response: ServerResponse, event: ChatroomServerEvent): boolean
   }
 }
 
-function writeNotificationSse(response: ServerResponse, event: ChatroomNotificationEvent): boolean {
+function writeNotificationSse(
+  response: ServerResponse,
+  event: ChatroomNotificationEvent | ChatroomDirectMessageEvent,
+): boolean {
   if (response.destroyed || response.writableEnded) return false
   try {
     response.write(`data: ${JSON.stringify(event)}\n\n`)

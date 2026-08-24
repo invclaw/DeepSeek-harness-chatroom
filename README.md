@@ -6,7 +6,12 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 
 ## Features
 
-- One first-visit display-name and avatar selection reused across every room through a durable, opaque browser-session cookie
+- Optional system-wide accounts with password registration, super-administrator provisioning, disabled-account revocation, password rotation, and one identity reused across rooms
+- Pluggable authentication through local passwords, generic enterprise OIDC Authorization Code + PKCE/nonce callbacks, or the community `dsh-auth` administrator identity
+- A standalone login page and `/auth/verify` contract for an edge `forward_auth`, covering the Harness SPA, APIs, downloads, SSE, and WebSockets instead of relying on a client-side overlay
+- A super-administrator console for registration policy, user creation, roles/status, and encrypted OIDC provider configuration; client secrets are never returned to browsers
+- Durable private text conversations between accounts, visible only to their two participants and delivered through the existing toast, unread, and browser-notification channel
+- Legacy identity mode still supports one first-visit display-name and avatar selection reused across every room through a durable, opaque browser-session cookie
 - A shared-room directory that creates and switches among independent persistent Harness Sessions
 - Human-first chat: ordinary messages do not wake the Agent; `@AI` or the configured AI display name explicitly requests a reply
 - RC7's native `@` menu lists AI and current room members together; only `@AI` or the configured AI name wakes the Agent
@@ -28,7 +33,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 0.9.10 renders chatroom mentions as literal `@name` text in native user bubbles instead of Harness reference icons, while retaining the native candidate menu and model-visible text. Version 0.9.9 reconstructs branch roots from their authenticated native Session events, so image and file roots retain their real content instead of becoming placeholder text. Existing media branches are backfilled once when reopened. Version 0.9.8 keeps one native Harness branch runtime alive and switches new branch Sessions inside it, so only the first branch pays the Web-client initialization cost. Exact Session ids and a safe truncated-title prefix guard the handoff, and pending files or reply metadata are cleared between branches.
+Version 1.0.0 adds the account/authentication platform, the super-administrator console, generic OIDC and `dsh-auth` adapters, whole-site edge verification, password rotation, and private conversations. Version 0.9.10 renders chatroom mentions as literal `@name` text in native user bubbles instead of Harness reference icons, while retaining the native candidate menu and model-visible text.
 
 ## Requirements
 
@@ -71,6 +76,14 @@ Installation adds this row to the Web profile:
     cwd: !!js process.env.DSH_CHATROOM_CWD ?? process.cwd()
     agentPreset: standard
     settingsAdminParticipantIds: !!js (process.env.DSH_CHATROOM_SETTINGS_ADMIN_IDS ?? '').split(',').map(value => value.trim()).filter(Boolean)
+    authEnabled: !!js Boolean(process.env.DSH_CHATROOM_AUTH_SECRET)
+    authSecret: !!js process.env.DSH_CHATROOM_AUTH_SECRET ?? ''
+    authPublicOrigin: !!js process.env.DSH_CHATROOM_AUTH_PUBLIC_ORIGIN ?? ''
+    authBootstrapToken: !!js process.env.DSH_CHATROOM_AUTH_BOOTSTRAP_TOKEN ?? ''
+    authAllowSelfRegistration: !!js process.env.DSH_CHATROOM_SELF_REGISTRATION !== 'disabled'
+    authDshAuthHeaders: !!js process.env.DSH_CHATROOM_DSH_AUTH_HEADERS === 'enabled'
+    authDshAuthVerifyUrl: !!js process.env.DSH_CHATROOM_DSH_AUTH_VERIFY_URL ?? ''
+    authDshAuthLoginPath: !!js process.env.DSH_CHATROOM_DSH_AUTH_LOGIN_PATH ?? '/auth/login'
 ```
 
 Override it in the Web profile's `cordis.patch.yml` when needed:
@@ -98,7 +111,37 @@ Override it in the Web profile's `cordis.patch.yml` when needed:
       - participant-id-of-an-administrator
     maxSettingsRequestBytes: 1048576
     sseHeartbeatMs: 15000
+    authEnabled: true
+    authCookieName: dsh_chatroom_auth
+    authSessionMaxAgeSeconds: 2592000
+    authSecret: a-random-secret-containing-at-least-32-utf8-bytes
+    authPublicOrigin: https://chat.example.com
+    authBootstrapToken: one-time-super-administrator-bootstrap-token
+    authAllowSelfRegistration: true
+    authDshAuthHeaders: false
+    authDshAuthVerifyUrl: ''
+    authDshAuthLoginPath: /auth/login
 ```
+
+`authSecret` encrypts OIDC client secrets and hashes no passwords directly; keep it stable and outside Git. Local passwords use salted scrypt. The first password registration must present `authBootstrapToken` and becomes the initial super administrator. Later registrations follow the mutable policy in **System administration**. Login attempts are bounded in memory, disabling an account revokes all its sessions, and changing a password rotates the current session and revokes older ones. The authentication cookie is random, stored only by SHA-256 digest, `HttpOnly`, `SameSite=Strict`, root-scoped, and `Secure` whenever `authPublicOrigin` uses HTTPS.
+
+### Enterprise OIDC and dsh-auth
+
+Add OIDC providers from **System administration**. The displayed callback URL must be registered exactly at the identity provider. Discovery and the authorization-code exchange use OIDC discovery, PKCE, state, and nonce; the client secret is stored with AES-256-GCM under `authSecret` and is never projected back to the UI.
+
+To reuse [`dsh-auth`](https://github.com/hxy91819/dsh-auth) as an identity provider while retaining local multi-user accounts, keep its `/auth/*` routes reachable on the same public origin and set `DSH_CHATROOM_DSH_AUTH_VERIFY_URL` to its loopback `/auth/verify` URL (for a plugin on the same Harness listener this is typically `http://127.0.0.1:3080/auth/verify`). The chatroom forwards the browser's dsh-auth cookie only to that loopback verifier and imports its verified administrator as a local super administrator. `DSH_CHATROOM_DSH_AUTH_HEADERS=enabled` instead trusts proxy-injected `X-Dsh-Auth-*` headers and is intended for an existing dsh-auth-managed edge; that mode requires the edge to delete inbound client copies of those headers. An outer dsh-auth edge admits only its single administrator, so use the verifier adapter—not the outer single-user gate—when local member accounts must also sign in.
+
+### Whole-site edge enforcement
+
+Enabling the plugin's account APIs does not by itself make a publicly reachable Harness secure. Keep Harness loopback-only and configure the public TLS proxy to:
+
+1. Return `404` for public requests to `/plugins/deepseek-harness-chatroom/api/auth/verify`.
+2. Proxy only the explicit login/register/logout, `/auth/page`, `/auth/providers`, OIDC, and dsh-auth callback routes without authentication.
+3. Run every other Harness page, asset, API, plugin, SSE, download, and WebSocket request through an internal `forward_auth` subrequest to that verify URL.
+4. Pass the original URI as `X-Original-URI`, convert a `401` plus `X-Dsh-Auth-Login` to a `303` only for top-level page navigation, and preserve `Set-Cookie` returned by verification.
+5. Remove inbound `X-Dsh-Auth-User-Id`, `X-Dsh-Auth-Username`, and `X-Dsh-Auth-Roles` before copying verified values.
+
+The verifier returns `204` with verified identity headers, or `401` with the standalone login location. This arrangement keeps the authentication edge independent from Harness startup: the plugin registers immediately, reports `503` until its own storage is ready, and a provider discovery/login failure does not prevent Harness from starting.
 
 `settingsAdminParticipantIds` defaults to an empty list, so remote browsers cannot read or modify Harness configuration. Production deployments may supply the allowlist through the comma-separated `DSH_CHATROOM_SETTINGS_ADMIN_IDS` environment variable. The current identity's `participantId` is available in the authenticated `/plugins/deepseek-harness-chatroom/api/session` response. Changing a display name or avatar preserves that ID; resetting the chatroom identity creates a new ID and requires an allowlist update. A remote Models request must also carry the valid HttpOnly chatroom cookie and pass the same-origin check.
 
@@ -108,7 +151,7 @@ The API route is registered immediately and reports `503` until identity storage
 
 ## Browser identity and security
 
-The browser receives a random 256-bit token in an `HttpOnly`, `SameSite=Strict` cookie scoped to the chatroom API. The server stores only its SHA-256 digest. Reloading the page or restarting Harness restores the identity until the cookie expires or the user changes identity from the shared-room directory.
+When authentication is disabled, the legacy browser identity still receives a random 256-bit token in an API-scoped `HttpOnly`, `SameSite=Strict` cookie. This mode identifies participants but is not an access-control mechanism. When authentication is enabled, the account cookie described above is authoritative for rooms, files, images, settings administration, notifications, and private conversations.
 
 A display name is presentation, not authentication. Remote Models authorization compares the opaque `participantId` resolved by the server from the HttpOnly cookie and never trusts the editable display name. The configuration carrier retains API Proxy schema validation, secret redaction, and revision-conflict checks; credentials are write-only and never returned, while `settings.openDocument`, Sessions, filesystem methods, and every other privileged API are absent from the allowlist. Every participant who can reach the room can still submit input to the configured Agent preset and may use its tools. Use a restricted preset and narrow `cwd` for rooms exposed beyond a trusted team.
 

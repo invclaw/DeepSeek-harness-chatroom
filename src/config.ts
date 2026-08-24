@@ -21,6 +21,16 @@ export interface Config {
   settingsAdminParticipantIds: string[]
   maxSettingsRequestBytes: number
   sseHeartbeatMs: number
+  authEnabled: boolean
+  authCookieName: string
+  authSessionMaxAgeSeconds: number
+  authSecret: string
+  authPublicOrigin: string
+  authBootstrapToken: string
+  authAllowSelfRegistration: boolean
+  authDshAuthHeaders: boolean
+  authDshAuthVerifyUrl: string
+  authDshAuthLoginPath: string
 }
 
 export const Config: z<Config> = z.object({
@@ -42,6 +52,16 @@ export const Config: z<Config> = z.object({
   settingsAdminParticipantIds: z.array(z.string().min(1).max(128)).default([]),
   maxSettingsRequestBytes: z.number().step(1).min(1_024).max(8 * 1024 * 1024).default(1024 * 1024),
   sseHeartbeatMs: z.number().step(1).min(5_000).max(120_000).default(15_000),
+  authEnabled: z.boolean().default(false),
+  authCookieName: z.string().pattern(/^[A-Za-z0-9_]+$/u).default('dsh_chatroom_auth'),
+  authSessionMaxAgeSeconds: z.number().step(1).min(300).max(31_536_000).default(2_592_000),
+  authSecret: z.string().default(''),
+  authPublicOrigin: z.string().default(''),
+  authBootstrapToken: z.string().default(''),
+  authAllowSelfRegistration: z.boolean().default(true),
+  authDshAuthHeaders: z.boolean().default(false),
+  authDshAuthVerifyUrl: z.string().default(''),
+  authDshAuthLoginPath: z.string().default('/auth/login'),
 })
 
 /** Validate relationships Schemastery cannot express by individual fields. */
@@ -51,5 +71,32 @@ export function validateConfig(config: Config): void {
   }
   if (config.maxMessageFileBytes < config.maxFileBytes) {
     throw new Error('chatroom: maxMessageFileBytes must be greater than or equal to maxFileBytes')
+  }
+  if (config.authEnabled && Buffer.byteLength(config.authSecret, 'utf8') < 32) {
+    throw new Error('chatroom: authSecret must contain at least 32 UTF-8 bytes when authentication is enabled')
+  }
+  if (config.authEnabled && config.authBootstrapToken === ''
+    && !config.authDshAuthHeaders && config.authDshAuthVerifyUrl === '') {
+    throw new Error('chatroom: authBootstrapToken or a dsh-auth adapter is required to create the first super administrator')
+  }
+  if (config.authPublicOrigin !== '') {
+    const origin = new URL(config.authPublicOrigin)
+    if (origin.origin !== config.authPublicOrigin || origin.protocol !== 'https:') {
+      throw new Error('chatroom: authPublicOrigin must be an HTTPS origin without a path')
+    }
+  }
+  if (config.authDshAuthVerifyUrl !== '') {
+    if (config.authPublicOrigin === '') {
+      throw new Error('chatroom: authPublicOrigin is required with authDshAuthVerifyUrl')
+    }
+    const verify = new URL(config.authDshAuthVerifyUrl)
+    const loopback = verify.hostname === '127.0.0.1' || verify.hostname === '[::1]' || verify.hostname === 'localhost'
+    if (!loopback || verify.protocol !== 'http:' || verify.username !== '' || verify.password !== '' || verify.hash !== '') {
+      throw new Error('chatroom: authDshAuthVerifyUrl must be an uncredentialed loopback HTTP URL')
+    }
+  }
+  if (!config.authDshAuthLoginPath.startsWith('/') || config.authDshAuthLoginPath.startsWith('//')
+    || /[?#\r\n]/u.test(config.authDshAuthLoginPath)) {
+    throw new Error('chatroom: authDshAuthLoginPath must be an absolute public path without a query or fragment')
   }
 }

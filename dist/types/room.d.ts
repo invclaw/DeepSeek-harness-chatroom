@@ -1,9 +1,10 @@
 import type { ServerResponse } from 'node:http';
 import type { Context } from '@deepseek-ai/cordis';
 import { type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
+import { ChatroomAuth } from './auth.js';
 import type { Config } from './config.js';
 import { type ChatroomReactionEmoji } from './reactions.js';
-import type { ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
+import type { ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
 /** Runtime validation failure safe to return to a browser. */
 export declare class ChatroomInputError extends Error {
 }
@@ -20,6 +21,9 @@ export declare class ChatroomRuntime {
     private threads;
     private threadMessages;
     private reactions;
+    private directConversations;
+    private directMessages;
+    private authentication;
     private readonly states;
     private readonly threadStates;
     private readonly notificationClients;
@@ -36,6 +40,8 @@ export declare class ChatroomRuntime {
     get maxPromptRequestBytes(): number;
     /** Whether identity persistence and the configured shared Session are ready. */
     get isReady(): boolean;
+    /** Account and provider manager initialized with the chatroom storage domain. */
+    get auth(): ChatroomAuth;
     /** Whether one model request belongs to a room or branch Session owned by this runtime. */
     ownsSession(sessionId: string): boolean;
     /** Open storage, seed the original room, and acquire its Session without blocking Harness startup. */
@@ -83,6 +89,15 @@ export declare class ChatroomRuntime {
     subscribe(roomId: string, identity: ChatroomIdentity, response: ServerResponse): () => void;
     /** Attach one identity to the global message-notification stream. */
     subscribeNotifications(identity: ChatroomIdentity, response: ServerResponse): () => void;
+    /** List active peers and private conversations visible only to the requesting account. */
+    directDirectory(identity: ChatroomIdentity): ChatroomDirectResponse;
+    /** Create or reopen one two-account private conversation. */
+    openDirect(peerId: string, identity: ChatroomIdentity): Promise<ChatroomDirectResponse>;
+    /** Append one private text message and notify only its two participants. */
+    sendDirect(conversationId: string, text: string, identity: ChatroomIdentity): Promise<{
+        conversation: ChatroomDirectConversation;
+        message: ChatroomDirectMessage;
+    }>;
     /** Create or reopen a branch rooted at one native room message. */
     openThread(roomId: string, identity: ChatroomIdentity, root: ChatroomThreadRoot): Promise<ChatroomThreadResponse>;
     /** Append one branch message and wake only that branch Agent on an AI mention. */
@@ -104,6 +119,8 @@ export declare class ChatroomRuntime {
     private reactionsForRoom;
     private reactionSummary;
     private notify;
+    private publicDirectConversation;
+    private directMessageHistory;
     private seedConfiguredRoom;
     private ensureRoom;
     private activateRoom;
@@ -127,6 +144,8 @@ export declare class ChatroomRuntime {
     private requireThreads;
     private requireThreadMessages;
     private requireReactions;
+    private requireDirectConversations;
+    private requireDirectMessages;
     private requireThreadState;
     private assertRoomManager;
 }
