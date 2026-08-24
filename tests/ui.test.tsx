@@ -62,7 +62,9 @@ describe('native chatroom integration', () => {
 
   it('shows super-administrator account controls and isolated direct messages', () => {
     const adminUpdateUser = vi.fn(async () => true)
+    const adminCreateUser = vi.fn(async () => true)
     const adminSetAutoRedirectProvider = vi.fn(async () => true)
+    const adminSaveProvider = vi.fn(async () => true)
     const sendDirect = vi.fn(async () => true)
     const owner = {
       participantId: 'alice-id', username: 'alice', displayName: 'Alice', avatarId: 'whale' as const,
@@ -94,14 +96,30 @@ describe('native chatroom integration', () => {
         id: 'message-1', conversationId: 'direct-1', sequence: 1, senderId: 'bob-id', text: '私聊内容', createdAt: 2,
       }],
     })
-    renderEntry(accountView, { adminUpdateUser, adminSetAutoRedirectProvider, sendDirect })
-    renderSettings(accountView, { adminUpdateUser, adminSetAutoRedirectProvider, sendDirect })
+    renderEntry(accountView, { adminUpdateUser, adminCreateUser, adminSetAutoRedirectProvider, adminSaveProvider, sendDirect })
+    renderSettings(accountView, { adminUpdateUser, adminCreateUser, adminSetAutoRedirectProvider, adminSaveProvider, sendDirect })
     expect(screen.getByTestId('chatroom-settings')).toBeTruthy()
     expect(screen.getByText('@alice')).toBeTruthy()
     const entry = screen.getByLabelText('未登录用户入口') as HTMLSelectElement
     expect(entry.value).toBe('company')
     fireEvent.change(entry, { target: { value: '' } })
     expect(adminSetAutoRedirectProvider).toHaveBeenCalledWith(undefined)
+    fireEvent.change(screen.getByLabelText('账号名'), { target: { value: 'carol' } })
+    fireEvent.change(screen.getByLabelText('显示名称'), { target: { value: 'Carol' } })
+    fireEvent.change(screen.getByLabelText('初始密码'), { target: { value: 'carol password 123' } })
+    fireEvent.click(screen.getByLabelText('狐狸'))
+    fireEvent.click(screen.getByRole('button', { name: '创建账号' }))
+    expect(adminCreateUser).toHaveBeenCalledWith({
+      username: 'carol', password: 'carol password 123', displayName: 'Carol', avatarId: 'fox', role: 'member',
+    })
+    fireEvent.change(screen.getByLabelText('Provider ID'), { target: { value: 'company' } })
+    fireEvent.change(screen.getByLabelText('登录按钮名称'), { target: { value: '企业统一登录' } })
+    fireEvent.change(screen.getByLabelText('Issuer URL'), { target: { value: 'https://id.example.com' } })
+    fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: 'client-id' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存提供方' }))
+    expect(adminSaveProvider).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'company', label: '企业统一登录', issuer: 'https://id.example.com', clientId: 'client-id',
+    }))
     expect(screen.getByText('私聊内容')).toBeTruthy()
     fireEvent.change(screen.getByPlaceholderText('给 Bob 发消息'), { target: { value: '收到' } })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))

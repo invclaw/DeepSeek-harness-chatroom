@@ -117,18 +117,22 @@ function AdminPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): 
                   setUsername(''); setPassword(''); setDisplayName('')
                 }
               }}>
-                <input placeholder="账号名" value={username} onChange={event => { setUsername(event.target.value) }} />
-                <input placeholder="显示名称" value={displayName} onChange={event => { setDisplayName(event.target.value) }} />
-                <input placeholder="初始密码（至少 12 位）" type="password" value={password} onChange={event => { setPassword(event.target.value) }} />
-                <select value={role} onChange={event => { setRole(event.target.value as typeof role) }}>
+                <label>账号名<input placeholder="例如 alice" value={username} onChange={event => { setUsername(event.target.value) }} /></label>
+                <label>显示名称<input placeholder="成员看到的名称" value={displayName} onChange={event => { setDisplayName(event.target.value) }} /></label>
+                <label>初始密码<input placeholder="至少 12 位" type="password" value={password} onChange={event => { setPassword(event.target.value) }} /></label>
+                <label>角色<select value={role} onChange={event => { setRole(event.target.value as typeof role) }}>
                   <option value="member">成员</option><option value="admin">管理员</option><option value="super-admin">超级管理员</option>
-                </select>
-                <div className="dsh-chatroom-mini-avatars">{CHATROOM_AVATARS.map(avatar => <button
-                  key={avatar.id}
-                  type="button"
-                  data-selected={avatar.id === avatarId}
-                  onClick={() => { setAvatarId(avatar.id) }}
-                >{avatar.emoji}</button>)}</div>
+                </select></label>
+                <fieldset className="dsh-chatroom-settings-avatar-field"><legend>头像</legend>
+                  <div className="dsh-chatroom-mini-avatars">{CHATROOM_AVATARS.map(avatar => <button
+                    key={avatar.id}
+                    type="button"
+                    aria-label={avatar.label}
+                    aria-pressed={avatar.id === avatarId}
+                    data-selected={avatar.id === avatarId}
+                    onClick={() => { setAvatarId(avatar.id) }}
+                  >{avatar.emoji}</button>)}</div>
+                </fieldset>
                 <button type="submit" disabled={props.room.adminBusy || username === '' || displayName === '' || password === ''}>创建账号</button>
               </form>
             </section>
@@ -139,15 +143,17 @@ function AdminPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): 
                 return <div key={user.participantId} data-disabled={user.status === 'disabled'}>
                   <span data-avatar={avatar.id}>{avatar.emoji}</span>
                   <span><strong>{user.displayName}</strong><small>@{user.username}</small></span>
-                  <select
-                    aria-label={`${user.username} 的角色`}
-                    value={user.role}
-                    disabled={props.room.adminBusy}
-                    onChange={event => { void props.adminUpdateUser(user.participantId, { role: event.target.value as typeof user.role }) }}
-                  ><option value="member">成员</option><option value="admin">管理员</option><option value="super-admin">超级管理员</option></select>
-                  <button type="button" disabled={props.room.adminBusy} onClick={() => { void props.adminUpdateUser(user.participantId, { status: user.status === 'active' ? 'disabled' : 'active' }) }}>
-                    {user.status === 'active' ? '停用' : '启用'}
-                  </button>
+                  <span className="dsh-chatroom-user-actions">
+                    <select
+                      aria-label={`${user.username} 的角色`}
+                      value={user.role}
+                      disabled={props.room.adminBusy}
+                      onChange={event => { void props.adminUpdateUser(user.participantId, { role: event.target.value as typeof user.role }) }}
+                    ><option value="member">成员</option><option value="admin">管理员</option><option value="super-admin">超级管理员</option></select>
+                    <button type="button" disabled={props.room.adminBusy} onClick={() => { void props.adminUpdateUser(user.participantId, { status: user.status === 'active' ? 'disabled' : 'active' }) }}>
+                      {user.status === 'active' ? '停用' : '启用'}
+                    </button>
+                  </span>
                 </div>
               })}</div>
             </section>
@@ -168,26 +174,28 @@ function AdminPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): 
                 event.preventDefault()
                 if (await props.adminSaveProvider(provider)) setProvider(emptyProvider())
               }}>
-                <input placeholder="Provider ID，例如 company" value={provider.id} onChange={event => { setProvider({ ...provider, id: event.target.value }) }} />
-                <input placeholder="登录按钮名称" value={provider.label} onChange={event => { setProvider({ ...provider, label: event.target.value }) }} />
-                <input placeholder="Issuer URL" value={provider.issuer} onChange={event => { setProvider({ ...provider, issuer: event.target.value }) }} />
-                <input placeholder="Client ID" value={provider.clientId} onChange={event => { setProvider({ ...provider, clientId: event.target.value }) }} />
-                <input placeholder="Client Secret（编辑时可留空）" type="password" value={provider.clientSecret ?? ''} onChange={event => { setProvider({ ...provider, clientSecret: event.target.value }) }} />
-                <input placeholder="Scopes" value={provider.scopes} onChange={event => { setProvider({ ...provider, scopes: event.target.value }) }} />
-                <input placeholder="账号 Claim" value={provider.usernameClaim} onChange={event => { setProvider({ ...provider, usernameClaim: event.target.value }) }} />
-                <input placeholder="名称 Claim" value={provider.displayNameClaim} onChange={event => { setProvider({ ...provider, displayNameClaim: event.target.value }) }} />
+                <label>Provider ID<input placeholder="例如 company" value={provider.id} onChange={event => { setProvider({ ...provider, id: event.target.value }) }} /></label>
+                <label>登录按钮名称<input placeholder="例如 企业统一登录" value={provider.label} onChange={event => { setProvider({ ...provider, label: event.target.value }) }} /></label>
+                <label>Issuer URL<input placeholder="https://id.example.com" value={provider.issuer} onChange={event => { setProvider({ ...provider, issuer: event.target.value }) }} /></label>
+                <label>Client ID<input value={provider.clientId} onChange={event => { setProvider({ ...provider, clientId: event.target.value }) }} /></label>
+                <label>Client Secret<input placeholder="编辑时可留空" type="password" value={provider.clientSecret ?? ''} onChange={event => { setProvider({ ...provider, clientSecret: event.target.value }) }} /></label>
+                <label>Scopes<input value={provider.scopes} onChange={event => { setProvider({ ...provider, scopes: event.target.value }) }} /></label>
+                <label>账号 Claim<input value={provider.usernameClaim} onChange={event => { setProvider({ ...provider, usernameClaim: event.target.value }) }} /></label>
+                <label>名称 Claim<input value={provider.displayNameClaim} onChange={event => { setProvider({ ...provider, displayNameClaim: event.target.value }) }} /></label>
                 <label className="dsh-chatroom-toggle"><input type="checkbox" checked={provider.enabled} onChange={event => { setProvider({ ...provider, enabled: event.target.checked }) }} />启用</label>
                 <label className="dsh-chatroom-toggle"><input type="checkbox" checked={provider.autoCreateUsers} onChange={event => { setProvider({ ...provider, autoCreateUsers: event.target.checked }) }} />首次 SSO 登录自动创建账号</label>
                 <button type="submit" disabled={props.room.adminBusy}>保存提供方</button>
               </form>
               <div className="dsh-chatroom-provider-list">{overview.providers.map(item => <div key={item.id}>
                 <span><strong>{item.label}</strong><small>{item.id} · {item.enabled ? '已启用' : '已停用'} · {item.issuer}</small></span>
-                <button type="button" onClick={() => { setProvider({
-                  id: item.id, label: item.label, enabled: item.enabled, issuer: item.issuer, clientId: item.clientId,
-                  scopes: item.scopes, usernameClaim: item.usernameClaim, displayNameClaim: item.displayNameClaim,
-                  autoCreateUsers: item.autoCreateUsers,
-                }) }}>编辑</button>
-                <button type="button" onClick={() => { void props.adminDeleteProvider(item.id) }}>删除</button>
+                <span className="dsh-chatroom-provider-actions">
+                  <button type="button" onClick={() => { setProvider({
+                    id: item.id, label: item.label, enabled: item.enabled, issuer: item.issuer, clientId: item.clientId,
+                    scopes: item.scopes, usernameClaim: item.usernameClaim, displayNameClaim: item.displayNameClaim,
+                    autoCreateUsers: item.autoCreateUsers,
+                  }) }}>编辑</button>
+                  <button type="button" onClick={() => { void props.adminDeleteProvider(item.id) }}>删除</button>
+                </span>
               </div>)}</div>
             </section>
           </div>}
