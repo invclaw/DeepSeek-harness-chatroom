@@ -46,6 +46,7 @@ describe('ChatroomRuntime', () => {
     expect(runtime.rooms).toHaveLength(2)
     expect(harness.agents).toHaveLength(2)
     expect(harness.attached).toEqual(['chatroom-v1-lobby', room.sessionId])
+    expect(harness.agents[1]?.session.append).not.toHaveBeenCalled()
     await runtime.stop()
   })
 
@@ -75,6 +76,7 @@ describe('ChatroomRuntime', () => {
     expect(runtime.rooms).toHaveLength(2)
     expect(runtime.membersForRoom(first.id)).toHaveLength(2)
     expect(harness.agents).toHaveLength(2)
+    expect(harness.agents[1]?.session.append).not.toHaveBeenCalled()
     await runtime.stop()
   })
 

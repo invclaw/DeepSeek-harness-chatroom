@@ -1474,7 +1474,7 @@ var ChatroomRuntime = class {
     this.states.set(id, state);
     try {
       const binding = await this.ensureRoom(id);
-      this.ensureRoomVisible(binding, record.title);
+      this.ensureRoomTitle(binding, record.title);
       await this.touchMember(id, identity);
       return publicRoom(record);
     } catch (error) {
@@ -1541,7 +1541,7 @@ var ChatroomRuntime = class {
   async selectRoom(roomId, identity) {
     this.assertReady();
     const binding = await this.ensureRoom(roomId);
-    if (identity !== void 0) this.ensureRoomVisible(binding, this.requireState(roomId).record.title);
+    if (identity !== void 0) this.ensureRoomTitle(binding, this.requireState(roomId).record.title);
     if (identity !== void 0) await this.touchMember(roomId, identity);
     return this.requireRoom(roomId);
   }
@@ -1556,7 +1556,7 @@ var ChatroomRuntime = class {
     });
     state.record = record;
     const binding = await this.ensureRoom(roomId);
-    this.ensureRoomVisible(binding, record.title);
+    this.ensureRoomTitle(binding, record.title);
     this.broadcast(state, { type: "room-updated", room: publicRoom(record), members: this.roomMembers(state) });
     return publicRoom(record);
   }
@@ -2234,16 +2234,10 @@ var ChatroomRuntime = class {
       throw error;
     }
   }
-  ensureRoomVisible(binding, title) {
+  ensureRoomTitle(binding, title) {
     if (this.ctx.sessionTitle.get(binding.agent.session)?.title !== title) {
       this.ctx.sessionTitle.rename(binding.agent.session, title);
     }
-    if (binding.agent.session.events.some((event) => event.type === "turn/start")) return;
-    binding.agent.session.append("turn/start", { turn: 1 });
-    binding.agent.session.append("turn/end", {
-      turn: 1,
-      reason: { kind: "aborted", reason: { kind: "user" } }
-    });
   }
   async acquireAgent(sessionId, parentSessionId) {
     const id = SessionId(sessionId);

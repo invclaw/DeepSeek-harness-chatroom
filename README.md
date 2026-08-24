@@ -33,7 +33,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 1.1.0 makes native Harness Sessions shared by default, removes the floating launcher, moves account and SSO administration into native Settings, and turns Group management into a right drawer with invite links. An installed `dsh-auth` is the initial default login provider; `local=1` retains local-account recovery.
+Version 1.1.1 keeps the first AI run on Harness's native turn numbering instead of writing a synthetic setup turn. Version 1.1.0 makes native Harness Sessions shared by default, removes the floating launcher, moves account and SSO administration into native Settings, and turns Group management into a right drawer with invite links. An installed `dsh-auth` is the initial default login provider; `local=1` retains local-account recovery.
 
 ## Requirements
 
