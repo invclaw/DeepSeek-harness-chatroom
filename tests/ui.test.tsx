@@ -61,6 +61,7 @@ describe('native chatroom integration', () => {
 
   it('shows super-administrator account controls and isolated direct messages', () => {
     const adminUpdateUser = vi.fn(async () => true)
+    const adminSetAutoRedirectProvider = vi.fn(async () => true)
     const sendDirect = vi.fn(async () => true)
     const owner = {
       participantId: 'alice-id', username: 'alice', displayName: 'Alice', avatarId: 'whale' as const,
@@ -73,7 +74,9 @@ describe('native chatroom integration', () => {
       },
       adminOpen: true,
       adminOverview: {
-        users: [owner], providers: [], allowSelfRegistration: true,
+        users: [owner], providers: [],
+        loginProviders: [{ id: 'company', type: 'oidc', label: '企业统一登录' }],
+        autoRedirectProviderId: 'company', allowSelfRegistration: true,
         oidcCallbackBase: 'https://chat.example.com/plugins/deepseek-harness-chatroom/api/auth/oidc/',
       },
       directOpen: true,
@@ -89,9 +92,13 @@ describe('native chatroom integration', () => {
       directMessages: [{
         id: 'message-1', conversationId: 'direct-1', sequence: 1, senderId: 'bob-id', text: '私聊内容', createdAt: 2,
       }],
-    }), { adminUpdateUser, sendDirect })
+    }), { adminUpdateUser, adminSetAutoRedirectProvider, sendDirect })
     expect(screen.getByTestId('chatroom-admin')).toBeTruthy()
     expect(screen.getByText('@alice')).toBeTruthy()
+    const entry = screen.getByLabelText('未登录用户入口') as HTMLSelectElement
+    expect(entry.value).toBe('company')
+    fireEvent.change(entry, { target: { value: '' } })
+    expect(adminSetAutoRedirectProvider).toHaveBeenCalledWith(undefined)
     expect(screen.getByText('私聊内容')).toBeTruthy()
     fireEvent.change(screen.getByPlaceholderText('给 Bob 发消息'), { target: { value: '收到' } })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
@@ -369,6 +376,7 @@ function entry(
     adminCreateUser={vi.fn(async () => true)}
     adminUpdateUser={vi.fn(async () => true)}
     adminSetSelfRegistration={vi.fn(async () => true)}
+    adminSetAutoRedirectProvider={vi.fn(async () => true)}
     adminSaveProvider={vi.fn(async () => true)}
     adminDeleteProvider={vi.fn(async () => true)}
     openDirect={vi.fn(async () => undefined)}

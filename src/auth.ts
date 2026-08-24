@@ -114,9 +114,19 @@ export class ChatroomAuth {
 
   /** Seed dynamic settings and remove expired login sessions. */
   async start(now = Date.now()): Promise<void> {
-    if (this.settingsTable.get('auth') === undefined) {
+    const existingSettings = this.settingsTable.get('auth')
+    const loginProviders = this.providers()
+    const inferredProviderId = loginProviders.length === 1 ? loginProviders[0]!.id : undefined
+    if (existingSettings === undefined) {
       await this.settingsTable.put('auth', {
         allowSelfRegistration: this.config.authAllowSelfRegistration,
+        ...(inferredProviderId === undefined ? {} : { autoRedirectProviderId: inferredProviderId }),
+        updatedAt: now,
+      })
+    } else if (existingSettings.autoRedirectProviderId === undefined && inferredProviderId !== undefined) {
+      await this.settingsTable.put('auth', {
+        ...existingSettings,
+        autoRedirectProviderId: inferredProviderId,
         updatedAt: now,
       })
     }
@@ -139,11 +149,14 @@ export class ChatroomAuth {
   /** Browser-safe authentication state; unauthenticated callers receive no room metadata. */
   state(account?: ChatroomAccount): ChatroomAuthState {
     const enabled = this.config.authEnabled
+    const providers = enabled ? this.providers() : []
+    const autoRedirectProvider = providers.find(provider => provider.id === this.settings().autoRedirectProviderId)
     return {
       enabled,
       authenticated: !enabled || account !== undefined,
       ...(account === undefined ? {} : { account }),
-      providers: enabled ? this.providers() : [],
+      providers,
+      ...(autoRedirectProvider === undefined ? {} : { autoRedirectProvider }),
       allowSelfRegistration: this.settings().allowSelfRegistration,
       bootstrapRequired: enabled && this.accounts.size === 0,
     }
@@ -332,6 +345,7 @@ export class ChatroomAuth {
   /** Super-administrator account, policy, and OIDC configuration snapshot. */
   overview(actor: ChatroomAccount): ChatroomAdminOverview {
     this.assertSuperAdmin(actor)
+    const settings = this.settings()
     const users = [...this.accounts.entries()].map(([, account]) => publicAccount(account))
       .sort((left, right) => left.username.localeCompare(right.username, 'zh-CN'))
     const providers = [...this.providersTable.entries()].map(([, provider]) => adminProvider(provider))
@@ -339,7 +353,11 @@ export class ChatroomAuth {
     return {
       users,
       providers,
-      allowSelfRegistration: this.settings().allowSelfRegistration,
+      loginProviders: this.providers(),
+      ...(settings.autoRedirectProviderId == null
+        ? {}
+        : { autoRedirectProviderId: settings.autoRedirectProviderId }),
+      allowSelfRegistration: settings.allowSelfRegistration,
       oidcCallbackBase: this.config.authPublicOrigin === ''
         ? ''
         : `${this.config.authPublicOrigin}/plugins/deepseek-harness-chatroom/api/auth/oidc/`,
@@ -377,9 +395,26 @@ export class ChatroomAuth {
   }
 
   /** Enable or disable autonomous password registration. */
-  async updateSettings(actor: ChatroomAccount, allowSelfRegistration: boolean): Promise<void> {
+  async updateSettings(
+    actor: ChatroomAccount,
+    patch: { readonly allowSelfRegistration?: boolean; readonly autoRedirectProviderId?: string | null },
+  ): Promise<void> {
     this.assertSuperAdmin(actor)
-    await this.settingsTable.put('auth', { allowSelfRegistration, updatedAt: Date.now() })
+    const current = this.settings()
+    if (patch.autoRedirectProviderId !== undefined && patch.autoRedirectProviderId !== null
+      && !this.providers().some(provider => provider.id === patch.autoRedirectProviderId)) {
+      throw new ChatroomAuthError('自动跳转的认证提供方不存在或未启用。')
+    }
+    await this.settingsTable.put('auth', {
+      ...current,
+      ...(patch.allowSelfRegistration === undefined
+        ? {}
+        : { allowSelfRegistration: patch.allowSelfRegistration }),
+      ...(patch.autoRedirectProviderId === undefined
+        ? {}
+        : { autoRedirectProviderId: patch.autoRedirectProviderId }),
+      updatedAt: Date.now(),
+    })
   }
 
   /** Add or replace one encrypted generic OIDC provider. */
@@ -420,6 +455,12 @@ export class ChatroomAuth {
       updatedAt: now,
     }
     await this.providersTable.put(id, provider)
+    const settings = this.settings()
+    if (provider.enabled && settings.autoRedirectProviderId === undefined && this.providers().length === 1) {
+      await this.settingsTable.put('auth', { ...settings, autoRedirectProviderId: id, updatedAt: now })
+    } else if (!provider.enabled && settings.autoRedirectProviderId === id) {
+      await this.settingsTable.put('auth', { ...settings, autoRedirectProviderId: null, updatedAt: now })
+    }
     this.oidcConfigurations.delete(id)
     return adminProvider(provider)
   }
@@ -428,6 +469,10 @@ export class ChatroomAuth {
   async deleteProvider(actor: ChatroomAccount, providerId: string): Promise<void> {
     this.assertSuperAdmin(actor)
     await this.providersTable.delete(providerId)
+    const settings = this.settings()
+    if (settings.autoRedirectProviderId === providerId) {
+      await this.settingsTable.put('auth', { ...settings, autoRedirectProviderId: null, updatedAt: Date.now() })
+    }
     this.oidcConfigurations.delete(providerId)
   }
 

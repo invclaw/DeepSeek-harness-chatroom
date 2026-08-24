@@ -10,6 +10,7 @@ export interface ChatroomAccountPanelProps {
   adminCreateUser(input: { username: string; password: string; displayName: string; avatarId: string; role: 'super-admin' | 'admin' | 'member' }): Promise<boolean>
   adminUpdateUser(userId: string, patch: { role?: 'super-admin' | 'admin' | 'member'; status?: 'active' | 'disabled' }): Promise<boolean>
   adminSetSelfRegistration(value: boolean): Promise<boolean>
+  adminSetAutoRedirectProvider(providerId?: string): Promise<boolean>
   adminSaveProvider(input: { id: string; label: string; enabled: boolean; issuer: string; clientId: string; clientSecret?: string; scopes: string; usernameClaim: string; displayNameClaim: string; autoCreateUsers: boolean }): Promise<boolean>
   adminDeleteProvider(providerId: string): Promise<boolean>
   openDirect(peerId?: string): Promise<void>
@@ -131,6 +132,16 @@ function AdminPanel(props: ChatroomAccountPanelProps): JSX.Element {
             </section>
             <section className="dsh-chatroom-provider-section">
               <h3>企业 SSO / OIDC</h3>
+              <label className="dsh-chatroom-admin-field">未登录用户入口<select
+                aria-label="未登录用户入口"
+                value={overview.autoRedirectProviderId ?? ''}
+                disabled={props.room.adminBusy}
+                onChange={event => { void props.adminSetAutoRedirectProvider(event.target.value || undefined) }}
+              >
+                <option value="">显示登录与认证选择页</option>
+                {overview.loginProviders.map(item => <option key={item.id} value={item.id}>自动跳转到 {item.label}</option>)}
+              </select></label>
+              <p className="dsh-chatroom-callback">自动跳转启用后，可在访问地址增加 <code>local=1</code> 打开本地账号应急入口。</p>
               {overview.oidcCallbackBase !== '' && <p className="dsh-chatroom-callback">回调地址：<code>{overview.oidcCallbackBase}{provider.id || '{providerId}'}/callback</code></p>}
               <form className="dsh-chatroom-admin-form dsh-chatroom-provider-form" onSubmit={async (event) => {
                 event.preventDefault()

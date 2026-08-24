@@ -124,6 +124,8 @@ export interface AuthSessionRecord {
 
 export interface AuthSettingsRecord {
   readonly allowSelfRegistration: boolean
+  /** Undefined is a pre-setting state, null explicitly disables automatic external login. */
+  readonly autoRedirectProviderId?: string | null
   readonly updatedAt: number
 }
 
@@ -301,6 +303,7 @@ const authSessionSchema = z.object({
 
 const authSettingsSchema = z.object({
   allowSelfRegistration: z.boolean(),
+  autoRedirectProviderId: z.string().min(1).nullable().optional(),
   updatedAt: nonNegativeSafeInteger,
 }) as z.ZodType<AuthSettingsRecord>
 

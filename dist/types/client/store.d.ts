@@ -147,6 +147,8 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     }) => Promise<boolean>;
     /** Change whether new users may register themselves. */
     adminSetSelfRegistration: (allowSelfRegistration: boolean) => Promise<boolean>;
+    /** Select one external provider for immediate unauthenticated entry, or retain the local chooser. */
+    adminSetAutoRedirectProvider: (providerId?: string) => Promise<boolean>;
     /** Add or update one generic enterprise OIDC provider. */
     adminSaveProvider: (input: {
         id: string;

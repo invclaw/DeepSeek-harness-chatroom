@@ -162,6 +162,7 @@ export function apply(ctx: ClientContext): void {
       adminCreateUser: store.adminCreateUser,
       adminUpdateUser: store.adminUpdateUser,
       adminSetSelfRegistration: store.adminSetSelfRegistration,
+      adminSetAutoRedirectProvider: store.adminSetAutoRedirectProvider,
       adminSaveProvider: store.adminSaveProvider,
       adminDeleteProvider: store.adminDeleteProvider,
       openDirect: store.openDirect,

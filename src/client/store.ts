@@ -401,6 +401,10 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   adminSetSelfRegistration = async (allowSelfRegistration: boolean): Promise<boolean> =>
     this.adminMutation({ action: 'settings', allowSelfRegistration })
 
+  /** Select one external provider for immediate unauthenticated entry, or retain the local chooser. */
+  adminSetAutoRedirectProvider = async (providerId?: string): Promise<boolean> =>
+    this.adminMutation({ action: 'settings', autoRedirectProviderId: providerId ?? null })
+
   /** Add or update one generic enterprise OIDC provider. */
   adminSaveProvider = async (input: {
     id: string

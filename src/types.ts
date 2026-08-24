@@ -37,6 +37,8 @@ export interface ChatroomAuthState {
   readonly authenticated: boolean
   readonly account?: ChatroomAccount
   readonly providers: readonly ChatroomAuthProvider[]
+  /** Configured provider that bypasses the chooser for ordinary unauthenticated entry. */
+  readonly autoRedirectProvider?: ChatroomAuthProvider
   readonly allowSelfRegistration: boolean
   readonly bootstrapRequired: boolean
 }
@@ -57,6 +59,8 @@ export interface ChatroomAuthProviderAdmin extends ChatroomAuthProvider {
 export interface ChatroomAdminOverview {
   readonly users: readonly ChatroomAccount[]
   readonly providers: readonly ChatroomAuthProviderAdmin[]
+  readonly loginProviders: readonly ChatroomAuthProvider[]
+  readonly autoRedirectProviderId?: string
   readonly allowSelfRegistration: boolean
   readonly oidcCallbackBase: string
 }

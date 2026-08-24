@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
 import { ChatroomAuthError, ChatroomAuthRateLimitError } from './auth.js'
+import { automaticAuthRedirect } from './auth-redirect.js'
 import { renderAuthPage } from './auth-page.js'
 import type { Config } from './config.js'
 import { cookieValue, expiredSessionCookie, sessionCookie } from './cookies.js'
@@ -271,7 +272,17 @@ export class ChatroomHttpController {
         response.end()
         return
       }
-      html(response, 200, renderAuthPage(cookiePath, this.runtime.auth.state(), returnTo), request.method === 'HEAD')
+      const state = this.runtime.auth.state()
+      const automaticRedirect = automaticAuthRedirect(cookiePath, state, returnTo, url)
+      if (automaticRedirect !== undefined) {
+        response.writeHead(303, {
+          Location: automaticRedirect,
+          'Cache-Control': 'no-store',
+        })
+        response.end()
+        return
+      }
+      html(response, 200, renderAuthPage(cookiePath, state, returnTo), request.method === 'HEAD')
       return
     }
     if (endpoint === '/auth/providers' && request.method === 'GET') {
@@ -383,7 +394,17 @@ export class ChatroomHttpController {
       return
     }
     if (action === 'settings') {
-      await this.runtime.auth.updateSettings(actor, fieldBoolean(body, 'allowSelfRegistration'))
+      const allowSelfRegistration = body.allowSelfRegistration === undefined
+        ? undefined
+        : fieldBoolean(body, 'allowSelfRegistration')
+      const autoRedirectProviderId = nullableFieldString(body, 'autoRedirectProviderId')
+      if (allowSelfRegistration === undefined && autoRedirectProviderId === undefined) {
+        throw new ChatroomInputError('至少需要修改一项认证设置。')
+      }
+      await this.runtime.auth.updateSettings(actor, {
+        ...(allowSelfRegistration === undefined ? {} : { allowSelfRegistration }),
+        ...(autoRedirectProviderId === undefined ? {} : { autoRedirectProviderId }),
+      })
       json(response, 200, this.runtime.auth.overview(actor))
       return
     }
@@ -900,6 +921,13 @@ function optionalFieldString(body: Record<string, unknown>, field: string): stri
   const value = body[field]
   if (value === undefined) return undefined
   if (typeof value !== 'string') throw new ChatroomInputError(`字段 ${field} 必须是字符串。`)
+  return value
+}
+
+function nullableFieldString(body: Record<string, unknown>, field: string): string | null | undefined {
+  const value = body[field]
+  if (value === undefined || value === null) return value
+  if (typeof value !== 'string') throw new ChatroomInputError(`字段 ${field} 必须是字符串或 null。`)
   return value
 }
 

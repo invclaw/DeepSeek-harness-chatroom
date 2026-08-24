@@ -106,6 +106,8 @@ export interface AuthSessionRecord {
 }
 export interface AuthSettingsRecord {
     readonly allowSelfRegistration: boolean;
+    /** Undefined is a pre-setting state, null explicitly disables automatic external login. */
+    readonly autoRedirectProviderId?: string | null;
     readonly updatedAt: number;
 }
 export interface AuthProviderRecord {

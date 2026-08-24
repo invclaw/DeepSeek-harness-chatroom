@@ -30,7 +30,7 @@ describe('ChatroomAuth', () => {
       username: 'member', password: 'member password 123', displayName: 'Member',
     })
     expect(member.account.role).toBe('member')
-    await fixture.auth.updateSettings(owner.account, false)
+    await fixture.auth.updateSettings(owner.account, { allowSelfRegistration: false })
     await expect(fixture.auth.register({
       username: 'third-user', password: 'third password 123', displayName: 'Third',
     })).rejects.toThrow('关闭自主注册')
@@ -71,6 +71,15 @@ describe('ChatroomAuth', () => {
       usernameClaim: 'preferred_username', displayNameClaim: 'name', autoCreateUsers: true,
     })
     expect(provider).toMatchObject({ id: 'company', hasClientSecret: true })
+    expect(fixture.auth.state().autoRedirectProvider).toMatchObject({ id: 'company' })
+    expect(fixture.auth.overview(adopted!.account)).toMatchObject({
+      autoRedirectProviderId: 'company',
+      loginProviders: [{ id: 'company', type: 'oidc', label: '企业统一登录' }],
+    })
+    await fixture.auth.updateSettings(adopted!.account, { autoRedirectProviderId: null })
+    expect(fixture.auth.state().autoRedirectProvider).toBeUndefined()
+    await fixture.auth.updateSettings(adopted!.account, { autoRedirectProviderId: 'company' })
+    expect(fixture.auth.state().autoRedirectProvider).toMatchObject({ id: 'company' })
     const durable = fixture.providers.get('company')
     expect(durable?.encryptedClientSecret).not.toContain('private-client-secret')
     expect(JSON.stringify(fixture.auth.overview(adopted!.account))).not.toContain('private-client-secret')
@@ -81,6 +90,7 @@ describe('ChatroomAuth', () => {
       enabled: true,
       authenticated: false,
       providers: [{ id: 'company', type: 'oidc', label: '企业统一登录' }],
+      autoRedirectProvider: { id: 'company', type: 'oidc', label: '企业统一登录' },
       allowSelfRegistration: true,
       bootstrapRequired: true,
     }, '/workspace?tab=chat')

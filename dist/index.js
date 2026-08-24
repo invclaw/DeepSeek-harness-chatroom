@@ -146,9 +146,19 @@ var ChatroomAuth = class {
   encryptionKey;
   /** Seed dynamic settings and remove expired login sessions. */
   async start(now = Date.now()) {
-    if (this.settingsTable.get("auth") === void 0) {
+    const existingSettings = this.settingsTable.get("auth");
+    const loginProviders = this.providers();
+    const inferredProviderId = loginProviders.length === 1 ? loginProviders[0].id : void 0;
+    if (existingSettings === void 0) {
       await this.settingsTable.put("auth", {
         allowSelfRegistration: this.config.authAllowSelfRegistration,
+        ...inferredProviderId === void 0 ? {} : { autoRedirectProviderId: inferredProviderId },
+        updatedAt: now
+      });
+    } else if (existingSettings.autoRedirectProviderId === void 0 && inferredProviderId !== void 0) {
+      await this.settingsTable.put("auth", {
+        ...existingSettings,
+        autoRedirectProviderId: inferredProviderId,
         updatedAt: now
       });
     }
@@ -169,11 +179,14 @@ var ChatroomAuth = class {
   /** Browser-safe authentication state; unauthenticated callers receive no room metadata. */
   state(account) {
     const enabled = this.config.authEnabled;
+    const providers = enabled ? this.providers() : [];
+    const autoRedirectProvider = providers.find((provider) => provider.id === this.settings().autoRedirectProviderId);
     return {
       enabled,
       authenticated: !enabled || account !== void 0,
       ...account === void 0 ? {} : { account },
-      providers: enabled ? this.providers() : [],
+      providers,
+      ...autoRedirectProvider === void 0 ? {} : { autoRedirectProvider },
       allowSelfRegistration: this.settings().allowSelfRegistration,
       bootstrapRequired: enabled && this.accounts.size === 0
     };
@@ -337,12 +350,15 @@ var ChatroomAuth = class {
   /** Super-administrator account, policy, and OIDC configuration snapshot. */
   overview(actor) {
     this.assertSuperAdmin(actor);
+    const settings = this.settings();
     const users = [...this.accounts.entries()].map(([, account]) => publicAccount(account)).sort((left, right) => left.username.localeCompare(right.username, "zh-CN"));
     const providers = [...this.providersTable.entries()].map(([, provider]) => adminProvider(provider)).sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
     return {
       users,
       providers,
-      allowSelfRegistration: this.settings().allowSelfRegistration,
+      loginProviders: this.providers(),
+      ...settings.autoRedirectProviderId == null ? {} : { autoRedirectProviderId: settings.autoRedirectProviderId },
+      allowSelfRegistration: settings.allowSelfRegistration,
       oidcCallbackBase: this.config.authPublicOrigin === "" ? "" : `${this.config.authPublicOrigin}/plugins/deepseek-harness-chatroom/api/auth/oidc/`
     };
   }
@@ -369,9 +385,18 @@ var ChatroomAuth = class {
     });
   }
   /** Enable or disable autonomous password registration. */
-  async updateSettings(actor, allowSelfRegistration) {
+  async updateSettings(actor, patch) {
     this.assertSuperAdmin(actor);
-    await this.settingsTable.put("auth", { allowSelfRegistration, updatedAt: Date.now() });
+    const current = this.settings();
+    if (patch.autoRedirectProviderId !== void 0 && patch.autoRedirectProviderId !== null && !this.providers().some((provider) => provider.id === patch.autoRedirectProviderId)) {
+      throw new ChatroomAuthError("\u81EA\u52A8\u8DF3\u8F6C\u7684\u8BA4\u8BC1\u63D0\u4F9B\u65B9\u4E0D\u5B58\u5728\u6216\u672A\u542F\u7528\u3002");
+    }
+    await this.settingsTable.put("auth", {
+      ...current,
+      ...patch.allowSelfRegistration === void 0 ? {} : { allowSelfRegistration: patch.allowSelfRegistration },
+      ...patch.autoRedirectProviderId === void 0 ? {} : { autoRedirectProviderId: patch.autoRedirectProviderId },
+      updatedAt: Date.now()
+    });
   }
   /** Add or replace one encrypted generic OIDC provider. */
   async saveProvider(actor, input) {
@@ -409,6 +434,12 @@ var ChatroomAuth = class {
       updatedAt: now
     };
     await this.providersTable.put(id, provider);
+    const settings = this.settings();
+    if (provider.enabled && settings.autoRedirectProviderId === void 0 && this.providers().length === 1) {
+      await this.settingsTable.put("auth", { ...settings, autoRedirectProviderId: id, updatedAt: now });
+    } else if (!provider.enabled && settings.autoRedirectProviderId === id) {
+      await this.settingsTable.put("auth", { ...settings, autoRedirectProviderId: null, updatedAt: now });
+    }
     this.oidcConfigurations.delete(id);
     return adminProvider(provider);
   }
@@ -416,6 +447,10 @@ var ChatroomAuth = class {
   async deleteProvider(actor, providerId) {
     this.assertSuperAdmin(actor);
     await this.providersTable.delete(providerId);
+    const settings = this.settings();
+    if (settings.autoRedirectProviderId === providerId) {
+      await this.settingsTable.put("auth", { ...settings, autoRedirectProviderId: null, updatedAt: Date.now() });
+    }
     this.oidcConfigurations.delete(providerId);
   }
   /** Active public accounts for user search and private messaging. */
@@ -771,6 +806,20 @@ function claimText(claims, name2) {
   return typeof value === "string" && value !== "" ? value : void 0;
 }
 
+// src/auth-redirect.ts
+function authProviderStartLocation(prefix, provider, returnTo) {
+  const route = provider.type === "oidc" ? `${prefix}/auth/oidc/${encodeURIComponent(provider.id)}/start` : `${prefix}/auth/dsh-auth/start`;
+  return `${route}?returnTo=${encodeURIComponent(returnTo)}`;
+}
+function automaticAuthRedirect(prefix, state, returnTo, requestUrl) {
+  if (state.bootstrapRequired || state.autoRedirectProvider === void 0 || localLoginRequested(requestUrl, returnTo)) return void 0;
+  return authProviderStartLocation(prefix, state.autoRedirectProvider, returnTo);
+}
+function localLoginRequested(requestUrl, returnTo) {
+  if (requestUrl.searchParams.get("local") === "1") return true;
+  return new URL(returnTo, "http://chatroom.local").searchParams.get("local") === "1";
+}
+
 // src/auth-page.ts
 function renderAuthPage(prefix, state, returnTo) {
   const registration = state.bootstrapRequired || state.allowSelfRegistration;
@@ -1007,6 +1056,7 @@ var authSessionSchema = z2.object({
 });
 var authSettingsSchema = z2.object({
   allowSelfRegistration: z2.boolean(),
+  autoRedirectProviderId: z2.string().min(1).nullable().optional(),
   updatedAt: nonNegativeSafeInteger
 });
 var authProviderSchema = z2.object({
@@ -2900,7 +2950,17 @@ var ChatroomHttpController = class {
         response.end();
         return;
       }
-      html(response, 200, renderAuthPage(cookiePath, this.runtime.auth.state(), returnTo), request.method === "HEAD");
+      const state = this.runtime.auth.state();
+      const automaticRedirect = automaticAuthRedirect(cookiePath, state, returnTo, url);
+      if (automaticRedirect !== void 0) {
+        response.writeHead(303, {
+          Location: automaticRedirect,
+          "Cache-Control": "no-store"
+        });
+        response.end();
+        return;
+      }
+      html(response, 200, renderAuthPage(cookiePath, state, returnTo), request.method === "HEAD");
       return;
     }
     if (endpoint === "/auth/providers" && request.method === "GET") {
@@ -3009,7 +3069,15 @@ var ChatroomHttpController = class {
       return;
     }
     if (action === "settings") {
-      await this.runtime.auth.updateSettings(actor, fieldBoolean(body, "allowSelfRegistration"));
+      const allowSelfRegistration = body.allowSelfRegistration === void 0 ? void 0 : fieldBoolean(body, "allowSelfRegistration");
+      const autoRedirectProviderId = nullableFieldString(body, "autoRedirectProviderId");
+      if (allowSelfRegistration === void 0 && autoRedirectProviderId === void 0) {
+        throw new ChatroomInputError("\u81F3\u5C11\u9700\u8981\u4FEE\u6539\u4E00\u9879\u8BA4\u8BC1\u8BBE\u7F6E\u3002");
+      }
+      await this.runtime.auth.updateSettings(actor, {
+        ...allowSelfRegistration === void 0 ? {} : { allowSelfRegistration },
+        ...autoRedirectProviderId === void 0 ? {} : { autoRedirectProviderId }
+      });
       json(response, 200, this.runtime.auth.overview(actor));
       return;
     }
@@ -3476,6 +3544,12 @@ function optionalFieldString(body, field) {
   const value = body[field];
   if (value === void 0) return void 0;
   if (typeof value !== "string") throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
+  return value;
+}
+function nullableFieldString(body, field) {
+  const value = body[field];
+  if (value === void 0 || value === null) return value;
+  if (typeof value !== "string") throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u6216 null\u3002`);
   return value;
 }
 function fieldBoolean(body, field) {

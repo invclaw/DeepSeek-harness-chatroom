@@ -33,7 +33,7 @@ An out-of-tree [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 - Asynchronous initialization: model, storage, or Session failures leave only the room offline and never block Harness Web startup
 - No changes to the DeepSeek Harness repository
 
-Version 1.0.0 adds the account/authentication platform, the super-administrator console, generic OIDC and `dsh-auth` adapters, whole-site edge verification, password rotation, and private conversations. Version 0.9.10 renders chatroom mentions as literal `@name` text in native user bubbles instead of Harness reference icons, while retaining the native candidate menu and model-visible text.
+Version 1.0.1 adds default SSO redirection: the first enabled external provider becomes the unauthenticated entry, super administrators can select another provider or restore the chooser, and `local=1` always retains local-account recovery. Version 1.0.0 adds the account/authentication platform, the super-administrator console, generic OIDC and `dsh-auth` adapters, whole-site edge verification, password rotation, and private conversations.
 
 ## Requirements
 
@@ -127,7 +127,7 @@ Override it in the Web profile's `cordis.patch.yml` when needed:
 
 ### Enterprise OIDC and dsh-auth
 
-Add OIDC providers from **System administration**. The displayed callback URL must be registered exactly at the identity provider. Discovery and the authorization-code exchange use OIDC discovery, PKCE, state, and nonce; the client secret is stored with AES-256-GCM under `authSecret` and is never projected back to the UI.
+Add OIDC providers from **System administration**. The displayed callback URL must be registered exactly at the identity provider. Discovery and the authorization-code exchange use OIDC discovery, PKCE, state, and nonce; the client secret is stored with AES-256-GCM under `authSecret` and is never projected back to the UI. The first enabled external provider automatically becomes the unauthenticated entry; **Unauthenticated entry** can select a different provider or restore the login chooser. Add `local=1` to the original application URL to reach the local-account recovery form, and bootstrap always remains on the local registration page.
 
 To reuse [`dsh-auth`](https://github.com/hxy91819/dsh-auth) as an identity provider while retaining local multi-user accounts, keep its `/auth/*` routes reachable on the same public origin and set `DSH_CHATROOM_DSH_AUTH_VERIFY_URL` to its loopback `/auth/verify` URL (for a plugin on the same Harness listener this is typically `http://127.0.0.1:3080/auth/verify`). The chatroom forwards the browser's dsh-auth cookie only to that loopback verifier and imports its verified administrator as a local super administrator. `DSH_CHATROOM_DSH_AUTH_HEADERS=enabled` instead trusts proxy-injected `X-Dsh-Auth-*` headers and is intended for an existing dsh-auth-managed edge; that mode requires the edge to delete inbound client copies of those headers. An outer dsh-auth edge admits only its single administrator, so use the verifier adapter—not the outer single-user gate—when local member accounts must also sign in.
 

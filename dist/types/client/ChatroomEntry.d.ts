@@ -52,6 +52,7 @@ interface ChatroomEntryInjected {
         status?: 'active' | 'disabled';
     }): Promise<boolean>;
     adminSetSelfRegistration(value: boolean): Promise<boolean>;
+    adminSetAutoRedirectProvider(providerId?: string): Promise<boolean>;
     adminSaveProvider(input: {
         id: string;
         label: string;

@@ -34,7 +34,7 @@
 - 房间异步初始化：模型、存储或 Session 初始化失败只会让聊天室离线，不会阻碍 Harness Web 启动
 - 不修改 DeepSeek Harness 主仓库
 
-1.0.0 新增账号与认证平台、超级管理员后台、通用 OIDC 与 `dsh-auth` 适配、整站网关校验、密码修改和账号私聊。0.9.10 在原生真人消息气泡中将聊天室提及显示为字面量 `@名字`，不再显示为 Harness 引用图标，同时保留原生候选菜单和模型可见文本。
+1.0.1 新增默认 SSO 自动跳转：首个启用的外部认证会成为未登录用户的默认入口，超级管理员可以在系统管理中切换默认提供方或恢复登录选择页，`local=1` 始终保留本地账号应急入口。1.0.0 新增账号与认证平台、超级管理员后台、通用 OIDC 与 `dsh-auth` 适配、整站网关校验、密码修改和账号私聊。
 
 ## 环境要求
 
@@ -128,7 +128,7 @@ pnpm dsh --profile web
 
 ### 企业 OIDC 与 dsh-auth
 
-OIDC 提供方在“系统管理”中添加，界面显示的回调地址必须原样登记到企业身份平台。发现与授权码交换使用 OIDC discovery、PKCE、state 和 nonce；Client Secret 使用 `authSecret` 派生的 AES-256-GCM 密钥加密，不会回显到管理界面。
+OIDC 提供方在“系统管理”中添加，界面显示的回调地址必须原样登记到企业身份平台。发现与授权码交换使用 OIDC discovery、PKCE、state 和 nonce；Client Secret 使用 `authSecret` 派生的 AES-256-GCM 密钥加密，不会回显到管理界面。首个启用的外部认证会自动成为默认入口，未登录用户访问 Harness 时直接进入对应 SSO；系统管理中的“未登录用户入口”可以改选其他提供方或恢复登录选择页。需要排查 SSO 或使用本地超级管理员时，在原访问地址查询参数中加入 `local=1`，初始化首位超级管理员时也始终停留在本地注册页。
 
 要在保留本地多用户账号的同时复用 [`dsh-auth`](https://github.com/hxy91819/dsh-auth)，需让它的 `/auth/*` 路由继续在同一公网 Origin 可访问，并将 `DSH_CHATROOM_DSH_AUTH_VERIFY_URL` 指向它的回环 `/auth/verify`（如果插件运行在同一个 Harness listener，通常为 `http://127.0.0.1:3080/auth/verify`）。聊天室只把浏览器中的 dsh-auth Cookie 转发给该回环校验接口，并把验证成功的管理员导入为本地超级管理员。`DSH_CHATROOM_DSH_AUTH_HEADERS=enabled` 则直接信任代理注入的 `X-Dsh-Auth-*`，适用于已有 dsh-auth 托管网关的部署，网关必须先删除客户端伪造的同名 Header。dsh-auth 外层网关本身只允许它的单一管理员通过；若还要允许本地成员账号登录，应使用“回环校验适配”，而不是把单用户 dsh-auth 放在最外层。
 

@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { CHATROOM_AVATARS, chatroomAvatar, type ChatroomAvatarId } from '../avatars.js'
+import { authProviderStartLocation } from '../auth-redirect.js'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
-import type { ChatroomForwardItem, ChatroomReplyReference } from '../types.js'
+import type { ChatroomAuthState, ChatroomForwardItem, ChatroomReplyReference } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
 import { ChatroomPanels } from './ChatroomPanels.js'
@@ -42,6 +43,7 @@ interface ChatroomEntryInjected {
   adminCreateUser(input: { username: string; password: string; displayName: string; avatarId: string; role: 'super-admin' | 'admin' | 'member' }): Promise<boolean>
   adminUpdateUser(userId: string, patch: { role?: 'super-admin' | 'admin' | 'member'; status?: 'active' | 'disabled' }): Promise<boolean>
   adminSetSelfRegistration(value: boolean): Promise<boolean>
+  adminSetAutoRedirectProvider(providerId?: string): Promise<boolean>
   adminSaveProvider(input: { id: string; label: string; enabled: boolean; issuer: string; clientId: string; clientSecret?: string; scopes: string; usernameClaim: string; displayNameClaim: string; autoCreateUsers: boolean }): Promise<boolean>
   adminDeleteProvider(providerId: string): Promise<boolean>
   openDirect(peerId?: string): Promise<void>
@@ -120,6 +122,17 @@ function AuthStep({
   const [bootstrapToken, setBootstrapToken] = useState('')
   const [avatarId, setAvatarId] = useState<ChatroomAvatarId>(CHATROOM_AVATARS[0].id)
   const returnTo = typeof location === 'undefined' ? '/' : `${location.pathname}${location.search}`
+  const autoProvider = room.auth.bootstrapRequired ? undefined : room.auth.autoRedirectProvider
+  const localLogin = typeof location !== 'undefined' && new URLSearchParams(location.search).get('local') === '1'
+  useEffect(() => {
+    if (autoProvider === undefined || localLogin || typeof location === 'undefined') return
+    location.assign(providerLoginUrl(autoProvider, returnTo))
+  }, [autoProvider, localLogin, returnTo])
+  if (autoProvider !== undefined && !localLogin) {
+    return <section className="dsh-chatroom-card dsh-chatroom-auth-card" role="status">
+      <h2>正在前往 {autoProvider.label}</h2><p>正在打开企业统一登录…</p>
+    </section>
+  }
   return (
     <section className="dsh-chatroom-card dsh-chatroom-auth-card" aria-label="系统登录">
       <div className="dsh-chatroom-auth-brand"><strong>DeepSeek Harness</strong><span>团队协作平台</span></div>
@@ -168,12 +181,16 @@ function AuthStep({
         <span>或使用企业账号</span>
         {room.auth.providers.map(provider => <a
           key={provider.id}
-          href={`${CHATROOM_API_PREFIX}/auth/${provider.type === 'oidc' ? `oidc/${encodeURIComponent(provider.id)}` : 'dsh-auth'}/start?returnTo=${encodeURIComponent(returnTo)}`}
+          href={providerLoginUrl(provider, returnTo)}
         >使用 {provider.label} 登录</a>)}
       </div>}
       {room.error !== undefined && <div className="dsh-chatroom-error" role="alert">{room.error}</div>}
     </section>
   )
+}
+
+function providerLoginUrl(provider: ChatroomAuthState['providers'][number], returnTo: string): string {
+  return authProviderStartLocation(CHATROOM_API_PREFIX, provider, returnTo)
 }
 
 function IdentityStep({

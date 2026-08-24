@@ -873,6 +873,8 @@ export const CHATROOM_STYLES = `
 .dsh-chatroom-user-table select { min-width: 0; border: 1px solid var(--border-primary, #d8dee9); border-radius: 8px; background: var(--bg-primary, #fff); padding: 7px; }
 .dsh-chatroom-user-table button, .dsh-chatroom-provider-list button { background: var(--bg-secondary, #f3f4f6); color: var(--text-primary, #111827); }
 .dsh-chatroom-provider-section { grid-column: 1 / -1; }
+.dsh-chatroom-admin-field { display: grid; gap: 7px; max-width: 520px; color: var(--text-secondary, #6b7280); font-size: 13px; }
+.dsh-chatroom-admin-field select { border: 1px solid var(--border-primary, #d8dee9); border-radius: 9px; background: var(--bg-primary, #fff); padding: 9px 11px; color: var(--text-primary, #111827); font: inherit; }
 .dsh-chatroom-provider-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .dsh-chatroom-provider-form > button { grid-column: 1 / -1; }
 .dsh-chatroom-callback { overflow-wrap: anywhere; color: var(--text-secondary, #6b7280); font-size: 12px; }
