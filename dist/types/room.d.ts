@@ -156,5 +156,6 @@ export declare class ChatroomRuntime {
     private requireDirectMessages;
     private requireThreadState;
     private assertRoomManager;
+    private assertRoomInviter;
 }
 //# sourceMappingURL=room.d.ts.map

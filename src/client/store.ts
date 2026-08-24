@@ -498,7 +498,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     })
     const viewerRole = this.snapshot.members.find(member =>
       member.participantId === this.snapshot.identity?.participantId)?.role
-    if (viewerRole === 'owner' || viewerRole === 'admin') void this.loadMemberCandidates()
+    if (viewerRole === 'owner' || viewerRole === 'admin' || this.snapshot.auth.account?.role === 'super-admin') {
+      void this.loadMemberCandidates()
+    }
   }
 
   /** Close group management without changing the active room. */

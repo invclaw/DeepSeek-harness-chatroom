@@ -132,6 +132,7 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
   const viewerRole = props.room.members.find(member =>
     member.participantId === props.room.identity?.participantId)?.role ?? 'member'
   const canManage = viewerRole === 'owner' || viewerRole === 'admin'
+  const canInvite = canManage || props.room.auth.account?.role === 'super-admin'
   const normalizedSearch = search.trim().toLocaleLowerCase('zh-CN')
   const candidates = props.room.memberCandidates.filter(candidate => normalizedSearch === ''
     || candidate.displayName.toLocaleLowerCase('zh-CN').includes(normalizedSearch)
@@ -145,7 +146,7 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
         <button className="dsh-chatroom-close" aria-label="关闭群管理" type="button" onClick={props.closeMembers}>×</button>
         <h2>群管理</h2>
         <p>{props.room.room?.title} · {props.room.members.length} 位成员 · {props.room.online} 人在线</p>
-        {canManage && <section className="dsh-chatroom-invite" aria-label="添加群成员">
+        {canInvite && <section className="dsh-chatroom-invite" aria-label="添加群成员">
           <div className="dsh-chatroom-invite-heading">
             <div><strong>添加成员</strong><small>从系统中尚未加入本群的启用账号里选择。</small></div>
             <span>{selected.length} 位已选</span>

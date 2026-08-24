@@ -1311,7 +1311,7 @@ var ChatroomRuntime = class {
   /** Active platform accounts that a room manager may add to one room. */
   roomInviteCandidates(roomId, identity) {
     const state = this.requireState(roomId);
-    this.assertRoomManager(state.record, identity.participantId);
+    this.assertRoomInviter(state.record, identity);
     const members = new Set(this.roomMembers(state).map((member) => member.participantId));
     return this.auth.activeAccounts().filter((account) => !members.has(account.participantId)).map((account) => ({
       participantId: account.participantId,
@@ -1598,7 +1598,7 @@ var ChatroomRuntime = class {
   async addRoomMembers(roomId, participantIds, identity) {
     this.assertReady();
     const state = this.requireState(roomId);
-    this.assertRoomManager(state.record, identity.participantId);
+    this.assertRoomInviter(state.record, identity);
     const requested = [...new Set(participantIds)];
     if (requested.length === 0) throw new ChatroomInputError("\u8BF7\u81F3\u5C11\u9009\u62E9\u4E00\u4F4D\u7528\u6237\u3002");
     if (requested.length > 100) throw new ChatroomInputError("\u4E00\u6B21\u6700\u591A\u6DFB\u52A0 100 \u4F4D\u7528\u6237\u3002");
@@ -2499,6 +2499,10 @@ var ChatroomRuntime = class {
     if (record.ownerParticipantId !== participantId && !(record.adminParticipantIds ?? []).includes(participantId)) {
       throw new ChatroomInputError("\u5F53\u524D\u8EAB\u4EFD\u6CA1\u6709\u7FA4\u7BA1\u7406\u6743\u9650\u3002");
     }
+  }
+  assertRoomInviter(record, identity) {
+    if ("role" in identity && identity.role === "super-admin") return;
+    this.assertRoomManager(record, identity.participantId);
   }
 };
 function newRoomState(record) {

@@ -137,6 +137,13 @@ describe('ChatroomRuntime', () => {
     ]))
     expect(runtime.roomInviteCandidates(room.id, alice).map(candidate => candidate.username)).toEqual(['charlie'])
     await expect(runtime.addRoomMembers(room.id, [charlie.participantId], charlie)).rejects.toThrow('没有群管理权限')
+
+    const bobRoom = await runtime.createRoom('Bob 的群', bob)
+    await runtime.addRoomMembers(bobRoom.id, [charlie.participantId], alice)
+    expect(runtime.membersForRoom(bobRoom.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ participantId: bob.participantId, role: 'owner' }),
+      expect.objectContaining({ participantId: charlie.participantId, role: 'member' }),
+    ]))
     await runtime.stop()
   })
 

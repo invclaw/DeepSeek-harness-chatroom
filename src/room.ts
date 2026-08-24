@@ -160,7 +160,7 @@ export class ChatroomRuntime {
   /** Active platform accounts that a room manager may add to one room. */
   roomInviteCandidates(roomId: string, identity: ChatroomIdentity): readonly ChatroomRoomInviteCandidate[] {
     const state = this.requireState(roomId)
-    this.assertRoomManager(state.record, identity.participantId)
+    this.assertRoomInviter(state.record, identity)
     const members = new Set(this.roomMembers(state).map(member => member.participantId))
     return this.auth.activeAccounts()
       .filter(account => !members.has(account.participantId))
@@ -487,7 +487,7 @@ export class ChatroomRuntime {
   ): Promise<readonly ChatroomMember[]> {
     this.assertReady()
     const state = this.requireState(roomId)
-    this.assertRoomManager(state.record, identity.participantId)
+    this.assertRoomInviter(state.record, identity)
     const requested = [...new Set(participantIds)]
     if (requested.length === 0) throw new ChatroomInputError('请至少选择一位用户。')
     if (requested.length > 100) throw new ChatroomInputError('一次最多添加 100 位用户。')
@@ -1567,6 +1567,11 @@ export class ChatroomRuntime {
     if (record.ownerParticipantId !== participantId && !(record.adminParticipantIds ?? []).includes(participantId)) {
       throw new ChatroomInputError('当前身份没有群管理权限。')
     }
+  }
+
+  private assertRoomInviter(record: RoomRecord, identity: ChatroomIdentity): void {
+    if ('role' in identity && identity.role === 'super-admin') return
+    this.assertRoomManager(record, identity.participantId)
   }
 }
 
