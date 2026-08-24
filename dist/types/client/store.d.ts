@@ -39,6 +39,7 @@ export interface ChatroomView {
     readonly connection: ChatroomConnection;
     readonly rooms: readonly ChatroomInfo[];
     readonly room: ChatroomInfo | undefined;
+    readonly roomEnsureSessionId: string | undefined;
     readonly identity: ChatroomIdentity | undefined;
     readonly auth: ChatroomAuthState;
     readonly online: number;

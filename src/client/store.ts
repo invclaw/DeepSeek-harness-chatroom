@@ -75,6 +75,7 @@ export interface ChatroomView {
   readonly connection: ChatroomConnection
   readonly rooms: readonly ChatroomInfo[]
   readonly room: ChatroomInfo | undefined
+  readonly roomEnsureSessionId: string | undefined
   readonly identity: ChatroomIdentity | undefined
   readonly auth: ChatroomAuthState
   readonly online: number
@@ -129,6 +130,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     connection: 'offline',
     rooms: [],
     room: undefined,
+    roomEnsureSessionId: undefined,
     identity: undefined,
     auth: {
       enabled: false,
@@ -320,6 +322,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         open: true,
         rooms: [],
         room: undefined,
+        roomEnsureSessionId: undefined,
         identity: undefined,
         auth: {
           enabled: auth.enabled,
@@ -596,6 +599,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       this.updateActiveDocumentRoom(false)
       this.set({
         room: undefined,
+        roomEnsureSessionId: this.roomEnsure?.sessionId === sessionId ? sessionId : undefined,
         connection: 'offline',
         online: 0,
         members: [],
@@ -621,6 +625,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     if (this.snapshot.room?.id === room.id && this.eventSource !== undefined) return
     this.set({
       room,
+      roomEnsureSessionId: undefined,
       connection: 'connecting',
       online: 0,
       members: [],
@@ -1014,6 +1019,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       || this.roomForSession(active.id) !== undefined) return
     if (this.roomEnsure?.sessionId === active.id) return await this.roomEnsure.promise
     const promise = (async () => {
+      this.set({ roomEnsureSessionId: active.id, error: undefined })
       try {
         const response = await requestJson<ChatroomRoomResponse>(`${CHATROOM_API_PREFIX}/rooms/ensure`, {
           method: 'POST',
@@ -1026,7 +1032,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         this.set({ rooms, error: undefined })
         if (this.activeNativeSession?.id === active.id) this.activateSession(active.id, active.title, active.shareable)
       } catch (error) {
-        if (this.activeNativeSession?.id === active.id) this.set({ error: errorMessage(error) })
+        if (this.activeNativeSession?.id === active.id) {
+          this.set({ roomEnsureSessionId: undefined, error: errorMessage(error) })
+        }
       }
     })()
     this.roomEnsure = { sessionId: active.id, promise }
@@ -1087,6 +1095,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           connection: 'offline',
           rooms: [],
           room: undefined,
+          roomEnsureSessionId: undefined,
           identity: undefined,
           auth,
           online: 0,
@@ -1102,6 +1111,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           connection: 'offline',
           rooms: session.rooms,
           room: undefined,
+          roomEnsureSessionId: undefined,
           identity: undefined,
           auth,
           online: 0,

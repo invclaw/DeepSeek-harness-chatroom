@@ -158,6 +158,47 @@ describe('ChatroomClientStore', () => {
     })
   })
 
+  it('keeps the creation indicator through repeated Host list notifications', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const adopted = { id: 'session-native', title: '新会话', aiDisplayName: 'DeepSeek', sessionId: 'native-session' }
+    let resolveEnsure: ((response: Response) => void) | undefined
+    const ensure = new Promise<Response>((resolve) => { resolveEnsure = resolve })
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [])))
+      .mockReturnValueOnce(ensure))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+
+    store.activateSession('native-session', '新会话')
+    expect(store.getSnapshot().roomEnsureSessionId).toBe('native-session')
+    store.activateSession('native-session', '新会话')
+    expect(store.getSnapshot().roomEnsureSessionId).toBe('native-session')
+
+    resolveEnsure?.(jsonResponse({ room: adopted }))
+    await vi.waitFor(() => { expect(store.getSnapshot().room).toEqual(adopted) })
+    expect(store.getSnapshot().roomEnsureSessionId).toBeUndefined()
+  })
+
+  it('clears the room-creation indicator after adoption fails', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [])))
+      .mockResolvedValueOnce(jsonResponse({ error: '分支会话不能单独转换为群聊。' }, 400))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+
+    store.activateSession('chatroom-thread-v1-old', '新会话')
+    await vi.waitFor(() => {
+      expect(store.getSnapshot()).toMatchObject({
+        roomEnsureSessionId: undefined,
+        error: '分支会话不能单独转换为群聊。',
+      })
+    })
+  })
+
   it('preserves the active identity and room while identity editing is cancelled or submitted', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const updated = { ...identity, displayName: 'Alice 2', avatarId: 'panda' as const }

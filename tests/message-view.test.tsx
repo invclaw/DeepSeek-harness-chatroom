@@ -313,6 +313,7 @@ function messageProps(
       connection: 'online',
       rooms: [{ id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' }],
       room: { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' },
+      roomEnsureSessionId: undefined,
       identity,
       auth: {
         enabled: false,

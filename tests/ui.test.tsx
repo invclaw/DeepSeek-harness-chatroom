@@ -160,6 +160,23 @@ describe('native chatroom integration', () => {
     expect(screen.queryByText('Alice · 2 人在线')).toBeNull()
   })
 
+  it('shows shared-room creation only while that Session has an active request', () => {
+    const pending = view({ room: undefined, rooms: [], roomEnsureSessionId: 'native-new' })
+    const { rerender } = render(<RoomIdentityAction
+      sessionId={'native-new' as never}
+      useChatroom={selector => selector(pending)}
+      openMembers={vi.fn()}
+    />)
+    expect(screen.getByRole('button', { name: '正在建立共享群…' })).toBeTruthy()
+
+    rerender(<RoomIdentityAction
+      sessionId={'native-new' as never}
+      useChatroom={selector => selector({ ...pending, roomEnsureSessionId: undefined })}
+      openMembers={vi.fn()}
+    />)
+    expect(screen.queryByRole('button', { name: '正在建立共享群…' })).toBeNull()
+  })
+
   it('opens group management from a shared Session header', () => {
     const openMembers = vi.fn()
     const room = view()
@@ -308,6 +325,7 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     connection: 'connecting',
     rooms: [room],
     room,
+    roomEnsureSessionId: undefined,
     identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' },
     auth: {
       enabled: false,

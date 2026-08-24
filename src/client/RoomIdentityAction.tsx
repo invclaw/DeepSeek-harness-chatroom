@@ -13,7 +13,7 @@ export function RoomIdentityAction(props: RoomIdentityActionProps): JSX.Element 
   const room = props.useChatroom(snapshot => snapshot)
   const current = room.rooms.find(candidate => String(props.sessionId) === candidate.sessionId)
   if (current === undefined) {
-    if (room.phase !== 'ready' || room.identity === undefined) return null
+    if (room.roomEnsureSessionId !== String(props.sessionId)) return null
     return <button className="dsh-chatroom-manage-action" type="button" disabled>正在建立共享群…</button>
   }
   const identity = room.identity

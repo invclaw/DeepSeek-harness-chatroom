@@ -2,7 +2,7 @@
 
 import type { ComponentType } from 'react'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
-import type { ClientContext, ISessions, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientContext, ISessions, IWorkspaces, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
@@ -16,6 +16,7 @@ import {
   ChatroomUserMessageNodeView,
 } from './ChatroomMessageNodeView.js'
 import { installNativePromptIdentity } from './native-prompt.js'
+import { installFreshSessionStart } from './fresh-session.js'
 import { installRemoteConfigurationApi } from './remote-configuration.js'
 import { RoomIdentityAction } from './RoomIdentityAction.js'
 import { ChatroomClientStore } from './store.js'
@@ -30,7 +31,7 @@ import {
   stageBranchFrameSession,
 } from './branch-frame.js'
 
-export const inject = ['connection', 'inputTriggers', 'sessions', 'settingsScope', 'slots']
+export const inject = ['connection', 'inputTriggers', 'sessions', 'settingsScope', 'slots', 'workspaces']
 
 /** Add room identity and navigation around the existing Harness conversation UI. */
 export function apply(ctx: ClientContext): void {
@@ -38,6 +39,8 @@ export function apply(ctx: ClientContext): void {
   if (connection === undefined) throw new Error('chatroom: client connection service unavailable')
   const sessions = ctx.get('sessions') as ISessions | undefined
   if (sessions === undefined) throw new Error('chatroom: client sessions service unavailable')
+  const workspaces = ctx.get('workspaces') as IWorkspaces | undefined
+  if (workspaces === undefined) throw new Error('chatroom: client workspaces service unavailable')
   const inputTriggers = ctx.get('inputTriggers') as InputTriggerServiceContract | undefined
   if (inputTriggers === undefined) throw new Error('chatroom: input trigger service unavailable')
   const branchFrame = typeof location === 'undefined' ? undefined : branchFrameFromLocation(location)
@@ -49,6 +52,13 @@ export function apply(ctx: ClientContext): void {
     sessions.open(sessionId)
     return true
   }, branchFrame)
+  ctx.effect(() => installFreshSessionStart(workspaces, sessions, async (workspaceId) => {
+    const response = await connection.api.sessions.create({ workspaceId })
+    if (!response.result.ok) {
+      throw new Error(`new shared session failed: ${response.result.error.code}: ${response.result.error.message}`)
+    }
+    return response.result.value.sessionId
+  }), 'chatroom: distinct native New Session')
   ctx.effect(() => {
     if (branchFrame !== undefined) document.documentElement.setAttribute('data-dsh-chatroom-branch-frame', '')
     const markBranchShell = () => {
