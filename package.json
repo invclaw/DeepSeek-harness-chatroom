@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-chatroom",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "description": "Multi-user AI chatroom plugin for DeepSeek Harness Web",
   "type": "module",
   "main": "dist/index.js",
@@ -59,11 +59,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sliverp/DeepSeek-harness-chatroom.git"
+    "url": "git+https://github.com/invclaw/DeepSeek-harness-chatroom.git"
   },
-  "homepage": "https://github.com/sliverp/DeepSeek-harness-chatroom#readme",
+  "homepage": "https://github.com/invclaw/DeepSeek-harness-chatroom#readme",
   "bugs": {
-    "url": "https://github.com/sliverp/DeepSeek-harness-chatroom/issues"
+    "url": "https://github.com/invclaw/DeepSeek-harness-chatroom/issues"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",

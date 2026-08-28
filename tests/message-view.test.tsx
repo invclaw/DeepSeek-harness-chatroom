@@ -31,6 +31,23 @@ describe('participant-specific native message projection', () => {
     expect(firstText(peer.node)).toBe('你好')
   })
 
+  it('projects and renders the verified enterprise avatar for a known participant', () => {
+    const avatarUrl = 'https://images.example.com/alice.png'
+    const node = userNode(identifyChatroomText('你好', alice))
+    const projected = projectChatroomMessage(node, bob, [{
+      participantId: alice.participantId, avatarId: alice.avatarId, avatarUrl,
+    }])
+    expect(projected.avatarUrl).toBe(avatarUrl)
+
+    const Native = ({ node: renderedNode }: ChatNodeViewProps<'user'>) => <div>{firstText(renderedNode)}</div>
+    render(<ChatroomUserMessageNodeView {...messageProps(node, bob, Native, {
+      members: [{
+        ...alice, avatarUrl, role: 'member', joinedAt: 1, lastSeenAt: 1, online: true,
+      }],
+    })} />)
+    expect(document.querySelector<HTMLImageElement>('.dsh-chatroom-avatar img')?.src).toBe(avatarUrl)
+  })
+
   it('classifies pre-0.3 history by its visible display-name prefix', () => {
     const own = projectChatroomMessage(userNode('Alice：旧消息'), alice)
     const peer = projectChatroomMessage(userNode('Alice：旧消息'), bob)

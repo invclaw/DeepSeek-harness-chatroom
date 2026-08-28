@@ -56,4 +56,22 @@ describe('native sidebar room rows', () => {
     expect(rows[0]?.dataset.dshChatroomRoomId).toBe('first')
     expect(rows[1]?.dataset.dshChatroomRoomId).toBe('selected')
   })
+
+  it('uses enterprise profile images and falls back to the cartoon avatar after an image error', () => {
+    document.body.innerHTML = '<div role="treeitem" aria-selected="true"><span></span><span>企业群</span></div>'
+    const room = {
+      id: 'room', title: '企业群', aiDisplayName: 'DeepSeek', sessionId: 'session',
+      memberAvatars: [{
+        participantId: 'mason', avatarId: 'dog', avatarUrl: 'https://images.example.com/mason.png',
+      }],
+    } as const
+    const snapshot = { rooms: [room], room, members: [] } as unknown as ChatroomView
+
+    reconcileSidebarRoomRows(document, snapshot)
+
+    const image = document.querySelector<HTMLImageElement>('[data-dsh-chatroom-group-avatar] img')!
+    expect(image.src).toBe('https://images.example.com/mason.png')
+    image.dispatchEvent(new Event('error'))
+    expect(document.querySelector('[data-dsh-chatroom-group-avatar]')?.textContent).toBe('🐶')
+  })
 })

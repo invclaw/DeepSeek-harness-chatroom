@@ -12,6 +12,8 @@ export interface ChatroomIdentity {
     readonly avatarId: ChatroomAvatarId;
     readonly avatarUrl?: string;
 }
+/** Compact identity fields used to compose a room avatar in native session surfaces. */
+export type ChatroomRoomAvatar = Pick<ChatroomIdentity, 'participantId' | 'avatarId' | 'avatarUrl'>;
 /** Signed-in platform account projected without credential material. */
 export interface ChatroomAccount extends ChatroomIdentity {
     readonly username: string;
@@ -163,6 +165,7 @@ export interface ChatroomInfo {
     readonly sessionId: string;
     /** Up to nine member avatars used by compact room-directory surfaces. */
     readonly memberAvatarIds?: readonly ChatroomAvatarId[];
+    readonly memberAvatars?: readonly ChatroomRoomAvatar[];
 }
 /** Result of one room-management mutation. */
 export interface ChatroomRoomManageResponse {

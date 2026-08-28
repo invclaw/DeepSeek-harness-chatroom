@@ -223,7 +223,7 @@ var ChatroomAuth = class {
       const account = this.accounts.get(link.userId);
       if (account === void 0) continue;
       const role = account.role === "super-admin" || (this.config.authDshAuthSuperAdminSubjects ?? []).includes(link.subject) ? "super-admin" : "member";
-      const avatarUrl = this.externalAvatarUrl(account.username);
+      const avatarUrl = account.avatarUrl;
       if (account.externalProviderId === "dsh-auth" && account.externalSubject === link.subject && account.role === role && account.avatarUrl === avatarUrl) continue;
       const { avatarUrl: _oldAvatarUrl, ...withoutAvatar } = account;
       await this.accounts.put(account.id, {
@@ -390,6 +390,24 @@ var ChatroomAuth = class {
       account: publicAccount(account),
       ...verified.renewalCookie === void 0 ? {} : { renewalCookie: verified.renewalCookie }
     };
+  }
+  /** Refresh the signed-in account from the currently verified dsh-auth profile. */
+  async synchronizeDshAuthProfile(headers, account, originalUri = "/") {
+    if (!this.config.authEnabled || !this.config.authDshAuthHeaders && this.config.authDshAuthVerifyUrl === "") return account;
+    const verified = await this.dshAuthIdentity(headers, originalUri);
+    if (verified === void 0) return account;
+    const linked = this.accounts.get(account.participantId);
+    if (linked?.externalProviderId !== "dsh-auth" || linked.externalSubject !== verified.subject) return account;
+    const refreshed = await this.externalAccount(
+      "dsh-auth",
+      verified.subject,
+      verified.username,
+      verified.displayName ?? verified.username,
+      true,
+      verified.picture,
+      verified.legacy && verified.roles.split(",").map((value) => value.trim()).includes("admin")
+    );
+    return publicAccount(refreshed);
   }
   /** Public dsh-auth password-login location returning through the local adapter. */
   dshAuthLoginUrl(returnTo, callbackPath) {
@@ -661,7 +679,7 @@ var ChatroomAuth = class {
     const username = normalizeUsername(suggestedUsername);
     const existing = this.findUsername(username.key);
     const next = existing === void 0 || existing.id === account.id ? username : { value: account.username, key: account.usernameKey };
-    const avatarUrl = this.externalAvatarUrl(next.value, picture);
+    const avatarUrl = this.externalAvatarUrl(username.value, picture);
     const role = providerId === "dsh-auth" ? legacySuperAdmin || (this.config.authDshAuthSuperAdminSubjects ?? []).includes(subject) ? "super-admin" : "member" : account.role;
     const { avatarUrl: _oldAvatarUrl, ...withoutAvatar } = account;
     return {
@@ -3221,6 +3239,8 @@ var ChatroomHttpController = class {
             this.setAuthCookie(response, adopted.token);
             this.forwardDshAuthRenewal(response, adopted.renewalCookie);
           }
+        } else {
+          account = await this.runtime.auth.synchronizeDshAuthProfile(request.headers, account);
         }
         json(response, 200, this.sessionPayload(account ?? null, account));
         return;

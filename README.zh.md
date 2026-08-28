@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.1.9" src="https://img.shields.io/badge/version-1.1.9-4f6bff">
+    <img alt="版本 1.1.10" src="https://img.shields.io/badge/version-1.1.10-4f6bff">
     <img alt="Harness RC7 或更高" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -69,7 +69,8 @@
 
 ### 消息与富媒体
 
-- 头像、常驻时间戳、回复引用、表情输入、消息贴表情、Markdown、图片预览以及经过认证的文件上传下载。
+- IOA、OIDC 等企业身份提供方返回的真实头像会用于消息、成员目录、邀请列表、私聊和群头像；没有企业头像或图片加载失败时，稳定降级为账号对应的卡通头像。
+- 常驻时间戳、回复引用、表情输入、消息贴表情、Markdown、图片预览以及经过认证的文件上传下载。
 - 纯图片和纯文件直接作为消息显示，不额外生成“发送了图片/文件”的占位气泡；超大图片写入 Harness 附件存储前会自动缩放。
 - 回复、点赞、分支和转发可直接点击；复制、完整表情面板、多选保留在 `…`/右键菜单，移动端使用底部操作面板。
 - 合并转发由服务端从权威 Session 事件重建，保留文本/Markdown、图片、文件、引用、嵌套转发和表情计数。
@@ -84,6 +85,7 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.1.10** — 贯通 dsh-auth/IOA 与 OIDC 企业头像，在所有聊天表面优先显示真实照片并保留卡通降级。
 - **1.1.9** — 原生侧栏重命名持久化为群名，并为共享会话增加更高的行距和成员九宫格群头像。
 - **1.1.8** — 原生分支 frame 被网关拦截时立即启用消息兼容视图，保留完整 Agent 直达入口，并把含大量 Markdown 的分支主题收敛为短标题。
 - **1.1.7** — 隔离分支运行时启动时保持目标 Session，不再跳回父群聊。
@@ -109,7 +111,7 @@
 
 ```sh
 pnpm dsh plugin --profile web remove deepseek-harness-chatroom
-pnpm dsh plugin --profile web add github:sliverp/DeepSeek-harness-chatroom
+pnpm dsh plugin --profile web add github:invclaw/DeepSeek-harness-chatroom
 pnpm dsh --profile web
 ```
 
@@ -210,7 +212,7 @@ OIDC 提供方在 Harness 原生“设置 → 群聊与账号”中添加，界�
 2. 只放行明确的登录、注册、退出、`/auth/page`、`/auth/providers`、OIDC 与 dsh-auth 回调路由。
 3. 其余 Harness 页面、静态资源、API、插件、SSE、下载和 WebSocket 都先向上述 verify 地址发起内部 `forward_auth` 子请求。
 4. 用 `X-Original-URI` 传递原始地址；只对顶层页面请求把 `401 + X-Dsh-Auth-Login` 转成 `303`，并把校验响应中的 `Set-Cookie` 返回浏览器。
-5. 删除客户端传入的 `X-Dsh-Auth-User-Id`、`X-Dsh-Auth-Username` 和 `X-Dsh-Auth-Roles`，再复制校验通过的值。
+5. 删除客户端传入的 `X-Dsh-Auth-User-Id`、`X-Dsh-Auth-Subject`、`X-Dsh-Auth-Username`、`X-Dsh-Auth-Display-Name`、`X-Dsh-Auth-Picture` 和 `X-Dsh-Auth-Roles`，再复制校验通过的值。缺少后四个资料 Header 时认证仍可用，但聊天室只能显示账号名和卡通头像。
 
 校验成功返回 `204` 和服务端身份 Header，未登录返回 `401` 和独立登录页位置。认证提供方异常不会阻碍 Harness 启动：插件路由仍会立即注册，自己的存储未就绪时返回 `503`，OIDC 或 dsh-auth 登录失败只影响对应登录请求。
 

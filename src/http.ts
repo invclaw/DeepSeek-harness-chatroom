@@ -169,6 +169,8 @@ export class ChatroomHttpController {
             this.setAuthCookie(response, adopted.token)
             this.forwardDshAuthRenewal(response, adopted.renewalCookie)
           }
+        } else {
+          account = await this.runtime.auth.synchronizeDshAuthProfile(request.headers, account)
         }
         json(response, 200, this.sessionPayload(account ?? null, account))
         return

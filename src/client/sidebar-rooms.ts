@@ -1,5 +1,5 @@
-import { chatroomAvatar, type ChatroomAvatarId } from '../avatars.js'
-import type { ChatroomInfo } from '../types.js'
+import { chatroomAvatar } from '../avatars.js'
+import type { ChatroomInfo, ChatroomRoomAvatar } from '../types.js'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
 
 const ROOM_ROW_SELECTOR = 'div[role="treeitem"][aria-selected]'
@@ -40,7 +40,7 @@ export function reconcileSidebarRoomRows(documentRoot: Document, snapshot: Chatr
       : undefined
     const room = active ?? takeRoom(remaining, candidate => rowContainsTitle(row, candidate.title))
     if (room === undefined) clearRoomRow(row)
-    else decorateRoomRow(row, room, roomAvatarIds(room, snapshot))
+    else decorateRoomRow(row, room, roomAvatars(room, snapshot))
   }
 }
 
@@ -55,29 +55,52 @@ function rowContainsTitle(row: HTMLElement, title: string): boolean {
     candidate.childElementCount === 0 && candidate.textContent?.trim() === title)
 }
 
-function roomAvatarIds(room: ChatroomInfo, snapshot: ChatroomView): readonly ChatroomAvatarId[] {
-  const ids = snapshot.room?.id === room.id && snapshot.members.length > 0
-    ? snapshot.members.map(member => member.avatarId)
-    : room.memberAvatarIds ?? []
-  return ids.slice(0, 9)
+function roomAvatars(room: ChatroomInfo, snapshot: ChatroomView): readonly ChatroomRoomAvatar[] {
+  if (snapshot.room?.id === room.id && snapshot.members.length > 0) {
+    return snapshot.members.slice(0, 9).map(member => ({
+      participantId: member.participantId,
+      avatarId: member.avatarId,
+      ...(member.avatarUrl === undefined ? {} : { avatarUrl: member.avatarUrl }),
+    }))
+  }
+  if (room.memberAvatars !== undefined) return room.memberAvatars.slice(0, 9)
+  return (room.memberAvatarIds ?? []).slice(0, 9)
+    .map((avatarId, index) => ({ participantId: String(index), avatarId }))
 }
 
-function decorateRoomRow(row: HTMLElement, room: ChatroomInfo, avatarIds: readonly ChatroomAvatarId[]): void {
+function decorateRoomRow(row: HTMLElement, room: ChatroomInfo, avatars: readonly ChatroomRoomAvatar[]): void {
   row.dataset.dshChatroomRoomRow = ''
   row.dataset.dshChatroomRoomId = room.id
-  const signature = avatarIds.join(',') || 'empty'
+  const signature = avatars.map(item => `${item.participantId}:${item.avatarId}:${item.avatarUrl ?? ''}`).join('|') || 'empty'
   let avatar = row.querySelector<HTMLElement>(`:scope > [${GROUP_AVATAR_ATTRIBUTE}]`)
   if (avatar?.dataset.signature === signature) return
   avatar?.remove()
   avatar = row.ownerDocument.createElement('span')
   avatar.setAttribute(GROUP_AVATAR_ATTRIBUTE, '')
-  avatar.dataset.count = String(Math.max(1, avatarIds.length))
+  avatar.dataset.count = String(Math.max(1, avatars.length))
   avatar.dataset.signature = signature
   avatar.setAttribute('aria-hidden', 'true')
-  const cells = avatarIds.length === 0 ? ['✦'] : avatarIds.map(id => chatroomAvatar(id, id).emoji)
-  for (const emoji of cells) {
+  const cells: Array<{ readonly emoji: string; readonly avatarUrl?: string }> = avatars.length === 0
+    ? [{ emoji: '✦' }]
+    : avatars.map(identity => ({
+        ...identity,
+        emoji: chatroomAvatar(identity.avatarId, identity.participantId).emoji,
+      }))
+  for (const entry of cells) {
     const cell = row.ownerDocument.createElement('span')
-    cell.textContent = emoji
+    if (entry.avatarUrl === undefined) {
+      cell.textContent = entry.emoji
+    } else {
+      const image = row.ownerDocument.createElement('img')
+      image.src = entry.avatarUrl
+      image.alt = ''
+      image.referrerPolicy = 'no-referrer'
+      image.addEventListener('error', () => {
+        image.remove()
+        cell.textContent = entry.emoji
+      }, { once: true })
+      cell.append(image)
+    }
     avatar.append(cell)
   }
   row.prepend(avatar)

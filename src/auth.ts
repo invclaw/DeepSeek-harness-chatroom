@@ -158,7 +158,10 @@ export class ChatroomAuth {
         || (this.config.authDshAuthSuperAdminSubjects ?? []).includes(link.subject)
         ? 'super-admin'
         : 'member'
-      const avatarUrl = this.externalAvatarUrl(account.username)
+      // A legacy account may use a local de-duplication suffix (for example `alice-2`).
+      // Without the original upstream username we cannot safely recompute the template URL;
+      // preserve any existing avatar until the next verified profile refresh supplies it.
+      const avatarUrl = account.avatarUrl
       if (account.externalProviderId === 'dsh-auth' && account.externalSubject === link.subject
         && account.role === role && account.avatarUrl === avatarUrl) continue
       const { avatarUrl: _oldAvatarUrl, ...withoutAvatar } = account
@@ -352,6 +355,30 @@ export class ChatroomAuth {
       account: publicAccount(account),
       ...(verified.renewalCookie === undefined ? {} : { renewalCookie: verified.renewalCookie }),
     }
+  }
+
+  /** Refresh the signed-in account from the currently verified dsh-auth profile. */
+  async synchronizeDshAuthProfile(
+    headers: IncomingHttpHeaders,
+    account: ChatroomAccount,
+    originalUri = '/',
+  ): Promise<ChatroomAccount> {
+    if (!this.config.authEnabled
+      || (!this.config.authDshAuthHeaders && this.config.authDshAuthVerifyUrl === '')) return account
+    const verified = await this.dshAuthIdentity(headers, originalUri)
+    if (verified === undefined) return account
+    const linked = this.accounts.get(account.participantId)
+    if (linked?.externalProviderId !== 'dsh-auth' || linked.externalSubject !== verified.subject) return account
+    const refreshed = await this.externalAccount(
+      'dsh-auth',
+      verified.subject,
+      verified.username,
+      verified.displayName ?? verified.username,
+      true,
+      verified.picture,
+      verified.legacy && verified.roles.split(',').map(value => value.trim()).includes('admin'),
+    )
+    return publicAccount(refreshed)
   }
 
   /** Public dsh-auth password-login location returning through the local adapter. */
@@ -702,7 +729,9 @@ export class ChatroomAuth {
     const next = existing === undefined || existing.id === account.id
       ? username
       : { value: account.username, key: account.usernameKey }
-    const avatarUrl = this.externalAvatarUrl(next.value, picture)
+    // `next.value` is the local Chatroom login name and may include a collision suffix.
+    // Avatar templates must use the upstream username fact instead.
+    const avatarUrl = this.externalAvatarUrl(username.value, picture)
     const role = providerId === 'dsh-auth'
       ? (legacySuperAdmin || (this.config.authDshAuthSuperAdminSubjects ?? []).includes(subject) ? 'super-admin' : 'member')
       : account.role

@@ -8,6 +8,7 @@ import type {
   ChatroomIdentity,
   ChatroomImageReference,
   ChatroomReplyReference,
+  ChatroomRoomAvatar,
   ChatroomThreadPreview,
   ChatroomThreadRoot,
 } from '../types.js'
@@ -57,6 +58,7 @@ export type ChatroomSteeringMessageNodeViewProps =
 export function projectChatroomMessage(
   node: ParticipantNode,
   identity: ChatroomIdentity | undefined,
+  knownAvatars: readonly ChatroomRoomAvatar[] = [],
 ): {
   readonly node: ParticipantNode
   readonly own: boolean
@@ -74,6 +76,7 @@ export function projectChatroomMessage(
   let displayName: string | undefined
   let avatarId: ChatroomAvatarId | undefined
   let participantId: string | undefined
+  let avatarUrl: string | undefined
   let reply: ChatroomReplyReference | undefined
   let forward: ChatroomForwardBundle | undefined
   const files: ChatroomFileReference[] = []
@@ -96,6 +99,9 @@ export function projectChatroomMessage(
         : marker.participantId === identity.participantId)
       avatarId = marker?.avatarId ?? fallbackAvatarId(displayName ?? marker?.participantId ?? 'participant')
       participantId = marker?.participantId
+      const knownAvatar = knownAvatars.find(candidate => candidate.participantId === participantId)
+      avatarId = knownAvatar?.avatarId ?? avatarId
+      avatarUrl = knownAvatar?.avatarUrl
       if (namePrefix !== null) visibleText = visibleText.slice(namePrefix[0].length)
       const replyProjection = projectReplyText(visibleText)
       visibleText = replyProjection.text
@@ -128,7 +134,7 @@ export function projectChatroomMessage(
     files,
     text: texts.join('\n'),
     ...(displayName === undefined ? {} : { displayName }),
-    ...(identity !== undefined && own && identity.avatarUrl !== undefined ? { avatarUrl: identity.avatarUrl } : {}),
+    ...(avatarUrl !== undefined ? { avatarUrl } : identity !== undefined && own && identity.avatarUrl !== undefined ? { avatarUrl: identity.avatarUrl } : {}),
     ...(reply === undefined ? {} : { reply }),
     ...(forward === undefined ? {} : { forward }),
   }
