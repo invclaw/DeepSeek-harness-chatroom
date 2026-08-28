@@ -25,6 +25,7 @@ export declare class ChatroomRuntime {
     private directMessages;
     private authentication;
     private readonly states;
+    private readonly roomTitleWrites;
     private readonly sessionRoomCreations;
     private readonly threadStates;
     private readonly notificationClients;
@@ -145,6 +146,8 @@ export declare class ChatroomRuntime {
     private broadcast;
     private assertReady;
     private requireRoom;
+    private projectRoom;
+    private acceptSessionTitle;
     private requireState;
     private requireIdentities;
     private requireRoomRecords;

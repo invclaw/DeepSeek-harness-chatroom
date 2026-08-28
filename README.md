@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.1.8" src="https://img.shields.io/badge/version-1.1.8-4f6bff">
+    <img alt="Version 1.1.9" src="https://img.shields.io/badge/version-1.1.9-4f6bff">
     <img alt="Harness RC7 or later" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -58,6 +58,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 - Every ordinary Harness Session becomes a durable room on first use; **New session** always creates a distinct room.
 - Human messages synchronize in real time without waking the Agent. `@AI` or the configured AI display name explicitly requests an Agent reply.
 - The native `@` menu lists the Agent and current room members together. Participant identity is attached on the Host before Session admission, so browsers and the model see the same sender.
+- Shared Session rows retain the native sidebar while adding a roomier member-avatar collage. Native Session renames update the durable room title, so the name survives navigation and restarts.
 - The Session header shows the current identity, online count, and **Group management**. New-message toasts, title unread counts, and opt-in browser notifications work across rooms.
 
 ### Complete native Agent runtime
@@ -83,6 +84,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.1.9** — persist native sidebar renames as room titles and add taller shared-Session rows with member-avatar collages.
 - **1.1.8** — replace blocked native branch frames with an immediate messaging fallback, retain direct access to the complete Agent, and collapse Markdown-heavy branch subjects into compact titles.
 - **1.1.7** — keep isolated branch runtimes on their target Session instead of navigating back to the parent room during startup.
 - **1.1.6** — attach every new or resumed branch Session to the native Workspace so the retained Harness iframe can select it without timing out.
