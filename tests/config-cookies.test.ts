@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { validateConfig, type Config } from '../src/config.js'
 import { cookieValue, expiredSessionCookie, sessionCookie } from '../src/cookies.js'
-import { canManageRemoteSettings, isRemoteConfigurationMethod } from '../src/http.js'
+import { canManageRemoteSettings, chatroomContentSecurityPolicy, isRemoteConfigurationMethod } from '../src/http.js'
 import {
   CHATROOM_API_PREFIX,
   LEGACY_CHATROOM_API_PREFIX,
@@ -49,6 +49,34 @@ describe('chatroom configuration and identity cookie', () => {
     expect(canManageRemoteSettings(config, 'admin-id')).toBe(true)
     expect(canManageRemoteSettings(config, 'Admin-id')).toBe(false)
     expect(canManageRemoteSettings(config, 'member-id')).toBe(false)
+  })
+
+  it('requires a loopback verifier and HTTPS allowlisted avatar origins for dsh-auth-only', () => {
+    const config = {
+      ...validConfig(),
+      authEnabled: true,
+      authSecret: 'a secure test secret with at least 32 bytes',
+      authPublicOrigin: 'https://chat.example.com',
+      authAllowSelfRegistration: false,
+      authDshAuthVerifyUrl: 'http://127.0.0.1:3080/auth/verify',
+      authMode: 'dsh-auth-only' as const,
+      authDshAuthSuperAdminSubjects: ['masonxhuang'],
+      authDshAuthAvatarUrlTemplate: 'https://avatars.example.com/{username}.png',
+      authDshAuthAvatarAllowedOrigins: ['https://avatars.example.com'],
+    }
+    expect(() => validateConfig(config)).not.toThrow()
+    expect(() => validateConfig({ ...config, authDshAuthAvatarAllowedOrigins: ['http://avatars.example.com'] }))
+      .toThrow('avatar allowed origins')
+    expect(() => validateConfig({ ...config, authDshAuthVerifyUrl: 'http://example.com/auth/verify' }))
+      .toThrow('loopback HTTP URL')
+    expect(() => validateConfig({ ...config, authDshAuthSuperAdminSubjects: [] }))
+      .toThrow('at least one super-admin subject')
+  })
+
+  it('limits document images to configured avatar origins', () => {
+    const policy = chatroomContentSecurityPolicy({ authDshAuthAvatarAllowedOrigins: ['https://avatars.example.com'] })
+    expect(policy).toContain("img-src 'self' data: https://avatars.example.com;")
+    expect(policy).not.toContain('https://untrusted.example.com')
   })
 })
 

@@ -13,7 +13,7 @@ import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { ChatroomAuth } from './auth.js'
 import type { Config } from './config.js'
-import { isChatroomAvatarId, fallbackAvatarId } from './avatars.js'
+import { isChatroomAvatarId, fallbackAvatarId, type ChatroomAvatarId } from './avatars.js'
 import {
   chatroomDomainSpec,
   type DirectConversationRecord,
@@ -1197,27 +1197,21 @@ export class ChatroomRuntime {
 
   private roomMembers(state: RoomState): readonly ChatroomMember[] {
     const online = new Set([...state.clients].map(client => client.participantId))
-    const accounts = new Map(this.auth.activeAccounts().map(account => [account.participantId, account]))
     return [...this.requireMembers().entries()]
       .map(([, record]) => record)
       .filter(record => record.roomId === state.record.id)
       .sort((left, right) => Number(online.has(right.participantId)) - Number(online.has(left.participantId))
         || right.lastSeenAt - left.lastSeenAt)
-      .map(record => {
-        const account = accounts.get(record.participantId)
-        return {
-          participantId: record.participantId,
-          displayName: account?.displayName ?? record.displayName,
-          avatarId: account?.avatarId ?? record.avatarId,
-          ...((account?.avatarUrl ?? record.avatarUrl) === undefined
-            ? {}
-            : { avatarUrl: account?.avatarUrl ?? record.avatarUrl! }),
-          role: memberRole(state.record, record.participantId),
-          joinedAt: record.joinedAt,
-          lastSeenAt: record.lastSeenAt,
-          online: online.has(record.participantId),
-        }
-      })
+      .map(record => ({
+        participantId: record.participantId,
+        displayName: record.displayName,
+        avatarId: record.avatarId,
+        ...(record.avatarUrl === undefined ? {} : { avatarUrl: record.avatarUrl }),
+        role: memberRole(state.record, record.participantId),
+        joinedAt: record.joinedAt,
+        lastSeenAt: record.lastSeenAt,
+        online: online.has(record.participantId),
+      }))
   }
 
   private reactionsForRoom(roomId: string): readonly ChatroomReaction[] {
@@ -1527,10 +1521,9 @@ export class ChatroomRuntime {
   }
 
   private projectRoom(state: RoomState): ChatroomInfo {
-    const members = this.roomMembers(state).slice(0, 9)
     return publicRoom(
       state.record,
-      members,
+      this.roomMembers(state).slice(0, 9).map(member => member.avatarId),
     )
   }
 
@@ -1671,18 +1664,13 @@ function publicFile(record: FileRecord): ChatroomFileReference {
   return { id: record.id, name: record.name, mediaType: record.mediaType, bytes: record.bytes }
 }
 
-function publicRoom(record: RoomRecord, members: readonly ChatroomMember[]): ChatroomInfo {
+function publicRoom(record: RoomRecord, memberAvatarIds: readonly ChatroomAvatarId[]): ChatroomInfo {
   return {
     id: record.id,
     title: record.title,
     aiDisplayName: record.aiDisplayName,
     sessionId: record.sessionId,
-    memberAvatarIds: members.map(member => member.avatarId),
-    memberAvatars: members.map(member => ({
-      participantId: member.participantId,
-      avatarId: member.avatarId,
-      ...(member.avatarUrl === undefined ? {} : { avatarUrl: member.avatarUrl }),
-    })),
+    memberAvatarIds,
   }
 }
 

@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChatroomEntry } from '../src/client/ChatroomEntry.js'
 import { ChatroomSettingsSection } from '../src/client/ChatroomAccountPanels.js'
 import { RoomIdentityAction } from '../src/client/RoomIdentityAction.js'
+import { ChatroomAvatar } from '../src/client/ChatroomAvatar.js'
 import { BRANCH_FRAME_READY, markBranchFrameSessionReady } from '../src/client/branch-frame.js'
 import type { ChatroomView } from '../src/client/store.js'
 
@@ -14,6 +15,25 @@ afterEach(() => {
 })
 
 describe('native chatroom integration', () => {
+  it('uses a remote avatar without a referrer and falls back after load failure', async () => {
+    const view = render(<ChatroomAvatar avatarId="whale" avatarUrl="https://avatars.example.com/alice.png" seed="alice-id" />)
+    const image = document.querySelector('img')
+    expect(image).not.toBeNull()
+    if (image === null) throw new Error('remote avatar image was not rendered')
+    expect(image.getAttribute('referrerpolicy')).toBe('no-referrer')
+    fireEvent.error(image)
+    expect(document.querySelector('img')).toBeNull()
+    expect(screen.getByText('🐳')).toBeTruthy()
+    view.rerender(<ChatroomAvatar avatarId="whale" avatarUrl="https://avatars.example.com/alice-v2.png" seed="alice-id" />)
+    await waitFor(() => expect(document.querySelector('img')).not.toBeNull())
+  })
+
+  it('does not render an unsafe avatar URL', () => {
+    render(<ChatroomAvatar avatarId="fox" avatarUrl="http://avatars.example.com/alice.png" seed="alice-id" />)
+    expect(document.querySelector('img')).toBeNull()
+    expect(screen.getByText('🦊')).toBeTruthy()
+  })
+
   it('does not add a floating shared-session launcher', () => {
     renderEntry(view({ open: false }))
     expect(screen.queryByText('◉ 共享会话')).toBeNull()

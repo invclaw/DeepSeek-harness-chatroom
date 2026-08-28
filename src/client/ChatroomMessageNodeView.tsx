@@ -25,9 +25,9 @@ import {
 } from './ChatroomMessageTools.js'
 import { ChatroomThreadActivity } from './ChatroomThreadActivity.js'
 import { ChatroomMarkdown } from './ChatroomMarkdown.js'
-import { ChatroomAvatarView } from './ChatroomAvatarView.js'
 import type { ChatroomView } from './store.js'
 import type { ChatroomAgentTarget } from './store.js'
+import { ChatroomAvatar } from './ChatroomAvatar.js'
 
 type ParticipantNode = ChatNode<'user' | 'steering'>
 
@@ -64,19 +64,19 @@ export function projectChatroomMessage(
   readonly own: boolean
   readonly displayName?: string
   readonly avatarId: ChatroomAvatarId
-  readonly avatarUrl?: string
   readonly participantId?: string
   readonly reply?: ChatroomReplyReference
   readonly files: readonly ChatroomFileReference[]
   readonly forward?: ChatroomForwardBundle
   readonly text: string
+  readonly avatarUrl?: string | undefined
 } {
   let own = false
   let identityProjected = false
   let displayName: string | undefined
   let avatarId: ChatroomAvatarId | undefined
-  let avatarUrl: string | undefined
   let participantId: string | undefined
+  let avatarUrl: string | undefined
   let reply: ChatroomReplyReference | undefined
   let forward: ChatroomForwardBundle | undefined
   const files: ChatroomFileReference[] = []
@@ -97,10 +97,11 @@ export function projectChatroomMessage(
       own = identity !== undefined && (marker === undefined
         ? displayName === identity.displayName
         : marker.participantId === identity.participantId)
-      participantId = marker?.participantId ?? (own ? identity?.participantId : undefined)
+      avatarId = marker?.avatarId ?? fallbackAvatarId(displayName ?? marker?.participantId ?? 'participant')
+      participantId = marker?.participantId
       const knownAvatar = knownAvatars.find(candidate => candidate.participantId === participantId)
-      avatarId = knownAvatar?.avatarId ?? marker?.avatarId ?? fallbackAvatarId(displayName ?? participantId ?? 'participant')
-      avatarUrl = knownAvatar?.avatarUrl ?? (own ? identity?.avatarUrl : undefined)
+      avatarId = knownAvatar?.avatarId ?? avatarId
+      avatarUrl = knownAvatar?.avatarUrl
       if (namePrefix !== null) visibleText = visibleText.slice(namePrefix[0].length)
       const replyProjection = projectReplyText(visibleText)
       visibleText = replyProjection.text
@@ -129,11 +130,11 @@ export function projectChatroomMessage(
       : node,
     own,
     avatarId: avatarId ?? fallbackAvatarId(identity?.participantId ?? 'participant'),
+    ...(participantId === undefined ? {} : { participantId }),
     files,
     text: texts.join('\n'),
     ...(displayName === undefined ? {} : { displayName }),
-    ...(participantId === undefined ? {} : { participantId }),
-    ...(avatarUrl === undefined ? {} : { avatarUrl }),
+    ...(avatarUrl !== undefined ? { avatarUrl } : identity !== undefined && own && identity.avatarUrl !== undefined ? { avatarUrl: identity.avatarUrl } : {}),
     ...(reply === undefined ? {} : { reply }),
     ...(forward === undefined ? {} : { forward }),
   }
@@ -155,10 +156,15 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
   if (sessionTarget === undefined) {
     return <NativeView {...props} />
   }
-  const activeRoom = sessionTarget.room
-  const knownAvatars = room.room?.id === activeRoom.id ? room.members : activeRoom.memberAvatars ?? []
-  const projection = projectChatroomMessage(props.node, room.identity, knownAvatars)
+  const projectionBase = projectChatroomMessage(props.node, room.identity)
+  const projection = {
+    ...projectionBase,
+    ...(room.members.find(member => member.participantId === projectionBase.participantId)?.avatarUrl === undefined
+      ? {}
+      : { avatarUrl: room.members.find(member => member.participantId === projectionBase.participantId)?.avatarUrl }),
+  }
   const native = <NativeView {...props} node={projection.node as ChatNode<'user'>} />
+  const activeRoom = sessionTarget.room
   const message = messageTarget(String(props.sessionId), props.node, projection)
   const reply = replyTarget(message)
   const threadRoot = threadRootTarget(message)
@@ -190,10 +196,15 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
   if (sessionTarget === undefined) {
     return <NativeView {...props} />
   }
-  const activeRoom = sessionTarget.room
-  const knownAvatars = room.room?.id === activeRoom.id ? room.members : activeRoom.memberAvatars ?? []
-  const projection = projectChatroomMessage(props.node, room.identity, knownAvatars)
+  const projectionBase = projectChatroomMessage(props.node, room.identity)
+  const projection = {
+    ...projectionBase,
+    ...(room.members.find(member => member.participantId === projectionBase.participantId)?.avatarUrl === undefined
+      ? {}
+      : { avatarUrl: room.members.find(member => member.participantId === projectionBase.participantId)?.avatarUrl }),
+  }
   const native = <NativeView {...props} node={projection.node as ChatNode<'steering'>} />
+  const activeRoom = sessionTarget.room
   const message = messageTarget(String(props.sessionId), props.node, projection)
   const reply = replyTarget(message)
   const threadRoot = threadRootTarget(message)
@@ -238,12 +249,7 @@ function ParticipantMessage({
       onContextMenu={menu.open}
     >
       <ChatroomSelectionCheckbox tools={tools} />
-      <ChatroomAvatarView
-        className="dsh-chatroom-avatar"
-        participantId={projection.participantId ?? projection.displayName ?? 'participant'}
-        avatarId={projection.avatarId}
-        {...(projection.avatarUrl === undefined ? {} : { avatarUrl: projection.avatarUrl })}
-      />
+      <ChatroomAvatar avatarId={projection.avatarId} avatarUrl={projection.avatarUrl} seed={projection.participantId ?? projection.displayName ?? ''} />
       <div className="dsh-chatroom-message-column">
         {projection.displayName !== undefined
           && <div className="dsh-chatroom-display-name">{projection.displayName}</div>}

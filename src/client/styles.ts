@@ -443,6 +443,18 @@ export const CHATROOM_STYLES = `
 .dsh-chatroom-avatar[data-avatar="rabbit"],
 .dsh-chatroom-avatar[data-avatar="unicorn"] { background: linear-gradient(145deg, #ffeaf4, #ffcde4); }
 .dsh-chatroom-avatar[data-avatar="octopus"] { background: linear-gradient(145deg, #e8fff6, #bfead9); }
+.dsh-chatroom-avatar img,
+.dsh-chatroom-member-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  grid-area: 1 / 1;
+}
+.dsh-chatroom-avatar > span,
+.dsh-chatroom-member-avatar > span { grid-area: 1 / 1; }
+.dsh-chatroom-avatar img + span,
+.dsh-chatroom-member-avatar img + span { visibility: hidden; }
 
 .dsh-chatroom-message-column {
   display: flex;
@@ -622,7 +634,8 @@ export const CHATROOM_STYLES = `
 .dsh-chatroom-thread-activity:disabled { cursor: default; }
 .dsh-chatroom-thread-activity-heading { font-size: 11px; font-weight: 600; }
 .dsh-chatroom-thread-activity-list { display: grid; gap: 3px; }
-.dsh-chatroom-thread-activity-list > span { display: grid; grid-template-columns: minmax(44px, 72px) minmax(0, 1fr); gap: 7px; font-size: 11px; line-height: 16px; }
+.dsh-chatroom-thread-activity-list > span { display: grid; grid-template-columns: 22px minmax(44px, 72px) minmax(0, 1fr); gap: 7px; font-size: 11px; line-height: 16px; }
+.dsh-chatroom-thread-activity-list .dsh-chatroom-member-avatar { width: 22px; height: 22px; border-radius: 7px; font-size: 12px; }
 .dsh-chatroom-thread-activity-list strong,
 .dsh-chatroom-thread-activity-list > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -1192,8 +1205,9 @@ export const CHATROOM_STYLES = `
 .dsh-chatroom-direct-body nav small { color: var(--text-secondary, #6b7280); }
 .dsh-chatroom-direct-body > section { display: flex; min-width: 0; flex-direction: column; }
 .dsh-chatroom-direct-messages { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 12px; overflow-y: auto; padding: 18px; }
-.dsh-chatroom-direct-messages article { align-self: flex-start; max-width: 78%; }
-.dsh-chatroom-direct-messages article[data-own="true"] { align-self: flex-end; text-align: right; }
+.dsh-chatroom-direct-messages article { display: flex; align-items: flex-start; gap: 7px; align-self: flex-start; max-width: 78%; }
+.dsh-chatroom-direct-messages article[data-own="true"] { align-self: flex-end; flex-direction: row-reverse; text-align: right; }
+.dsh-chatroom-direct-messages article > div { min-width: 0; }
 .dsh-chatroom-direct-messages article small, .dsh-chatroom-direct-messages article time { color: var(--text-secondary, #6b7280); font-size: 11px; }
 .dsh-chatroom-direct-messages article p { margin: 3px 0; border-radius: 13px; background: var(--bg-secondary, #f3f4f6); padding: 9px 12px; text-align: left; white-space: pre-wrap; }
 .dsh-chatroom-direct-messages article[data-own="true"] p { background: color-mix(in srgb, var(--brand-primary, #4f7cff) 16%, var(--bg-primary, #fff)); }

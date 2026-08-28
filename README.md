@@ -147,6 +147,11 @@ Installation adds this row to the Web profile:
     authDshAuthHeaders: !!js process.env.DSH_CHATROOM_DSH_AUTH_HEADERS === 'enabled'
     authDshAuthVerifyUrl: !!js process.env.DSH_CHATROOM_DSH_AUTH_VERIFY_URL ?? ''
     authDshAuthLoginPath: !!js process.env.DSH_CHATROOM_DSH_AUTH_LOGIN_PATH ?? '/auth/login'
+    authMode: !!js process.env.DSH_CHATROOM_AUTH_MODE ?? 'local'
+    authDshAuthSuperAdminSubjects: !!js (process.env.DSH_CHATROOM_DSH_AUTH_SUPER_ADMINS ?? '').split(',').map(value => value.trim()).filter(Boolean)
+    authDshAuthAvatarUrlTemplate: !!js process.env.DSH_CHATROOM_DSH_AUTH_AVATAR_TEMPLATE ?? ''
+    authDshAuthAvatarAllowedOrigins: !!js (process.env.DSH_CHATROOM_DSH_AUTH_AVATAR_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean)
+    authDshAuthRevalidateSeconds: !!js Number(process.env.DSH_CHATROOM_DSH_AUTH_REVALIDATE_SECONDS ?? 60)
 ```
 
 Override it in the Web profile's `cordis.patch.yml` when needed:
@@ -184,15 +189,20 @@ Override it in the Web profile's `cordis.patch.yml` when needed:
     authDshAuthHeaders: false
     authDshAuthVerifyUrl: ''
     authDshAuthLoginPath: /auth/login
+    authMode: local
+    authDshAuthSuperAdminSubjects: []
+    authDshAuthAvatarUrlTemplate: ''
+    authDshAuthAvatarAllowedOrigins: []
+    authDshAuthRevalidateSeconds: 60
 ```
 
 `authSecret` encrypts OIDC client secrets and hashes no passwords directly; keep it stable and outside Git. Local passwords use salted scrypt. The first password registration must present `authBootstrapToken` and becomes the initial super administrator. Later registrations follow the mutable policy in **System administration**. Login attempts are bounded in memory, disabling an account revokes all its sessions, and changing a password rotates the current session and revokes older ones. The authentication cookie is random, stored only by SHA-256 digest, `HttpOnly`, `SameSite=Strict`, root-scoped, and `Secure` whenever `authPublicOrigin` uses HTTPS.
 
 ### Enterprise OIDC and dsh-auth
 
-Add OIDC providers from **System administration**. The displayed callback URL must be registered exactly at the identity provider. Discovery and the authorization-code exchange use OIDC discovery, PKCE, state, and nonce; the client secret is stored with AES-256-GCM under `authSecret` and is never projected back to the UI. The first enabled external provider automatically becomes the unauthenticated entry; **Unauthenticated entry** can select a different provider or restore the login chooser. Add `local=1` to the original application URL to reach the local-account recovery form, and bootstrap always remains on the local registration page.
+Add OIDC providers from **System administration**. The displayed callback URL must be registered exactly at the identity provider. Discovery and the authorization-code exchange use OIDC discovery, PKCE, state, and nonce; the client secret is stored with AES-256-GCM under `authSecret` and is never projected back to the UI. The first enabled external provider automatically becomes the unauthenticated entry; **Unauthenticated entry** can select a different provider or restore the login chooser. In `hybrid`/`local` modes, add `local=1` to the original application URL to reach the local-account recovery form; bootstrap always remains on the local registration page.
 
-To reuse [`dsh-auth`](https://github.com/hxy91819/dsh-auth) as the default administrator identity while retaining local multi-user accounts, keep its `/auth/*` routes reachable on the same public origin and set `DSH_CHATROOM_DSH_AUTH_VERIFY_URL` to its loopback `/auth/verify` URL (typically `http://127.0.0.1:3080/auth/verify`). The chatroom forwards the browser's dsh-auth cookie only to that verifier and imports its administrator as a local super administrator. When configured, dsh-auth is the initial default login provider; super administrators can choose another provider in **Settings → Chatroom & accounts**, while `local=1` opens local recovery. Do not put the single-user dsh-auth edge outside local member login.
+To reuse [`dsh-auth`](https://github.com/hxy91819/dsh-auth), keep its `/auth/*` routes on the same public origin and set `DSH_CHATROOM_DSH_AUTH_VERIFY_URL` to its loopback `/auth/verify` URL (typically `http://127.0.0.1:3080/auth/verify`). Verified dsh-auth accounts are ordinary chatroom members unless their stable subject appears in `authDshAuthSuperAdminSubjects`; the edge `admin` role is not a chatroom role. Production can set `authMode: dsh-auth-only`, disable self-registration, and keep the 60-second upstream revalidation interval. Local password and OIDC entry points are then hidden, and revoked upstream sessions stop working at the next validation; the `local=1` recovery switch is available only in `hybrid`/`local` modes. Avatar URLs are HTTPS-only, optionally generated with `authDshAuthAvatarUrlTemplate` and constrained by `authDshAuthAvatarAllowedOrigins`; failed loads fall back to the built-in avatar. `authDshAuthHeaders` remains a trusted-gateway compatibility switch and is disabled by default.
 
 ### Whole-site edge enforcement
 

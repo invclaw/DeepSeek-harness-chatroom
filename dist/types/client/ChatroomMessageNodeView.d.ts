@@ -27,12 +27,12 @@ export declare function projectChatroomMessage(node: ParticipantNode, identity: 
     readonly own: boolean;
     readonly displayName?: string;
     readonly avatarId: ChatroomAvatarId;
-    readonly avatarUrl?: string;
     readonly participantId?: string;
     readonly reply?: ChatroomReplyReference;
     readonly files: readonly ChatroomFileReference[];
     readonly forward?: ChatroomForwardBundle;
     readonly text: string;
+    readonly avatarUrl?: string | undefined;
 };
 /** Reuse Harness' native user renderer and move only peer user messages to the left. */
 export declare const ChatroomUserMessageNodeView: import("react").MemoExoticComponent<(props: ChatroomUserMessageNodeViewProps) => import("react").JSX.Element>;

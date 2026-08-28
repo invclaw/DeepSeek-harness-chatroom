@@ -13,16 +13,17 @@ export interface ChatroomIdentity {
   readonly participantId: string
   readonly displayName: string
   readonly avatarId: ChatroomAvatarId
-  /** Verified enterprise profile image. Clients fall back to avatarId when it is absent or cannot load. */
   readonly avatarUrl?: string
 }
 
-/** Compact identity fields used to compose a room avatar in the native Session directory. */
+/** Compact identity fields used to compose a room avatar in native session surfaces. */
 export type ChatroomRoomAvatar = Pick<ChatroomIdentity, 'participantId' | 'avatarId' | 'avatarUrl'>
 
 /** Signed-in platform account projected without credential material. */
 export interface ChatroomAccount extends ChatroomIdentity {
   readonly username: string
+  /** Whether this account has a locally managed password. */
+  readonly passwordManaged?: boolean
   readonly role: ChatroomAccountRole
   readonly status: ChatroomAccountStatus
   readonly createdAt: number
@@ -40,6 +41,7 @@ export interface ChatroomAuthProvider {
 export interface ChatroomAuthState {
   readonly enabled: boolean
   readonly authenticated: boolean
+  readonly authMode?: 'local' | 'hybrid' | 'dsh-auth-only'
   readonly account?: ChatroomAccount
   readonly providers: readonly ChatroomAuthProvider[]
   /** Configured provider that bypasses the chooser for ordinary unauthenticated entry. */
@@ -178,7 +180,6 @@ export interface ChatroomInfo {
   readonly sessionId: string
   /** Up to nine member avatars used by compact room-directory surfaces. */
   readonly memberAvatarIds?: readonly ChatroomAvatarId[]
-  /** Up to nine member identities, including verified enterprise profile images when available. */
   readonly memberAvatars?: readonly ChatroomRoomAvatar[]
 }
 

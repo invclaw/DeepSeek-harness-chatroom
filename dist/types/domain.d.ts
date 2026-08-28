@@ -95,6 +95,8 @@ export interface AccountRecord {
     readonly displayName: string;
     readonly avatarId: ChatroomAvatarId;
     readonly avatarUrl?: string;
+    readonly externalProviderId?: string;
+    readonly externalSubject?: string;
     readonly passwordHash?: string;
     readonly role: ChatroomAccountRole;
     readonly status: ChatroomAccountStatus;
@@ -107,6 +109,7 @@ export interface AuthSessionRecord {
     readonly createdAt: number;
     readonly lastSeenAt: number;
     readonly expiresAt: number;
+    readonly externalValidatedAt?: number;
 }
 export interface AuthSettingsRecord {
     readonly allowSelfRegistration: boolean;

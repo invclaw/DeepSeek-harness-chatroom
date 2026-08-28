@@ -118,7 +118,7 @@ export class ChatroomHttpController {
         return
       }
       if (route.endpoint.startsWith('/files/')) {
-        this.handleFile(request, response, route.endpoint.slice('/files/'.length))
+        await this.handleFile(request, response, route.endpoint.slice('/files/'.length))
         return
       }
       if (route.endpoint.startsWith('/images/')) {
@@ -130,7 +130,7 @@ export class ChatroomHttpController {
         return
       }
       if (route.endpoint === '/notifications' && request.method === 'GET') {
-        this.handleNotifications(request, response)
+        await this.handleNotifications(request, response)
         return
       }
       if (route.endpoint.startsWith('/configuration/')) {
@@ -161,12 +161,13 @@ export class ChatroomHttpController {
     const token = this.token(request)
     if (request.method === 'GET') {
       if (this.config.authEnabled) {
-        let account = this.runtime.auth.account(this.authToken(request))
+        let account = await this.requestAccount(request, response)
         if (account === undefined) {
           const adopted = await this.runtime.auth.adoptDshAuth(request.headers)
           if (adopted !== undefined) {
             account = adopted.account
             this.setAuthCookie(response, adopted.token)
+            this.forwardDshAuthRenewal(response, adopted.renewalCookie)
           }
         } else {
           account = await this.runtime.auth.synchronizeDshAuthProfile(request.headers, account)
@@ -231,12 +232,13 @@ export class ChatroomHttpController {
         methodNotAllowed(response, 'GET, HEAD')
         return
       }
-      let account = this.runtime.auth.account(this.authToken(request))
+      let account = await this.requestAccount(request, response)
       if (account === undefined) {
         const adopted = await this.runtime.auth.adoptDshAuth(request.headers, originalRequestUri(request))
         if (adopted !== undefined) {
           account = adopted.account
           this.setAuthCookie(response, adopted.token)
+          this.forwardDshAuthRenewal(response, adopted.renewalCookie)
         }
       }
       if (account === undefined) {
@@ -254,7 +256,10 @@ export class ChatroomHttpController {
         'Cache-Control': 'no-store, max-age=0',
         Vary: 'Cookie',
         'X-Dsh-Auth-User-Id': account.participantId,
+        'X-Dsh-Auth-Subject': encodeURIComponent(this.runtime.auth.verifiedSubject(account)),
         'X-Dsh-Auth-Username': encodeURIComponent(account.username),
+        ...(account.displayName === account.username ? {} : { 'X-Dsh-Auth-Display-Name': encodeURIComponent(account.displayName) }),
+        ...(account.avatarUrl === undefined ? {} : { 'X-Dsh-Auth-Picture': encodeURIComponent(account.avatarUrl) }),
         'X-Dsh-Auth-Roles': account.role,
       })
       response.end()
@@ -266,12 +271,13 @@ export class ChatroomHttpController {
         return
       }
       const returnTo = safeReturnPath(url.searchParams.get('returnTo') ?? '/')
-      let account = this.runtime.auth.account(this.authToken(request))
+      let account = await this.requestAccount(request, response)
       if (account === undefined) {
         const adopted = await this.runtime.auth.adoptDshAuth(request.headers, returnTo)
         if (adopted !== undefined) {
           account = adopted.account
           this.setAuthCookie(response, adopted.token)
+          this.forwardDshAuthRenewal(response, adopted.renewalCookie)
         }
       }
       if (account !== undefined) {
@@ -289,11 +295,11 @@ export class ChatroomHttpController {
         response.end()
         return
       }
-      html(response, 200, renderAuthPage(cookiePath, state, returnTo), request.method === 'HEAD')
+      html(response, 200, renderAuthPage(cookiePath, state, returnTo), request.method === 'HEAD', this.config)
       return
     }
     if (endpoint === '/auth/providers' && request.method === 'GET') {
-      const account = this.runtime.auth.account(this.authToken(request))
+      const account = await this.requestAccount(request, response)
       json(response, 200, this.runtime.auth.state(account))
       return
     }
@@ -360,6 +366,7 @@ export class ChatroomHttpController {
       const adopted = await this.runtime.auth.adoptDshAuth(request.headers, returnTo)
       if (adopted === undefined) throw new ChatroomAuthError('dsh-auth 登录未完成或已失效。')
       this.setAuthCookie(response, adopted.token)
+      this.forwardDshAuthRenewal(response, adopted.renewalCookie)
       response.writeHead(302, { Location: returnTo, 'Cache-Control': 'no-store' })
       response.end()
       return
@@ -368,7 +375,7 @@ export class ChatroomHttpController {
   }
 
   private async handleAdministration(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const actor = this.requireAccount(request, response)
+    const actor = await this.requireAccount(request, response)
     if (actor === undefined) return
     if (request.method === 'GET') {
       json(response, 200, this.runtime.auth.overview(actor))
@@ -447,7 +454,7 @@ export class ChatroomHttpController {
       return
     }
     assertSameOrigin(request)
-    const actor = this.requireAccount(request, response)
+    const actor = await this.requireAccount(request, response)
     if (actor === undefined) return
     const body = await readJson(request, 4_096)
     if (fieldString(body, 'action') !== 'change-password') throw new ChatroomAuthError('账号操作无效。')
@@ -461,7 +468,7 @@ export class ChatroomHttpController {
   }
 
   private async handleDirect(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     if (request.method === 'GET') {
       json(response, 200, this.runtime.directDirectory(identity))
@@ -482,7 +489,7 @@ export class ChatroomHttpController {
       return
     }
     assertSameOrigin(request)
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     const body = await readJson(request, this.config.maxMessageTextChars * 4 + 4_096)
     json(response, 201, await this.runtime.sendDirect(
@@ -494,7 +501,7 @@ export class ChatroomHttpController {
 
   private async handleRooms(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method === 'GET') {
-      if (this.requireIdentity(request, response) === undefined) return
+      if (await this.requireIdentity(request, response) === undefined) return
       json(response, 200, { rooms: this.runtime.rooms } satisfies ChatroomRoomsResponse)
       return
     }
@@ -503,7 +510,7 @@ export class ChatroomHttpController {
       return
     }
     assertSameOrigin(request)
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     const body = await readJson(request, smallRequestLimit(this.config))
     const room = await this.runtime.createRoom(fieldString(body, 'title'), identity)
@@ -516,7 +523,7 @@ export class ChatroomHttpController {
       return
     }
     assertSameOrigin(request)
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     const body = await readJson(request, smallRequestLimit(this.config))
     const room = await this.runtime.ensureSessionRoom(
@@ -533,7 +540,7 @@ export class ChatroomHttpController {
       return
     }
     assertSameOrigin(request)
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     const body = await readJson(request, smallRequestLimit(this.config))
     const room = await this.runtime.selectRoom(fieldString(body, 'roomId'), identity)
@@ -541,7 +548,7 @@ export class ChatroomHttpController {
   }
 
   private async handleRoomManagement(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     if (request.method === 'GET') {
       const url = new URL(request.url ?? '/', 'http://chatroom.local')
@@ -603,7 +610,7 @@ export class ChatroomHttpController {
       return
     }
     assertSameOrigin(request)
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     const body = await readJson(request, smallRequestLimit(this.config) + 2_048)
     const root = threadRootRequest(body.root)
@@ -617,7 +624,7 @@ export class ChatroomHttpController {
       return
     }
     assertSameOrigin(request)
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     const body = await readJson(request, this.runtime.maxPromptRequestBytes)
     const parsed = promptRequest({ ...body, roomId: '__thread__' }, this.config)
@@ -643,7 +650,7 @@ export class ChatroomHttpController {
       return
     }
     assertSameOrigin(request)
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     const body = await readJson(request, this.runtime.maxPromptRequestBytes)
     const prompt = promptRequest(body, this.config)
@@ -657,7 +664,7 @@ export class ChatroomHttpController {
       return
     }
     assertSameOrigin(request)
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     const body = await readJson(request, smallRequestLimit(this.config))
     const emoji = body.emoji
@@ -677,7 +684,7 @@ export class ChatroomHttpController {
       return
     }
     assertSameOrigin(request)
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     const body = await readJson(request, this.config.maxMessageTextChars * 12 + 32_768)
     const result = await this.runtime.forwardMessages(
@@ -689,12 +696,12 @@ export class ChatroomHttpController {
     json(response, 200, result)
   }
 
-  private handleFile(request: IncomingMessage, response: ServerResponse, fileId: string): void {
+  private async handleFile(request: IncomingMessage, response: ServerResponse, fileId: string): Promise<void> {
     if (request.method !== 'GET') {
       methodNotAllowed(response, 'GET')
       return
     }
-    if (this.requireIdentity(request, response) === undefined) return
+    if (await this.requireIdentity(request, response) === undefined) return
     if (fileId === '' || fileId.includes('/')) throw new ChatroomInputError('文件编号无效。')
     const file = this.runtime.file(fileId)
     response.writeHead(200, {
@@ -712,7 +719,7 @@ export class ChatroomHttpController {
       methodNotAllowed(response, 'GET')
       return
     }
-    if (this.requireIdentity(request, response) === undefined) return
+    if (await this.requireIdentity(request, response) === undefined) return
     let value: unknown
     try {
       value = JSON.parse(decodeURIComponent(encoded))
@@ -741,7 +748,7 @@ export class ChatroomHttpController {
     response: ServerResponse,
     search: URLSearchParams,
   ): Promise<void> {
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     const roomId = search.get('roomId')
     if (roomId === null || roomId === '') throw new ChatroomInputError('缺少共享会话编号。')
@@ -756,14 +763,31 @@ export class ChatroomHttpController {
     const heartbeat = setInterval(() => {
       if (!response.destroyed && !response.writableEnded) response.write(': heartbeat\n\n')
     }, this.config.sseHeartbeatMs)
+    const revalidate = this.config.authMode === 'dsh-auth-only'
+      ? setInterval(() => {
+        void this.requestAccount(request).then(account => {
+          if (account !== undefined || response.destroyed || response.writableEnded) return
+          clearInterval(revalidate)
+          clearInterval(heartbeat)
+          unsubscribe()
+          response.end()
+        }).catch(() => {
+          clearInterval(revalidate)
+          clearInterval(heartbeat)
+          unsubscribe()
+          response.end()
+        })
+      }, (this.config.authDshAuthRevalidateSeconds ?? 60) * 1_000)
+      : undefined
     request.once('close', () => {
       clearInterval(heartbeat)
+      if (revalidate !== undefined) clearInterval(revalidate)
       unsubscribe()
     })
   }
 
-  private handleNotifications(request: IncomingMessage, response: ServerResponse): void {
-    const identity = this.requireIdentity(request, response)
+  private async handleNotifications(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     response.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -775,8 +799,25 @@ export class ChatroomHttpController {
     const heartbeat = setInterval(() => {
       if (!response.destroyed && !response.writableEnded) response.write(': heartbeat\n\n')
     }, this.config.sseHeartbeatMs)
+    const revalidate = this.config.authMode === 'dsh-auth-only'
+      ? setInterval(() => {
+        void this.requestAccount(request).then(account => {
+          if (account !== undefined || response.destroyed || response.writableEnded) return
+          clearInterval(revalidate)
+          clearInterval(heartbeat)
+          unsubscribe()
+          response.end()
+        }).catch(() => {
+          clearInterval(revalidate)
+          clearInterval(heartbeat)
+          unsubscribe()
+          response.end()
+        })
+      }, (this.config.authDshAuthRevalidateSeconds ?? 60) * 1_000)
+      : undefined
     request.once('close', () => {
       clearInterval(heartbeat)
+      if (revalidate !== undefined) clearInterval(revalidate)
       unsubscribe()
     })
   }
@@ -795,9 +836,9 @@ export class ChatroomHttpController {
       return
     }
     assertSameOrigin(request)
-    const identity = this.requireIdentity(request, response)
+    const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
-    const account = this.config.authEnabled ? this.runtime.auth.account(this.authToken(request)) : undefined
+    const account = this.config.authEnabled ? await this.requestAccount(request, response) : undefined
     if (account?.role !== 'super-admin' && !canManageRemoteSettings(this.config, identity.participantId)) {
       json(response, 403, { error: '当前聊天室身份没有模型设置管理权限。' } satisfies ChatroomErrorResponse)
       return
@@ -828,9 +869,9 @@ export class ChatroomHttpController {
     }
   }
 
-  private requireIdentity(request: IncomingMessage, response: ServerResponse) {
+  private async requireIdentity(request: IncomingMessage, response: ServerResponse) {
     const identity = this.config.authEnabled
-      ? this.runtime.auth.account(this.authToken(request))
+      ? await this.requestAccount(request, response)
       : this.runtime.identity(this.token(request))
     if (identity === undefined) {
       json(response, 401, {
@@ -840,10 +881,27 @@ export class ChatroomHttpController {
     return identity
   }
 
-  private requireAccount(request: IncomingMessage, response: ServerResponse): ChatroomAccount | undefined {
-    const account = this.runtime.auth.account(this.authToken(request))
+  private async requireAccount(request: IncomingMessage, response: ServerResponse): Promise<ChatroomAccount | undefined> {
+    const account = await this.requestAccount(request, response)
     if (account === undefined) json(response, 401, { error: '请先登录。' } satisfies ChatroomErrorResponse)
     return account
+  }
+
+  private async requestAccount(request: IncomingMessage, response?: ServerResponse): Promise<ChatroomAccount | undefined> {
+    const resolved = await this.runtime.auth.accountForRequest(
+      this.authToken(request),
+      request.headers,
+      originalRequestUri(request),
+    )
+    if (response !== undefined) this.forwardDshAuthRenewal(response, resolved.renewalCookie)
+    return resolved.account
+  }
+
+  private forwardDshAuthRenewal(response: ServerResponse, cookie: string | undefined): void {
+    if (cookie === undefined) return
+    const current = response.getHeader('Set-Cookie')
+    const values = current === undefined ? [] : Array.isArray(current) ? current.map(String) : [String(current)]
+    response.setHeader('Set-Cookie', [...values, cookie])
   }
 
   private token(request: IncomingMessage): string | undefined {
@@ -907,17 +965,23 @@ function json(response: ServerResponse, status: number, payload: unknown): void 
   response.end(body)
 }
 
-function html(response: ServerResponse, status: number, body: string, head: boolean): void {
+function html(response: ServerResponse, status: number, body: string, head: boolean, config: Config): void {
   response.writeHead(status, {
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store, max-age=0',
-    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    'Content-Security-Policy': chatroomContentSecurityPolicy(config),
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
   })
   response.end(head ? undefined : body)
+}
+
+/** Keep document image loading limited to same-origin assets and configured avatar origins. */
+export function chatroomContentSecurityPolicy(config: Pick<Config, 'authDshAuthAvatarAllowedOrigins'>): string {
+  const imageSources = ["'self'", 'data:', ...(config.authDshAuthAvatarAllowedOrigins ?? [])].join(' ')
+  return `default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src ${imageSources}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
 }
 
 function methodNotAllowed(response: ServerResponse, allow: string): void {

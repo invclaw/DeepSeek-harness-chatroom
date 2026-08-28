@@ -19,8 +19,8 @@ export function automaticAuthRedirect(
   returnTo: string,
   requestUrl: URL,
 ): string | undefined {
-  if (state.bootstrapRequired || state.autoRedirectProvider === undefined
-    || localLoginRequested(requestUrl, returnTo)) return undefined
+  if (state.bootstrapRequired || state.autoRedirectProvider === undefined) return undefined
+  if (state.authMode !== 'dsh-auth-only' && localLoginRequested(requestUrl, returnTo)) return undefined
   return authProviderStartLocation(prefix, state.autoRedirectProvider, returnTo)
 }
 

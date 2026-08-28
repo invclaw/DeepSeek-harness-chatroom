@@ -31,6 +31,12 @@ export interface Config {
   authDshAuthHeaders: boolean
   authDshAuthVerifyUrl: string
   authDshAuthLoginPath: string
+  /** Authentication topology. Omitted by older callers and treated as local. */
+  authMode?: 'local' | 'hybrid' | 'dsh-auth-only'
+  authDshAuthSuperAdminSubjects?: string[]
+  authDshAuthAvatarUrlTemplate?: string
+  authDshAuthAvatarAllowedOrigins?: string[]
+  authDshAuthRevalidateSeconds?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -62,7 +68,12 @@ export const Config: z<Config> = z.object({
   authDshAuthHeaders: z.boolean().default(false),
   authDshAuthVerifyUrl: z.string().default(''),
   authDshAuthLoginPath: z.string().default('/auth/login'),
-})
+  authMode: z.string().pattern(/^(local|hybrid|dsh-auth-only)$/u).default('local'),
+  authDshAuthSuperAdminSubjects: z.array(z.string().min(1).max(512)).default([]),
+  authDshAuthAvatarUrlTemplate: z.string().default(''),
+  authDshAuthAvatarAllowedOrigins: z.array(z.string().min(1)).default([]),
+  authDshAuthRevalidateSeconds: z.number().step(1).min(5).max(3_600).default(60),
+}) as unknown as z<Config>
 
 /** Validate relationships Schemastery cannot express by individual fields. */
 export function validateConfig(config: Config): void {
@@ -93,6 +104,40 @@ export function validateConfig(config: Config): void {
     const loopback = verify.hostname === '127.0.0.1' || verify.hostname === '[::1]' || verify.hostname === 'localhost'
     if (!loopback || verify.protocol !== 'http:' || verify.username !== '' || verify.password !== '' || verify.hash !== '') {
       throw new Error('chatroom: authDshAuthVerifyUrl must be an uncredentialed loopback HTTP URL')
+    }
+  }
+  const mode = config.authMode ?? 'local'
+  if (mode === 'dsh-auth-only' && (config.authEnabled !== true || config.authDshAuthVerifyUrl === '')) {
+    throw new Error('chatroom: dsh-auth-only mode requires authEnabled and authDshAuthVerifyUrl')
+  }
+  if (mode === 'dsh-auth-only' && (config.authDshAuthSuperAdminSubjects ?? []).length === 0) {
+    throw new Error('chatroom: dsh-auth-only mode requires at least one super-admin subject')
+  }
+  if (mode === 'dsh-auth-only' && config.authAllowSelfRegistration) {
+    throw new Error('chatroom: dsh-auth-only mode must disable self registration')
+  }
+  if (mode === 'dsh-auth-only' && config.authDshAuthHeaders) {
+    throw new Error('chatroom: dsh-auth-only mode does not allow direct identity headers')
+  }
+  const allowedOrigins = config.authDshAuthAvatarAllowedOrigins ?? []
+  for (const value of allowedOrigins) {
+    let origin: URL
+    try { origin = new URL(value) } catch { throw new Error('chatroom: avatar allowed origins must be HTTPS origins') }
+    if (origin.protocol !== 'https:' || origin.origin !== value || origin.pathname !== '/' || origin.search !== '' || origin.hash !== '') {
+      throw new Error('chatroom: avatar allowed origins must be HTTPS origins without paths')
+    }
+  }
+  const template = config.authDshAuthAvatarUrlTemplate ?? ''
+  if (template !== '') {
+    if (!template.includes('{username}')) throw new Error('chatroom: avatar URL template must contain {username}')
+    const expanded = template.replaceAll('{username}', 'user')
+    let avatar: URL
+    try { avatar = new URL(expanded) } catch { throw new Error('chatroom: avatar URL template must be an HTTPS URL') }
+    if (avatar.protocol !== 'https:' || avatar.username !== '' || avatar.password !== '' || avatar.hash !== '') {
+      throw new Error('chatroom: avatar URL template must be an HTTPS URL')
+    }
+    if (allowedOrigins.length > 0 && !allowedOrigins.includes(avatar.origin)) {
+      throw new Error('chatroom: avatar URL template origin is not allowlisted')
     }
   }
   if (!config.authDshAuthLoginPath.startsWith('/') || config.authDshAuthLoginPath.startsWith('//')

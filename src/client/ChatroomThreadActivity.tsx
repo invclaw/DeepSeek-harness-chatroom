@@ -1,4 +1,5 @@
 import type { ChatroomThreadPreview } from '../types.js'
+import { ChatroomAvatar } from './ChatroomAvatar.js'
 
 /** Quiet, three-message branch activity summary placed beside its root message. */
 export function ChatroomThreadActivity({
@@ -23,6 +24,12 @@ export function ChatroomThreadActivity({
       <span className="dsh-chatroom-thread-activity-list">
         {preview.recentMessages.map(message => (
           <span key={message.id}>
+            <ChatroomAvatar
+              className="dsh-chatroom-member-avatar"
+              avatarId={message.avatarId}
+              avatarUrl={message.avatarUrl}
+              seed={message.participantId}
+            />
             <strong>{message.displayName}</strong>
             <span>{message.text}</span>
           </span>

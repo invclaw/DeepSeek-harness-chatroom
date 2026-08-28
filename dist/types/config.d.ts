@@ -29,6 +29,12 @@ export interface Config {
     authDshAuthHeaders: boolean;
     authDshAuthVerifyUrl: string;
     authDshAuthLoginPath: string;
+    /** Authentication topology. Omitted by older callers and treated as local. */
+    authMode?: 'local' | 'hybrid' | 'dsh-auth-only';
+    authDshAuthSuperAdminSubjects?: string[];
+    authDshAuthAvatarUrlTemplate?: string;
+    authDshAuthAvatarAllowedOrigins?: string[];
+    authDshAuthRevalidateSeconds?: number;
 }
 export declare const Config: z<Config>;
 /** Validate relationships Schemastery cannot express by individual fields. */
