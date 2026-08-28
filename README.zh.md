@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.1.10" src="https://img.shields.io/badge/version-1.1.10-4f6bff">
+    <img alt="版本 1.1.11" src="https://img.shields.io/badge/version-1.1.11-4f6bff">
     <img alt="Harness RC7 或更高" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -85,6 +85,7 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.1.11** — 群聊切换时保持群头像的身份与排序稳定，并让初始房间目录直接携带企业头像。
 - **1.1.10** — 贯通 dsh-auth/IOA 与 OIDC 企业头像，在所有聊天表面优先显示真实照片并保留卡通降级。
 - **1.1.9** — 原生侧栏重命名持久化为群名，并为共享会话增加更高的行距和成员九宫格群头像。
 - **1.1.8** — 原生分支 frame 被网关拦截时立即启用消息兼容视图，保留完整 Agent 直达入口，并把含大量 Markdown 的分支主题收敛为短标题。

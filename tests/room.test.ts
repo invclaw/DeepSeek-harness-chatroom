@@ -63,7 +63,10 @@ describe('ChatroomRuntime', () => {
     } as never)
     vi.mocked(harness.ctx.agents.get).mockImplementation(id =>
       harness.agents.find(agent => String(agent.id) === String(id)))
-    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const alice = {
+      participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const,
+      avatarUrl: 'https://images.example.com/alice.png',
+    }
     const bob = { participantId: 'bob-id', displayName: 'Bob', avatarId: 'panda' as const }
 
     const [first, second] = await Promise.all([
@@ -77,6 +80,15 @@ describe('ChatroomRuntime', () => {
     expect(runtime.membersForRoom(first.id)).toHaveLength(2)
     expect(runtime.rooms.find(room => room.id === first.id)?.memberAvatarIds).toEqual(
       expect.arrayContaining(['whale', 'panda']),
+    )
+    expect(runtime.rooms.find(room => room.id === first.id)?.memberAvatars).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          participantId: 'alice-id', avatarId: 'whale',
+          avatarUrl: 'https://images.example.com/alice.png',
+        }),
+        expect.objectContaining({ participantId: 'bob-id', avatarId: 'panda' }),
+      ]),
     )
     expect(harness.agents).toHaveLength(2)
     expect(harness.agents[1]?.session.append).not.toHaveBeenCalled()

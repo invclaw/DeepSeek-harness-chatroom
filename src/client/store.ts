@@ -1366,6 +1366,7 @@ function replaceRoom(rooms: readonly ChatroomInfo[], room: ChatroomInfo): readon
 }
 
 function withMemberAvatarIds(room: ChatroomInfo, members: readonly ChatroomMember[]): ChatroomInfo {
+  if (room.memberAvatars !== undefined) return room
   const avatars = members.slice(0, 9)
   return {
     ...room,

@@ -2703,9 +2703,14 @@ var ChatroomRuntime = class {
     return this.projectRoom(this.requireState(roomId));
   }
   projectRoom(state) {
+    const memberAvatars = this.roomMembers(state).slice().sort((left, right) => left.joinedAt - right.joinedAt || left.participantId.localeCompare(right.participantId)).slice(0, 9).map((member) => ({
+      participantId: member.participantId,
+      avatarId: member.avatarId,
+      ...member.avatarUrl === void 0 ? {} : { avatarUrl: member.avatarUrl }
+    }));
     return publicRoom(
       state.record,
-      this.roomMembers(state).slice(0, 9).map((member) => member.avatarId)
+      memberAvatars
     );
   }
   acceptSessionTitle(session, title) {
@@ -2825,13 +2830,14 @@ function publicIdentity(record) {
 function publicFile(record) {
   return { id: record.id, name: record.name, mediaType: record.mediaType, bytes: record.bytes };
 }
-function publicRoom(record, memberAvatarIds) {
+function publicRoom(record, memberAvatars) {
   return {
     id: record.id,
     title: record.title,
     aiDisplayName: record.aiDisplayName,
     sessionId: record.sessionId,
-    memberAvatarIds
+    memberAvatarIds: memberAvatars.map((member) => member.avatarId),
+    memberAvatars
   };
 }
 function memberRole(record, participantId) {

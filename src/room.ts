@@ -13,7 +13,7 @@ import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { ChatroomAuth } from './auth.js'
 import type { Config } from './config.js'
-import { isChatroomAvatarId, fallbackAvatarId, type ChatroomAvatarId } from './avatars.js'
+import { isChatroomAvatarId, fallbackAvatarId } from './avatars.js'
 import {
   chatroomDomainSpec,
   type DirectConversationRecord,
@@ -59,6 +59,7 @@ import type {
   ChatroomPromptResponse,
   ChatroomReaction,
   ChatroomReplyReference,
+  ChatroomRoomAvatar,
   ChatroomRoomInviteCandidate,
   ChatroomServerEvent,
   ChatroomSnapshotEvent,
@@ -1521,9 +1522,18 @@ export class ChatroomRuntime {
   }
 
   private projectRoom(state: RoomState): ChatroomInfo {
+    // Presence ordering is intentionally excluded so merely opening a room cannot reshuffle its sidebar avatar.
+    const memberAvatars = this.roomMembers(state).slice()
+      .sort((left, right) => left.joinedAt - right.joinedAt
+        || left.participantId.localeCompare(right.participantId))
+      .slice(0, 9).map(member => ({
+      participantId: member.participantId,
+      avatarId: member.avatarId,
+      ...(member.avatarUrl === undefined ? {} : { avatarUrl: member.avatarUrl }),
+    }))
     return publicRoom(
       state.record,
-      this.roomMembers(state).slice(0, 9).map(member => member.avatarId),
+      memberAvatars,
     )
   }
 
@@ -1664,13 +1674,14 @@ function publicFile(record: FileRecord): ChatroomFileReference {
   return { id: record.id, name: record.name, mediaType: record.mediaType, bytes: record.bytes }
 }
 
-function publicRoom(record: RoomRecord, memberAvatarIds: readonly ChatroomAvatarId[]): ChatroomInfo {
+function publicRoom(record: RoomRecord, memberAvatars: readonly ChatroomRoomAvatar[]): ChatroomInfo {
   return {
     id: record.id,
     title: record.title,
     aiDisplayName: record.aiDisplayName,
     sessionId: record.sessionId,
-    memberAvatarIds,
+    memberAvatarIds: memberAvatars.map(member => member.avatarId),
+    memberAvatars,
   }
 }
 

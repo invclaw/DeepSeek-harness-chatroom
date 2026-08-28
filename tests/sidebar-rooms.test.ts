@@ -74,4 +74,26 @@ describe('native sidebar room rows', () => {
     image.dispatchEvent(new Event('error'))
     expect(document.querySelector('[data-dsh-chatroom-group-avatar]')?.textContent).toBe('🐶')
   })
+
+  it('keeps the room-directory avatar stable when selecting a room loads a different roster projection', () => {
+    document.body.innerHTML = '<div role="treeitem" aria-selected="true"><span></span><span>项目群</span></div>'
+    const room = {
+      id: 'room', title: '项目群', aiDisplayName: 'DeepSeek', sessionId: 'session',
+      memberAvatars: [{ participantId: 'alice', avatarId: 'whale' }],
+    } as const
+    const snapshot = {
+      rooms: [room], room,
+      members: [{
+        participantId: 'legacy-alice', avatarId: 'dog',
+        avatarUrl: 'https://images.example.com/legacy-alice.png',
+      }],
+    } as unknown as ChatroomView
+
+    reconcileSidebarRoomRows(document, snapshot)
+
+    const avatar = document.querySelector<HTMLElement>('[data-dsh-chatroom-group-avatar]')!
+    expect(avatar.textContent).toBe('🐳')
+    expect(avatar.querySelector('img')).toBeNull()
+    expect(avatar.dataset.signature).toBe('alice:whale:')
+  })
 })

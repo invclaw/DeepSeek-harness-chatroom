@@ -56,6 +56,11 @@ function rowContainsTitle(row: HTMLElement, title: string): boolean {
 }
 
 function roomAvatars(room: ChatroomInfo, snapshot: ChatroomView): readonly ChatroomRoomAvatar[] {
+  if (room.memberAvatars !== undefined) return room.memberAvatars.slice(0, 9)
+  if (room.memberAvatarIds !== undefined) {
+    return room.memberAvatarIds.slice(0, 9)
+      .map((avatarId, index) => ({ participantId: String(index), avatarId }))
+  }
   if (snapshot.room?.id === room.id && snapshot.members.length > 0) {
     return snapshot.members.slice(0, 9).map(member => ({
       participantId: member.participantId,
@@ -63,9 +68,7 @@ function roomAvatars(room: ChatroomInfo, snapshot: ChatroomView): readonly Chatr
       ...(member.avatarUrl === undefined ? {} : { avatarUrl: member.avatarUrl }),
     }))
   }
-  if (room.memberAvatars !== undefined) return room.memberAvatars.slice(0, 9)
-  return (room.memberAvatarIds ?? []).slice(0, 9)
-    .map((avatarId, index) => ({ participantId: String(index), avatarId }))
+  return []
 }
 
 function decorateRoomRow(row: HTMLElement, room: ChatroomInfo, avatars: readonly ChatroomRoomAvatar[]): void {

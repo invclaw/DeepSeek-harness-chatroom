@@ -251,6 +251,32 @@ describe('ChatroomClientStore', () => {
     expect(FakeEventSource.instances[1]?.closed).toBe(true)
   })
 
+  it('keeps the directory avatar projection when the selected-room roster arrives', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = {
+      ...roomInfo(),
+      memberAvatarIds: ['whale' as const],
+      memberAvatars: [{ participantId: 'alice-id', avatarId: 'whale' as const }],
+    }
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(identity, [room]))))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    store.activateSession(room.sessionId)
+
+    FakeEventSource.instances[1]?.emit({
+      type: 'snapshot', room, identity, online: 1,
+      members: [{
+        participantId: 'legacy-alice', displayName: '旧账号', avatarId: 'dog',
+        avatarUrl: 'https://images.example.com/legacy-alice.png',
+        role: 'member', joinedAt: 1, lastSeenAt: 2, online: true,
+      }],
+      reactions: [], threadPreviews: [],
+    })
+
+    expect(store.getSnapshot().room?.memberAvatars).toEqual(room.memberAvatars)
+  })
+
   it('sends selected files without placeholder composer text', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()
