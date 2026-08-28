@@ -136,6 +136,21 @@ describe('ChatroomAuth', () => {
     expect(member?.account.role).toBe('member')
   })
 
+  it('preserves legacy dsh-auth super-admin roles during migration', async () => {
+    const fixture = createAuth({ authDshAuthSuperAdminSubjects: ['masonxhuang'] })
+    const account: AccountRecord = {
+      id: 'legacy-admin', username: 'masonxhuang', usernameKey: 'masonxhuang', displayName: 'Mason',
+      avatarId: 'dog', role: 'super-admin', status: 'active', createdAt: 1, updatedAt: 1, lastLoginAt: 1,
+      externalProviderId: 'dsh-auth', externalSubject: 'admin',
+    }
+    await fixture.accounts.put(account.id, account)
+    await fixture.external.put('legacy-link', { providerId: 'dsh-auth', subject: 'admin', userId: account.id, createdAt: 1 })
+
+    await fixture.auth.start()
+
+    expect(fixture.accounts.get(account.id)).toMatchObject({ role: 'super-admin', externalSubject: 'admin' })
+  })
+
   it('revalidates dsh-auth-only sessions, refreshes profiles, and revokes stale local sessions', async () => {
     const verified = (displayName: string, cookie: string) => new Response(null, {
       status: 204,

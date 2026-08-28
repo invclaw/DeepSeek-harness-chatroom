@@ -154,7 +154,10 @@ export class ChatroomAuth {
       if (link.providerId !== 'dsh-auth') continue
       const account = this.accounts.get(link.userId)
       if (account === undefined) continue
-      const role = (this.config.authDshAuthSuperAdminSubjects ?? []).includes(link.subject) ? 'super-admin' : 'member'
+      const role = account.role === 'super-admin'
+        || (this.config.authDshAuthSuperAdminSubjects ?? []).includes(link.subject)
+        ? 'super-admin'
+        : 'member'
       const avatarUrl = this.externalAvatarUrl(account.username)
       if (account.externalProviderId === 'dsh-auth' && account.externalSubject === link.subject
         && account.role === role && account.avatarUrl === avatarUrl) continue

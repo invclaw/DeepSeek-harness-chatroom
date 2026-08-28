@@ -60,6 +60,7 @@ describe('chatroom configuration and identity cookie', () => {
       authAllowSelfRegistration: false,
       authDshAuthVerifyUrl: 'http://127.0.0.1:3080/auth/verify',
       authMode: 'dsh-auth-only' as const,
+      authDshAuthSuperAdminSubjects: ['masonxhuang'],
       authDshAuthAvatarUrlTemplate: 'https://avatars.example.com/{username}.png',
       authDshAuthAvatarAllowedOrigins: ['https://avatars.example.com'],
     }
@@ -68,6 +69,8 @@ describe('chatroom configuration and identity cookie', () => {
       .toThrow('avatar allowed origins')
     expect(() => validateConfig({ ...config, authDshAuthVerifyUrl: 'http://example.com/auth/verify' }))
       .toThrow('loopback HTTP URL')
+    expect(() => validateConfig({ ...config, authDshAuthSuperAdminSubjects: [] }))
+      .toThrow('at least one super-admin subject')
   })
 
   it('limits document images to configured avatar origins', () => {

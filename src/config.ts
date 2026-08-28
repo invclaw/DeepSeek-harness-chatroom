@@ -110,6 +110,9 @@ export function validateConfig(config: Config): void {
   if (mode === 'dsh-auth-only' && (config.authEnabled !== true || config.authDshAuthVerifyUrl === '')) {
     throw new Error('chatroom: dsh-auth-only mode requires authEnabled and authDshAuthVerifyUrl')
   }
+  if (mode === 'dsh-auth-only' && (config.authDshAuthSuperAdminSubjects ?? []).length === 0) {
+    throw new Error('chatroom: dsh-auth-only mode requires at least one super-admin subject')
+  }
   if (mode === 'dsh-auth-only' && config.authAllowSelfRegistration) {
     throw new Error('chatroom: dsh-auth-only mode must disable self registration')
   }

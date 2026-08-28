@@ -69,6 +69,9 @@ function validateConfig(config) {
   if (mode === "dsh-auth-only" && (config.authEnabled !== true || config.authDshAuthVerifyUrl === "")) {
     throw new Error("chatroom: dsh-auth-only mode requires authEnabled and authDshAuthVerifyUrl");
   }
+  if (mode === "dsh-auth-only" && (config.authDshAuthSuperAdminSubjects ?? []).length === 0) {
+    throw new Error("chatroom: dsh-auth-only mode requires at least one super-admin subject");
+  }
   if (mode === "dsh-auth-only" && config.authAllowSelfRegistration) {
     throw new Error("chatroom: dsh-auth-only mode must disable self registration");
   }
@@ -219,7 +222,7 @@ var ChatroomAuth = class {
       if (link.providerId !== "dsh-auth") continue;
       const account = this.accounts.get(link.userId);
       if (account === void 0) continue;
-      const role = (this.config.authDshAuthSuperAdminSubjects ?? []).includes(link.subject) ? "super-admin" : "member";
+      const role = account.role === "super-admin" || (this.config.authDshAuthSuperAdminSubjects ?? []).includes(link.subject) ? "super-admin" : "member";
       const avatarUrl = this.externalAvatarUrl(account.username);
       if (account.externalProviderId === "dsh-auth" && account.externalSubject === link.subject && account.role === role && account.avatarUrl === avatarUrl) continue;
       const { avatarUrl: _oldAvatarUrl, ...withoutAvatar } = account;
