@@ -48,6 +48,7 @@ interface ChatroomPanelsProps extends ChatroomAccountPanelProps {
 }
 
 let branchFrameInstance = 0
+const BRANCH_FRAME_COMPATIBILITY_KEY = 'dsh-chatroom:branch-frame-compatibility'
 
 /** Persistent member management, branch conversation, and in-page alerts. */
 export function ChatroomPanels(props: ChatroomPanelsProps): JSX.Element {
@@ -250,7 +251,7 @@ function ThreadPanel(props: ChatroomPanelsProps & {
   const [attempt, setAttempt] = useState(0)
   const [preparedAttempt, setPreparedAttempt] = useState(-1)
   const [ready, setReady] = useState(false)
-  const [compatibilityMode, setCompatibilityMode] = useState(false)
+  const [compatibilityMode, setCompatibilityMode] = useState(branchFrameCompatibilityPreferred)
   if (frameSeed.current === undefined && parentSessionId !== undefined) {
     frameSeed.current = { thread, parentSessionId }
   }
@@ -310,6 +311,7 @@ function ThreadPanel(props: ChatroomPanelsProps & {
       if (settled) return
       globalThis.clearInterval(poll)
       if (parentSessionId !== undefined) restoreParentSessionSelection(parentSessionId)
+      rememberBlockedBranchFrame()
       setCompatibilityMode(true)
     }, 8_000)
     probe()
@@ -346,6 +348,7 @@ function ThreadPanel(props: ChatroomPanelsProps & {
             frameUrl={frameUrl!}
             retry={() => {
               frameSeed.current = { thread, parentSessionId }
+              forgetBlockedBranchFrame()
               setCompatibilityMode(false)
               setAttempt(value => value + 1)
             }}
@@ -364,6 +367,7 @@ function ThreadPanel(props: ChatroomPanelsProps & {
                   // The browser can reject an embedded document before exposing its content.
                 }
                 restoreParentSessionSelection(parentSessionId)
+                rememberBlockedBranchFrame()
                 setCompatibilityMode(true)
               }}
             />}
@@ -588,6 +592,30 @@ function branchSummary(text: string, limit = 48): string {
   const characters = [...normalized]
   if (characters.length === 0) return '分支消息'
   return characters.length <= limit ? normalized : `${characters.slice(0, limit).join('')}…`
+}
+
+function branchFrameCompatibilityPreferred(): boolean {
+  try {
+    return globalThis.sessionStorage?.getItem(BRANCH_FRAME_COMPATIBILITY_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function rememberBlockedBranchFrame(): void {
+  try {
+    globalThis.sessionStorage?.setItem(BRANCH_FRAME_COMPATIBILITY_KEY, '1')
+  } catch {
+    // Storage can be unavailable in isolated browser contexts; the current panel still falls back.
+  }
+}
+
+function forgetBlockedBranchFrame(): void {
+  try {
+    globalThis.sessionStorage?.removeItem(BRANCH_FRAME_COMPATIBILITY_KEY)
+  } catch {
+    // Storage can be unavailable in isolated browser contexts; retry still applies to the current panel.
+  }
 }
 
 function isBranchReadyMessage(value: unknown, threadId: string): boolean {

@@ -8,7 +8,10 @@ import { RoomIdentityAction } from '../src/client/RoomIdentityAction.js'
 import { BRANCH_FRAME_READY, markBranchFrameSessionReady } from '../src/client/branch-frame.js'
 import type { ChatroomView } from '../src/client/store.js'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  sessionStorage.clear()
+})
 
 describe('native chatroom integration', () => {
   it('does not add a floating shared-session launcher', () => {
@@ -312,12 +315,26 @@ describe('native chatroom integration', () => {
     fireEvent.load(frame)
 
     expect(screen.getByText('当前访问入口不允许嵌入完整 Agent，已切换到分支兼容模式。')).toBeTruthy()
+    expect(sessionStorage.getItem('dsh-chatroom:branch-frame-compatibility')).toBe('1')
     expect(screen.getByText('兼容模式消息')).toBeTruthy()
     const fullAgent = screen.getByRole('link', { name: '在新标签打开完整 Agent' }) as HTMLAnchorElement
     expect(new URL(fullAgent.href).searchParams.get('dsh-chatroom-thread')).toBe('thread')
     fireEvent.change(screen.getByPlaceholderText('回复分支；输入 @AI 让 AI 在本分支回答'), { target: { value: '@AI 你好' } })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
     expect(sendThreadMessage).toHaveBeenCalledWith('@AI 你好')
+  })
+
+  it('reuses the compatibility view after an origin rejects a branch frame', () => {
+    sessionStorage.setItem('dsh-chatroom:branch-frame-compatibility', '1')
+    renderEntry(view({
+      thread: {
+        id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
+        root: { messageId: 'assistant:1', displayName: 'DeepSeek', text: '后续分支', role: 'ai' },
+      },
+    }))
+
+    expect(screen.queryByTitle('分支回复：后续分支')).toBeNull()
+    expect(screen.getByText('当前访问入口不允许嵌入完整 Agent，已切换到分支兼容模式。')).toBeTruthy()
   })
 
   it('opens a target chooser for a merged multi-message forward', () => {
