@@ -701,10 +701,15 @@ export const CHATROOM_STYLES = `
 .dsh-chatroom-thread-frame-status small { color: var(--text-tertiary, #9ca3af); font-size: 11px; }
 .dsh-chatroom-thread-frame-status button { border: 0; border-radius: 9px; background: var(--brand-primary, #4f7cff); color: #fff; padding: 8px 12px; font: inherit; cursor: pointer; }
 .dsh-chatroom-thread-frame-error { display: grid; place-items: center; color: var(--text-secondary, #6b7280); }
+.dsh-chatroom-thread-compatibility { display: grid; grid-template-rows: auto auto 1fr auto; min-height: 0; }
+.dsh-chatroom-thread-compatibility-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border-primary, #e5e7eb); background: color-mix(in srgb, var(--brand-primary, #4f7cff) 6%, var(--bg-primary, #fff)); padding: 9px 16px; color: var(--text-secondary, #6b7280); font-size: 12px; }
+.dsh-chatroom-thread-compatibility-notice > span:last-child { display: flex; align-items: center; gap: 8px; flex: none; }
+.dsh-chatroom-thread-compatibility-notice :is(a, button) { border: 0; border-radius: 8px; background: transparent; color: var(--brand-primary, #4f7cff); padding: 5px 7px; font: inherit; text-decoration: none; cursor: pointer; }
+.dsh-chatroom-thread-compatibility-notice a { background: var(--brand-primary, #4f7cff); color: #fff; }
 .dsh-chatroom-thread-panel > header { display: flex; align-items: center; justify-content: space-between; min-height: 64px; border-bottom: 1px solid var(--border-primary, #e5e7eb); padding: 0 18px; }
-.dsh-chatroom-thread-panel > header div { display: grid; gap: 2px; }
+.dsh-chatroom-thread-panel > header div { display: grid; gap: 2px; min-width: 0; }
 .dsh-chatroom-thread-panel > header strong { font-size: 16px; }
-.dsh-chatroom-thread-panel > header small { color: var(--text-secondary, #6b7280); font-size: 12px; }
+.dsh-chatroom-thread-panel > header small { overflow: hidden; color: var(--text-secondary, #6b7280); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .dsh-chatroom-thread-panel > header button { border: 0; background: transparent; color: var(--text-secondary, #6b7280); font: inherit; font-size: 25px; cursor: pointer; }
 .dsh-chatroom-thread-root { display: grid; gap: 5px; margin: 14px 16px 4px; border-left: 3px solid var(--brand-primary, #4f7cff); border-radius: 0 10px 10px 0; background: color-mix(in srgb, var(--brand-primary, #4f7cff) 7%, transparent); padding: 10px 12px; }
 .dsh-chatroom-thread-root strong { font-size: 12px; }

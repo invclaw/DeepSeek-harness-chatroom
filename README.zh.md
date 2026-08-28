@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.1.7" src="https://img.shields.io/badge/version-1.1.7-4f6bff">
+    <img alt="版本 1.1.8" src="https://img.shields.io/badge/version-1.1.8-4f6bff">
     <img alt="Harness RC7 或更高" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -63,7 +63,7 @@
 ### 完整复用原生 Agent
 
 - 原生侧栏、对话/轨迹页签、输入框、模型与权限选择、思考/工具过程、Session log、审批、问答、斜杠命令、停止/排队/转向、失败详情和重试全部保留。
-- 持久分支从右侧分栏打开，每个分支拥有独立 Harness Session；支持 Markdown、`@` 候选、图片/文件、引用、贴表情、转发、多选及完整 Agent 能力，但不会继续创建嵌套群聊分支。v1.1.7 阻止隔离分支运行时在启动过程中跳回父群聊，消除间歇性的 30 秒加载超时。
+- 持久分支从右侧分栏打开，每个分支拥有独立 Harness Session；支持 Markdown、`@` 候选、图片/文件、引用、贴表情、转发、多选及完整 Agent 能力，但不会继续创建嵌套群聊分支。访问网关拒绝嵌入页面时立即切换到分支兼容视图，不再等待超时；完整 Agent 仍可在新标签打开。
 - 历史图片持久保存。选用纯文本模型时，只有本次模型请求会把图片替换为确定性的说明文字，界面仍显示原图。
 
 ### 消息与富媒体
@@ -83,6 +83,8 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.1.8** — 原生分支 frame 被网关拦截时立即启用消息兼容视图，保留完整 Agent 直达入口，并把含大量 Markdown 的分支主题收敛为短标题。
+- **1.1.7** — 隔离分支运行时启动时保持目标 Session，不再跳回父群聊。
 - **1.1.6** — 新建或恢复分支时把分支 Session 挂载到原生 Workspace，保留的 Harness iframe 可以直接选中目标会话，不再等待到超时。
 - **1.1.5** — 在原生空白 Session 首屏直接建群并勾选平台成员。
 - **1.1.4** — 保证原生“新会话”创建独立 Session，并排除分支 Session 的空白会话复用。
