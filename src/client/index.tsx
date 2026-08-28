@@ -20,6 +20,7 @@ import { installFreshSessionStart } from './fresh-session.js'
 import { NewGroupSetupDock } from './NewGroupSetupDock.js'
 import { installRemoteConfigurationApi } from './remote-configuration.js'
 import { RoomIdentityAction } from './RoomIdentityAction.js'
+import { installSidebarRoomRows } from './sidebar-rooms.js'
 import { ChatroomClientStore } from './store.js'
 import { CHATROOM_STYLES } from './styles.js'
 import {
@@ -77,6 +78,7 @@ export function apply(ctx: ClientContext): void {
     const restoreConfiguration = installRemoteConfigurationApi(connection)
     const restoreSettingsMirror = activateRemoteSettingsMirror(ctx.get('settingsScope'))
     const restorePrompt = installNativePromptIdentity(connection.api, store)
+    const restoreSidebarRoomRows = installSidebarRoomRows(store)
     let activeBranchFrame = branchFrame
     let branchStaged = false
     const stageBranch = () => {
@@ -132,6 +134,7 @@ export function apply(ctx: ClientContext): void {
       unsubscribeSessions()
       globalThis.removeEventListener('message', receiveBranchSwitch)
       restorePrompt()
+      restoreSidebarRoomRows()
       restoreSettingsMirror()
       restoreConfiguration()
       store.stop()

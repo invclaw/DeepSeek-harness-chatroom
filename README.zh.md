@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.1.8" src="https://img.shields.io/badge/version-1.1.8-4f6bff">
+    <img alt="版本 1.1.9" src="https://img.shields.io/badge/version-1.1.9-4f6bff">
     <img alt="Harness RC7 或更高" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -58,6 +58,7 @@
 - 普通 Harness Session 首次使用时自动成为持久群聊；点击“新会话”始终创建独立的新群。
 - 普通消息只在人类之间实时同步，不触发 Agent；明确输入 `@AI` 或配置的 AI 名称才请求回复。
 - 原生 `@` 菜单同时列出 Agent 和当前群成员。发送者身份在 Host 接纳 Session 消息前写入，浏览器和模型看到相同的发言人。
+- 共享会话继续使用原生侧栏，并增加更舒展的行高和成员九宫格群头像；在原生侧栏重命名会同步写入持久群名，切换会话和重启后都不会回滚。
 - 会话头显示当前身份、在线人数和“群管理”；跨群页内提示、标题未读数和可选浏览器系统通知全部可用。
 
 ### 完整复用原生 Agent
@@ -83,6 +84,7 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.1.9** — 原生侧栏重命名持久化为群名，并为共享会话增加更高的行距和成员九宫格群头像。
 - **1.1.8** — 原生分支 frame 被网关拦截时立即启用消息兼容视图，保留完整 Agent 直达入口，并把含大量 Markdown 的分支主题收敛为短标题。
 - **1.1.7** — 隔离分支运行时启动时保持目标 Session，不再跳回父群聊。
 - **1.1.6** — 新建或恢复分支时把分支 Session 挂载到原生 Workspace，保留的 Harness iframe 可以直接选中目标会话，不再等待到超时。

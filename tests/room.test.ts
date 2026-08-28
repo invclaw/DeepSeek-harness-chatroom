@@ -75,6 +75,9 @@ describe('ChatroomRuntime', () => {
     expect(first).toMatchObject({ sessionId: 'native-session-1', title: '新会话' })
     expect(runtime.rooms).toHaveLength(2)
     expect(runtime.membersForRoom(first.id)).toHaveLength(2)
+    expect(runtime.rooms.find(room => room.id === first.id)?.memberAvatarIds).toEqual(
+      expect.arrayContaining(['whale', 'panda']),
+    )
     expect(harness.agents).toHaveLength(2)
     expect(harness.agents[1]?.session.append).not.toHaveBeenCalled()
     await runtime.stop()
@@ -159,6 +162,32 @@ describe('ChatroomRuntime', () => {
     const second = new ChatroomRuntime(harness.ctx, config())
     await second.start()
     expect(second.room.title).toBe('新版大厅')
+    await second.stop()
+  })
+
+  it('persists native Session title changes as the shared room title', async () => {
+    const harness = fakeHarness()
+    const first = new ChatroomRuntime(harness.ctx, config())
+    await first.start()
+    const session = harness.agents[0]!.session
+
+    first.handleSessionEvent(session, {
+      type: 'session/title',
+      seq: 1,
+      time: 2,
+      data: { title: '原生侧栏改名', messageSeqs: [], source: { kind: 'user' } },
+    } as SessionEvent)
+
+    expect(first.room.title).toBe('原生侧栏改名')
+    await vi.waitFor(() => {
+      expect((harness.tables.get('rooms')?.get('lobby') as { title?: string } | undefined)?.title)
+        .toBe('原生侧栏改名')
+    })
+    await first.stop()
+
+    const second = new ChatroomRuntime(harness.ctx, config())
+    await second.start()
+    expect(second.room.title).toBe('原生侧栏改名')
     await second.stop()
   })
 
@@ -585,7 +614,7 @@ function fakeHarness(): {
         const agent = {
           id: sessionId,
           options: { provider: 'deepseek', model: 'chat' },
-          session: { events: [], append: vi.fn() },
+          session: { id: sessionId, events: [], append: vi.fn() },
           followup: vi.fn(),
           steer: vi.fn(),
         } as unknown as (typeof agents)[number]

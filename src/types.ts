@@ -171,6 +171,8 @@ export interface ChatroomInfo {
   readonly title: string
   readonly aiDisplayName: string
   readonly sessionId: string
+  /** Up to nine member avatars used by compact room-directory surfaces. */
+  readonly memberAvatarIds?: readonly ChatroomAvatarId[]
 }
 
 /** Result of one room-management mutation. */

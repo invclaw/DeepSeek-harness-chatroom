@@ -13,7 +13,7 @@ import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { ChatroomAuth } from './auth.js'
 import type { Config } from './config.js'
-import { isChatroomAvatarId, fallbackAvatarId } from './avatars.js'
+import { isChatroomAvatarId, fallbackAvatarId, type ChatroomAvatarId } from './avatars.js'
 import {
   chatroomDomainSpec,
   type DirectConversationRecord,
@@ -123,6 +123,7 @@ export class ChatroomRuntime {
   private directMessages: KvTable<string, DirectMessageRecord> | undefined
   private authentication: ChatroomAuth | undefined
   private readonly states = new Map<string, RoomState>()
+  private readonly roomTitleWrites = new Map<string, Promise<void>>()
   private readonly sessionRoomCreations = new Map<string, Promise<ChatroomInfo>>()
   private readonly threadStates = new Map<string, ThreadState>()
   private readonly notificationClients = new Set<NotificationClient>()
@@ -143,13 +144,13 @@ export class ChatroomRuntime {
 
   /** Ordered public room directory. */
   get rooms(): readonly ChatroomInfo[] {
-    const records = [...this.states.values()].map(state => state.record)
-    records.sort((left, right) => {
-      if (left.id === this.config.roomId) return -1
-      if (right.id === this.config.roomId) return 1
-      return left.createdAt - right.createdAt || left.id.localeCompare(right.id)
+    const states = [...this.states.values()]
+    states.sort((left, right) => {
+      if (left.record.id === this.config.roomId) return -1
+      if (right.record.id === this.config.roomId) return 1
+      return left.record.createdAt - right.record.createdAt || left.record.id.localeCompare(right.record.id)
     })
-    return records.map(publicRoom)
+    return states.map(state => this.projectRoom(state))
   }
 
   /** Current member roster for one room-management response. */
@@ -242,6 +243,8 @@ export class ChatroomRuntime {
     }
     for (const client of this.notificationClients) client.response.end()
     this.notificationClients.clear()
+    await Promise.allSettled(this.roomTitleWrites.values())
+    this.roomTitleWrites.clear()
     await Promise.allSettled([...this.states.values()].map(async (state) => {
       await state.admission
       await state.activation?.catch(() => undefined)
@@ -352,7 +355,7 @@ export class ChatroomRuntime {
       const binding = await this.ensureRoom(id)
       this.ensureRoomTitle(binding, record.title)
       await this.touchMember(id, identity)
-      return publicRoom(record)
+      return this.projectRoom(state)
     } catch (error) {
       this.states.delete(id)
       await this.requireRoomRecords().delete(id)
@@ -370,7 +373,7 @@ export class ChatroomRuntime {
     const existing = [...this.states.values()].find(state => state.record.sessionId === sessionId)
     if (existing !== undefined) {
       await this.touchMember(existing.record.id, identity)
-      return publicRoom(existing.record)
+      return this.projectRoom(existing)
     }
     const pending = this.sessionRoomCreations.get(sessionId)
     if (pending !== undefined) {
@@ -417,7 +420,7 @@ export class ChatroomRuntime {
     try {
       await this.ensureRoom(id)
       await this.touchMember(id, identity)
-      return publicRoom(record)
+      return this.projectRoom(state)
     } catch (error) {
       this.states.delete(id)
       await this.requireRoomRecords().delete(id)
@@ -446,8 +449,9 @@ export class ChatroomRuntime {
     state.record = record
     const binding = await this.ensureRoom(roomId)
     this.ensureRoomTitle(binding, record.title)
-    this.broadcast(state, { type: 'room-updated', room: publicRoom(record), members: this.roomMembers(state) })
-    return publicRoom(record)
+    const room = this.projectRoom(state)
+    this.broadcast(state, { type: 'room-updated', room, members: this.roomMembers(state) })
+    return room
   }
 
   /** Promote or demote one room member; only the owner controls administrators. */
@@ -475,7 +479,7 @@ export class ChatroomRuntime {
     })
     state.record = record
     const members = this.roomMembers(state)
-    this.broadcast(state, { type: 'room-updated', room: publicRoom(record), members })
+    this.broadcast(state, { type: 'room-updated', room: this.projectRoom(state), members })
     return members
   }
 
@@ -512,7 +516,7 @@ export class ChatroomRuntime {
       })
     }
     const members = this.roomMembers(state)
-    this.broadcast(state, { type: 'room-updated', room: publicRoom(state.record), members })
+    this.broadcast(state, { type: 'room-updated', room: this.projectRoom(state), members })
     return members
   }
 
@@ -732,7 +736,7 @@ export class ChatroomRuntime {
     state.clients.add(client)
     const snapshot: ChatroomSnapshotEvent = {
       type: 'snapshot',
-      room: publicRoom(state.record),
+      room: this.projectRoom(state),
       identity,
       online: onlineCount(state),
       members: this.roomMembers(state),
@@ -978,7 +982,12 @@ export class ChatroomRuntime {
 
   /** Project committed AI output into its parent room or branch stream. */
   handleSessionEvent(session: Session, event: SessionEvent): void {
-    if (!this.isReady || event.type !== 'assistant/message') return
+    if (!this.isReady) return
+    if (event.type === 'session/title') {
+      this.acceptSessionTitle(session, event.data.title)
+      return
+    }
+    if (event.type !== 'assistant/message') return
     const text = assistantText(event.data.message.content)
     if (text === '') return
     const thread = [...this.threadStates.values()].find(state => state.record.sessionId === String(session.id))
@@ -1501,7 +1510,42 @@ export class ChatroomRuntime {
   }
 
   private requireRoom(roomId: string): ChatroomInfo {
-    return publicRoom(this.requireState(roomId).record)
+    return this.projectRoom(this.requireState(roomId))
+  }
+
+  private projectRoom(state: RoomState): ChatroomInfo {
+    return publicRoom(
+      state.record,
+      this.roomMembers(state).slice(0, 9).map(member => member.avatarId),
+    )
+  }
+
+  private acceptSessionTitle(session: Session, title: string): void {
+    const state = [...this.states.values()].find(candidate => candidate.record.sessionId === String(session.id))
+    if (state === undefined) return
+    const normalizedTitle = normalizeRoomTitle(title, this.config.maxRoomTitleChars)
+    if (state.record.title === normalizedTitle) return
+    const previous = state.record
+    const next = { ...previous, title: normalizedTitle }
+    state.record = next
+    const priorWrite = this.roomTitleWrites.get(next.id) ?? Promise.resolve()
+    const write = priorWrite.catch(() => undefined).then(async () => {
+      await this.requireRoomRecords().put(next.id, next)
+    })
+    this.roomTitleWrites.set(next.id, write)
+    void write.then(() => {
+      if (state.record.title !== normalizedTitle) return
+      this.broadcast(state, {
+        type: 'room-updated',
+        room: this.projectRoom(state),
+        members: this.roomMembers(state),
+      })
+    }).catch((error: unknown) => {
+      if (state.record.title === normalizedTitle) state.record = previous
+      this.log.warn('Native Session title persistence failed: %s', String(error))
+    }).finally(() => {
+      if (this.roomTitleWrites.get(next.id) === write) this.roomTitleWrites.delete(next.id)
+    })
   }
 
   private requireState(roomId: string): RoomState {
@@ -1612,12 +1656,13 @@ function publicFile(record: FileRecord): ChatroomFileReference {
   return { id: record.id, name: record.name, mediaType: record.mediaType, bytes: record.bytes }
 }
 
-function publicRoom(record: RoomRecord): ChatroomInfo {
+function publicRoom(record: RoomRecord, memberAvatarIds: readonly ChatroomAvatarId[]): ChatroomInfo {
   return {
     id: record.id,
     title: record.title,
     aiDisplayName: record.aiDisplayName,
     sessionId: record.sessionId,
+    memberAvatarIds,
   }
 }
 

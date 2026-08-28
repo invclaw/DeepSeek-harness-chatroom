@@ -1285,6 +1285,7 @@ var ChatroomRuntime = class {
   directMessages;
   authentication;
   states = /* @__PURE__ */ new Map();
+  roomTitleWrites = /* @__PURE__ */ new Map();
   sessionRoomCreations = /* @__PURE__ */ new Map();
   threadStates = /* @__PURE__ */ new Map();
   notificationClients = /* @__PURE__ */ new Set();
@@ -1296,13 +1297,13 @@ var ChatroomRuntime = class {
   }
   /** Ordered public room directory. */
   get rooms() {
-    const records = [...this.states.values()].map((state) => state.record);
-    records.sort((left, right) => {
-      if (left.id === this.config.roomId) return -1;
-      if (right.id === this.config.roomId) return 1;
-      return left.createdAt - right.createdAt || left.id.localeCompare(right.id);
+    const states = [...this.states.values()];
+    states.sort((left, right) => {
+      if (left.record.id === this.config.roomId) return -1;
+      if (right.record.id === this.config.roomId) return 1;
+      return left.record.createdAt - right.record.createdAt || left.record.id.localeCompare(right.record.id);
     });
-    return records.map(publicRoom);
+    return states.map((state) => this.projectRoom(state));
   }
   /** Current member roster for one room-management response. */
   membersForRoom(roomId) {
@@ -1383,6 +1384,8 @@ var ChatroomRuntime = class {
     }
     for (const client of this.notificationClients) client.response.end();
     this.notificationClients.clear();
+    await Promise.allSettled(this.roomTitleWrites.values());
+    this.roomTitleWrites.clear();
     await Promise.allSettled([...this.states.values()].map(async (state) => {
       await state.admission;
       await state.activation?.catch(() => void 0);
@@ -1488,7 +1491,7 @@ var ChatroomRuntime = class {
       const binding = await this.ensureRoom(id);
       this.ensureRoomTitle(binding, record.title);
       await this.touchMember(id, identity);
-      return publicRoom(record);
+      return this.projectRoom(state);
     } catch (error) {
       this.states.delete(id);
       await this.requireRoomRecords().delete(id);
@@ -1501,7 +1504,7 @@ var ChatroomRuntime = class {
     const existing = [...this.states.values()].find((state) => state.record.sessionId === sessionId);
     if (existing !== void 0) {
       await this.touchMember(existing.record.id, identity);
-      return publicRoom(existing.record);
+      return this.projectRoom(existing);
     }
     const pending = this.sessionRoomCreations.get(sessionId);
     if (pending !== void 0) {
@@ -1542,7 +1545,7 @@ var ChatroomRuntime = class {
     try {
       await this.ensureRoom(id);
       await this.touchMember(id, identity);
-      return publicRoom(record);
+      return this.projectRoom(state);
     } catch (error) {
       this.states.delete(id);
       await this.requireRoomRecords().delete(id);
@@ -1569,8 +1572,9 @@ var ChatroomRuntime = class {
     state.record = record;
     const binding = await this.ensureRoom(roomId);
     this.ensureRoomTitle(binding, record.title);
-    this.broadcast(state, { type: "room-updated", room: publicRoom(record), members: this.roomMembers(state) });
-    return publicRoom(record);
+    const room = this.projectRoom(state);
+    this.broadcast(state, { type: "room-updated", room, members: this.roomMembers(state) });
+    return room;
   }
   /** Promote or demote one room member; only the owner controls administrators. */
   async setMemberRole(roomId, participantId, role, identity) {
@@ -1591,7 +1595,7 @@ var ChatroomRuntime = class {
     });
     state.record = record;
     const members = this.roomMembers(state);
-    this.broadcast(state, { type: "room-updated", room: publicRoom(record), members });
+    this.broadcast(state, { type: "room-updated", room: this.projectRoom(state), members });
     return members;
   }
   /** Add active platform accounts to a room as ordinary members. */
@@ -1623,7 +1627,7 @@ var ChatroomRuntime = class {
       });
     }
     const members = this.roomMembers(state);
-    this.broadcast(state, { type: "room-updated", room: publicRoom(state.record), members });
+    this.broadcast(state, { type: "room-updated", room: this.projectRoom(state), members });
     return members;
   }
   /** Append human chat immediately; wake the Agent only for an explicit AI mention. */
@@ -1795,7 +1799,7 @@ var ChatroomRuntime = class {
     state.clients.add(client);
     const snapshot = {
       type: "snapshot",
-      room: publicRoom(state.record),
+      room: this.projectRoom(state),
       identity,
       online: onlineCount(state),
       members: this.roomMembers(state),
@@ -1997,7 +2001,12 @@ var ChatroomRuntime = class {
   }
   /** Project committed AI output into its parent room or branch stream. */
   handleSessionEvent(session, event) {
-    if (!this.isReady || event.type !== "assistant/message") return;
+    if (!this.isReady) return;
+    if (event.type === "session/title") {
+      this.acceptSessionTitle(session, event.data.title);
+      return;
+    }
+    if (event.type !== "assistant/message") return;
     const text = assistantText(event.data.message.content);
     if (text === "") return;
     const thread = [...this.threadStates.values()].find((state) => state.record.sessionId === String(session.id));
@@ -2444,7 +2453,40 @@ var ChatroomRuntime = class {
     if (!this.isReady) throw new Error("chatroom is not ready");
   }
   requireRoom(roomId) {
-    return publicRoom(this.requireState(roomId).record);
+    return this.projectRoom(this.requireState(roomId));
+  }
+  projectRoom(state) {
+    return publicRoom(
+      state.record,
+      this.roomMembers(state).slice(0, 9).map((member) => member.avatarId)
+    );
+  }
+  acceptSessionTitle(session, title) {
+    const state = [...this.states.values()].find((candidate) => candidate.record.sessionId === String(session.id));
+    if (state === void 0) return;
+    const normalizedTitle = normalizeRoomTitle(title, this.config.maxRoomTitleChars);
+    if (state.record.title === normalizedTitle) return;
+    const previous = state.record;
+    const next = { ...previous, title: normalizedTitle };
+    state.record = next;
+    const priorWrite = this.roomTitleWrites.get(next.id) ?? Promise.resolve();
+    const write = priorWrite.catch(() => void 0).then(async () => {
+      await this.requireRoomRecords().put(next.id, next);
+    });
+    this.roomTitleWrites.set(next.id, write);
+    void write.then(() => {
+      if (state.record.title !== normalizedTitle) return;
+      this.broadcast(state, {
+        type: "room-updated",
+        room: this.projectRoom(state),
+        members: this.roomMembers(state)
+      });
+    }).catch((error) => {
+      if (state.record.title === normalizedTitle) state.record = previous;
+      this.log.warn("Native Session title persistence failed: %s", String(error));
+    }).finally(() => {
+      if (this.roomTitleWrites.get(next.id) === write) this.roomTitleWrites.delete(next.id);
+    });
   }
   requireState(roomId) {
     const state = this.states.get(roomId);
@@ -2535,12 +2577,13 @@ function publicIdentity(record) {
 function publicFile(record) {
   return { id: record.id, name: record.name, mediaType: record.mediaType, bytes: record.bytes };
 }
-function publicRoom(record) {
+function publicRoom(record, memberAvatarIds) {
   return {
     id: record.id,
     title: record.title,
     aiDisplayName: record.aiDisplayName,
-    sessionId: record.sessionId
+    sessionId: record.sessionId,
+    memberAvatarIds
   };
 }
 function memberRole(record, participantId) {

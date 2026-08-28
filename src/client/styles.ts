@@ -204,6 +204,59 @@ export const CHATROOM_STYLES = `
 .dsh-chatroom-manage-action:hover { color: var(--brand-primary, #4f7cff); border-color: var(--brand-primary, #4f7cff); }
 .dsh-chatroom-manage-action:disabled { cursor: wait; opacity: .58; }
 
+[data-dsh-chatroom-room-row] {
+  box-sizing: border-box;
+  height: 48px !important;
+  min-height: 48px;
+  padding-block: 6px !important;
+}
+
+[data-dsh-chatroom-group-avatar] {
+  display: grid;
+  flex: 0 0 32px;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  width: 32px;
+  height: 32px;
+  margin-right: 6px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border-primary, #d8dde6) 82%, transparent);
+  border-radius: 9px;
+  background: var(--bg-secondary, #f3f4f6);
+  box-shadow: 0 2px 7px rgb(15 23 42 / 8%);
+}
+
+[data-dsh-chatroom-group-avatar][data-count="1"] {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+[data-dsh-chatroom-group-avatar][data-count="2"] {
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: 1fr;
+}
+
+[data-dsh-chatroom-group-avatar][data-count="3"],
+[data-dsh-chatroom-group-avatar][data-count="4"] {
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+}
+
+[data-dsh-chatroom-group-avatar] > span {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  background: color-mix(in srgb, var(--bg-primary, #fff) 82%, var(--brand-primary, #4f7cff));
+  font-size: 8px;
+  line-height: 1;
+}
+
+[data-dsh-chatroom-group-avatar][data-count="1"] > span { font-size: 18px; }
+[data-dsh-chatroom-group-avatar][data-count="2"] > span { font-size: 12px; }
+[data-dsh-chatroom-group-avatar][data-count="3"] > span,
+[data-dsh-chatroom-group-avatar][data-count="4"] > span { font-size: 10px; }
+
 .dsh-chatroom-group-setup {
   display: grid;
   gap: 12px;

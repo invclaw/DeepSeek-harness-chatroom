@@ -1207,11 +1207,14 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   private receive(event: ChatroomServerEvent): void {
     switch (event.type) {
-      case 'snapshot':
+      case 'snapshot': {
+        const room = withMemberAvatarIds(event.room, event.members)
+        const rooms = replaceRoom(this.snapshot.rooms, room)
         this.set({
           phase: 'ready',
           connection: 'online',
-          room: event.room,
+          rooms,
+          room,
           identity: event.identity,
           online: event.online,
           members: event.members,
@@ -1220,9 +1223,18 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           error: undefined,
         })
         return
-      case 'presence':
-        this.set({ online: event.online, members: event.members })
+      }
+      case 'presence': {
+        const room = this.snapshot.room === undefined
+          ? undefined
+          : withMemberAvatarIds(this.snapshot.room, event.members)
+        this.set({
+          online: event.online,
+          members: event.members,
+          ...(room === undefined ? {} : { room, rooms: replaceRoom(this.snapshot.rooms, room) }),
+        })
         return
+      }
       case 'thread-message':
         this.set({
           threadPreviews: replaceThreadPreview(this.snapshot.threadPreviews, event.preview),
@@ -1345,6 +1357,16 @@ function replaceThreadPreview(
   preview: ChatroomThreadPreview,
 ): readonly ChatroomThreadPreview[] {
   return [...previews.filter(item => item.thread.id !== preview.thread.id), preview]
+}
+
+function replaceRoom(rooms: readonly ChatroomInfo[], room: ChatroomInfo): readonly ChatroomInfo[] {
+  return rooms.some(candidate => candidate.id === room.id)
+    ? rooms.map(candidate => candidate.id === room.id ? room : candidate)
+    : [...rooms, room]
+}
+
+function withMemberAvatarIds(room: ChatroomInfo, members: readonly ChatroomMember[]): ChatroomInfo {
+  return { ...room, memberAvatarIds: members.slice(0, 9).map(member => member.avatarId) }
 }
 
 function replaceDirectConversation(
