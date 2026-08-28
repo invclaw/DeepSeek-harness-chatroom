@@ -1366,7 +1366,16 @@ function replaceRoom(rooms: readonly ChatroomInfo[], room: ChatroomInfo): readon
 }
 
 function withMemberAvatarIds(room: ChatroomInfo, members: readonly ChatroomMember[]): ChatroomInfo {
-  return { ...room, memberAvatarIds: members.slice(0, 9).map(member => member.avatarId) }
+  const avatars = members.slice(0, 9)
+  return {
+    ...room,
+    memberAvatarIds: avatars.map(member => member.avatarId),
+    memberAvatars: avatars.map(member => ({
+      participantId: member.participantId,
+      avatarId: member.avatarId,
+      ...(member.avatarUrl === undefined ? {} : { avatarUrl: member.avatarUrl }),
+    })),
+  }
 }
 
 function replaceDirectConversation(

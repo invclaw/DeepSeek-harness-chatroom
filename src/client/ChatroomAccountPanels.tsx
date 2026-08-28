@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { CHATROOM_AVATARS, chatroomAvatar, type ChatroomAvatarId } from '../avatars.js'
+import { CHATROOM_AVATARS, type ChatroomAvatarId } from '../avatars.js'
 import type { ChatroomView } from './store.js'
+import { ChatroomAvatarView } from './ChatroomAvatarView.js'
 
 export interface ChatroomAccountPanelProps {
   readonly room: ChatroomView
@@ -139,9 +140,8 @@ function AdminPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): 
             <section>
               <h3>用户 · {overview.users.length}</h3>
               <div className="dsh-chatroom-user-table">{overview.users.map(user => {
-                const avatar = chatroomAvatar(user.avatarId, user.participantId)
                 return <div key={user.participantId} data-disabled={user.status === 'disabled'}>
-                  <span data-avatar={avatar.id}>{avatar.emoji}</span>
+                  <ChatroomAvatarView className="dsh-chatroom-user-avatar" {...user} />
                   <span><strong>{user.displayName}</strong><small>@{user.username}</small></span>
                   <span className="dsh-chatroom-user-actions">
                     <select
@@ -213,11 +213,11 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
       <nav>
         <h3>最近私聊</h3>
         {props.room.directConversations.map(conversation => <button key={conversation.id} data-active={conversation.id === current?.id} type="button" onClick={() => { void props.openDirect(conversation.peer.participantId) }}>
-          <span>{chatroomAvatar(conversation.peer.avatarId, conversation.peer.participantId).emoji}</span><span><strong>{conversation.peer.displayName}</strong><small>@{conversation.peer.username}</small></span>
+          <ChatroomAvatarView className="dsh-chatroom-direct-avatar" {...conversation.peer} /><span><strong>{conversation.peer.displayName}</strong><small>@{conversation.peer.username}</small></span>
         </button>)}
         <h3>所有用户</h3>
         {props.room.directPeers.map(peer => <button key={peer.participantId} type="button" onClick={() => { void props.openDirect(peer.participantId) }}>
-          <span>{chatroomAvatar(peer.avatarId, peer.participantId).emoji}</span><span><strong>{peer.displayName}</strong><small>@{peer.username}</small></span>
+          <ChatroomAvatarView className="dsh-chatroom-direct-avatar" {...peer} /><span><strong>{peer.displayName}</strong><small>@{peer.username}</small></span>
         </button>)}
       </nav>
       <section>

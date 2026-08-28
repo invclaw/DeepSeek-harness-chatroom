@@ -78,9 +78,20 @@ interface LoginBucket {
 }
 
 interface DshAuthIdentityHeaders {
-  readonly subject: string
+  readonly encodedSubject?: string
+  readonly legacySubject?: string
   readonly encodedUsername: string
+  readonly encodedDisplayName?: string
+  readonly encodedPicture?: string
   readonly roles: string
+}
+
+interface ExternalProfile {
+  readonly subject: string
+  readonly legacySubject?: string
+  readonly username: string
+  readonly displayName: string
+  readonly avatarUrl?: string
 }
 
 /** Authentication failure with text safe to return to the requesting browser. */
@@ -250,16 +261,46 @@ export class ChatroomAuth {
       || (!this.config.authDshAuthHeaders && this.config.authDshAuthVerifyUrl === '')) return undefined
     const verified = await this.dshAuthIdentity(headers, originalUri)
     if (verified === undefined) return undefined
-    const roles = verified.roles.split(',').map(value => value.trim())
-    if (!roles.includes('admin')) return undefined
-    let username: string
-    try {
-      username = decodeURIComponent(verified.encodedUsername)
-    } catch {
-      throw new ChatroomAuthError('dsh-auth 返回了无效的管理员名称。')
-    }
-    const account = await this.externalAccount('dsh-auth', verified.subject, username, username, true)
+    if (!verified.roles.split(',').map(value => value.trim()).includes('admin')) return undefined
+    const profile = dshExternalProfile(verified)
+    const account = await this.externalAccount(
+      'dsh-auth',
+      profile.subject,
+      profile.username,
+      profile.displayName,
+      true,
+      profile.avatarUrl,
+      profile.legacySubject,
+    )
     return { token: await this.issueSession(account.id), account: publicAccount(account) }
+  }
+
+  /** Refresh one signed-in account from the current verified dsh-auth profile without rotating its local session. */
+  async synchronizeDshAuthProfile(
+    headers: IncomingHttpHeaders,
+    account: ChatroomAccount,
+    originalUri = '/',
+  ): Promise<ChatroomAccount> {
+    if (!this.config.authEnabled
+      || (!this.config.authDshAuthHeaders && this.config.authDshAuthVerifyUrl === '')) return account
+    const verified = await this.dshAuthIdentity(headers, originalUri)
+    if (verified === undefined) return account
+    if (!verified.roles.split(',').map(value => value.trim()).includes('admin')) return account
+    const profile = dshExternalProfile(verified)
+    const linked = this.externalAccounts.get(externalKey('dsh-auth', profile.subject))
+      ?? (profile.legacySubject === undefined
+        ? undefined
+        : this.externalAccounts.get(externalKey('dsh-auth', profile.legacySubject)))
+    if (linked?.userId !== account.participantId) return account
+    return publicAccount(await this.externalAccount(
+      'dsh-auth',
+      profile.subject,
+      profile.username,
+      profile.displayName,
+      true,
+      profile.avatarUrl,
+      profile.legacySubject,
+    ))
   }
 
   /** Public dsh-auth password-login location returning through the local adapter. */
@@ -335,7 +376,14 @@ export class ChatroomAuth {
     const displayName = claimText(claims, provider.displayNameClaim)
       ?? claimText(claims, 'name')
       ?? username
-    const account = await this.externalAccount(provider.id, claims.sub, username, displayName, provider.autoCreateUsers)
+    const account = await this.externalAccount(
+      provider.id,
+      claims.sub,
+      username,
+      displayName,
+      provider.autoCreateUsers,
+      normalizeAvatarUrl(claimText(claims, 'picture')),
+    )
     return {
       token: await this.issueSession(account.id),
       account: publicAccount(account),
@@ -518,6 +566,8 @@ export class ChatroomAuth {
     suggestedUsername: string,
     suggestedDisplayName: string,
     autoCreate: boolean,
+    avatarUrl?: string,
+    legacySubject?: string,
   ): Promise<AccountRecord> {
     return await this.serializeAccounts(async () => this.resolveExternalAccount(
       providerId,
@@ -525,6 +575,8 @@ export class ChatroomAuth {
       suggestedUsername,
       suggestedDisplayName,
       autoCreate,
+      avatarUrl,
+      legacySubject,
     ))
   }
 
@@ -534,14 +586,23 @@ export class ChatroomAuth {
     suggestedUsername: string,
     suggestedDisplayName: string,
     autoCreate: boolean,
+    avatarUrl?: string,
+    legacySubject?: string,
   ): Promise<AccountRecord> {
     const key = externalKey(providerId, subject)
+    const legacyKey = legacySubject === undefined || legacySubject === subject
+      ? undefined
+      : externalKey(providerId, legacySubject)
     const linked = this.externalAccounts.get(key)
+      ?? (legacyKey === undefined ? undefined : this.externalAccounts.get(legacyKey))
     if (linked !== undefined) {
       const account = this.accounts.get(linked.userId)
       if (account === undefined || account.status !== 'active') throw new ChatroomAuthError('该企业账号已停用。')
-      const updated = { ...account, lastLoginAt: Date.now(), updatedAt: Date.now() }
+      const updated = externalProfileAccount(account, suggestedDisplayName, avatarUrl, Date.now())
       await this.accounts.put(account.id, updated)
+      if (this.externalAccounts.get(key) === undefined) {
+        await this.externalAccounts.put(key, { providerId, subject, userId: account.id, createdAt: Date.now() })
+      }
       return updated
     }
     if (!autoCreate) throw new ChatroomAuthError('该企业账号尚未由管理员开通。')
@@ -560,6 +621,7 @@ export class ChatroomAuth {
       usernameKey: candidateKey,
       displayName: normalizeDisplayName(suggestedDisplayName),
       avatarId: fallbackAvatarId(id),
+      ...(avatarUrl === undefined ? {} : { avatarUrl }),
       role: providerId === 'dsh-auth' ? 'super-admin' : 'member',
       status: 'active',
       createdAt: now,
@@ -638,7 +700,10 @@ export class ChatroomAuth {
     if (this.config.authDshAuthHeaders) {
       const direct = dshIdentityHeaders(
         singleHeader(headers['x-dsh-auth-user-id']),
+        singleHeader(headers['x-dsh-auth-subject']),
         singleHeader(headers['x-dsh-auth-username']),
+        singleHeader(headers['x-dsh-auth-display-name']),
+        singleHeader(headers['x-dsh-auth-picture']),
         singleHeader(headers['x-dsh-auth-roles']),
       )
       if (direct !== undefined) return direct
@@ -665,7 +730,10 @@ export class ChatroomAuth {
     if (verified.status !== 204) return undefined
     return dshIdentityHeaders(
       verified.headers.get('x-dsh-auth-user-id') ?? undefined,
+      verified.headers.get('x-dsh-auth-subject') ?? undefined,
       verified.headers.get('x-dsh-auth-username') ?? undefined,
+      verified.headers.get('x-dsh-auth-display-name') ?? undefined,
+      verified.headers.get('x-dsh-auth-picture') ?? undefined,
       verified.headers.get('x-dsh-auth-roles') ?? undefined,
     )
   }
@@ -741,6 +809,7 @@ export function publicAccount(account: AccountRecord): ChatroomAccount {
     username: account.username,
     displayName: account.displayName,
     avatarId: account.avatarId,
+    ...(account.avatarUrl === undefined ? {} : { avatarUrl: account.avatarUrl }),
     role: account.role,
     status: account.status,
     createdAt: account.createdAt,
@@ -872,17 +941,88 @@ function secureTextEqual(left: string, right: string): boolean {
 }
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
-  return typeof value === 'string' && value.length <= 1_024 ? value : undefined
+  return typeof value === 'string' && value.length <= 2_048 ? value : undefined
 }
 
 function dshIdentityHeaders(
-  subject: string | undefined,
+  legacySubject: string | undefined,
+  encodedSubject: string | undefined,
   encodedUsername: string | undefined,
+  encodedDisplayName: string | undefined,
+  encodedPicture: string | undefined,
   roles: string | undefined,
 ): DshAuthIdentityHeaders | undefined {
-  if (subject === undefined || encodedUsername === undefined || roles === undefined
-    || subject === '' || encodedUsername === '' || roles === '') return undefined
-  return { subject, encodedUsername, roles }
+  if ((encodedSubject ?? '') === '' && (legacySubject ?? '') === '') return undefined
+  if (encodedUsername === undefined || roles === undefined || encodedUsername === '' || roles === '') return undefined
+  return {
+    ...(encodedSubject === undefined ? {} : { encodedSubject }),
+    ...(legacySubject === undefined ? {} : { legacySubject }),
+    encodedUsername,
+    ...(encodedDisplayName === undefined ? {} : { encodedDisplayName }),
+    ...(encodedPicture === undefined ? {} : { encodedPicture }),
+    roles,
+  }
+}
+
+function dshExternalProfile(headers: DshAuthIdentityHeaders): ExternalProfile {
+  const username = decodeDshHeader(headers.encodedUsername, '管理员名称')
+  const subject = headers.encodedSubject === undefined
+    ? headers.legacySubject!
+    : decodeDshHeader(headers.encodedSubject, '稳定用户标识')
+  const displayName = headers.encodedDisplayName === undefined
+    ? username
+    : decodeDshHeader(headers.encodedDisplayName, '显示名称')
+  const avatarUrl = normalizeAvatarUrl(headers.encodedPicture === undefined
+    ? undefined
+    : decodeDshHeader(headers.encodedPicture, '头像地址'))
+  return {
+    subject,
+    ...(headers.legacySubject === undefined || headers.legacySubject === subject
+      ? {}
+      : { legacySubject: headers.legacySubject }),
+    username,
+    displayName,
+    ...(avatarUrl === undefined ? {} : { avatarUrl }),
+  }
+}
+
+function decodeDshHeader(value: string, label: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    throw new ChatroomAuthError(`dsh-auth 返回了无效的${label}。`)
+  }
+}
+
+function normalizeAvatarUrl(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  if (Buffer.byteLength(value, 'utf8') > 2_048) throw new ChatroomAuthError('企业头像地址过长。')
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new ChatroomAuthError('企业身份返回了无效的头像地址。')
+  }
+  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.hash !== '') {
+    throw new ChatroomAuthError('企业头像必须使用无凭据、无片段的 HTTPS 地址。')
+  }
+  return url.href
+}
+
+function externalProfileAccount(
+  account: AccountRecord,
+  displayName: string,
+  avatarUrl: string | undefined,
+  now: number,
+): AccountRecord {
+  const { avatarUrl: _previousAvatarUrl, ...rest } = account
+  return {
+    ...rest,
+    displayName: normalizeDisplayName(displayName),
+    ...(avatarUrl === undefined ? {} : { avatarUrl }),
+    lastLoginAt: now,
+    updatedAt: now,
+  }
 }
 
 function safeReturnTo(value: string): string {

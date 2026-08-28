@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { CHATROOM_AVATARS, chatroomAvatar, type ChatroomAvatarId } from '../avatars.js'
+import { CHATROOM_AVATARS, type ChatroomAvatarId } from '../avatars.js'
 import { authProviderStartLocation } from '../auth-redirect.js'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
 import type { ChatroomAuthState, ChatroomForwardItem, ChatroomReplyReference } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
 import { ChatroomPanels } from './ChatroomPanels.js'
+import { ChatroomAvatarView } from './ChatroomAvatarView.js'
 
 interface ChatroomEntryInjected {
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
@@ -294,7 +295,9 @@ function RoomStep({
         <button className="dsh-chatroom-create-button" data-testid="chatroom-create" type="submit" disabled={title.trim() === ''}>新建</button>
       </form>
       <div className="dsh-chatroom-card-footer">
-        <span>当前身份：{room.identity === undefined ? '' : `${chatroomAvatar(room.identity.avatarId, room.identity.participantId).emoji} ${room.identity.displayName}`}</span>
+        <span>当前身份：{room.identity === undefined ? '' : <>
+          <ChatroomAvatarView className="dsh-chatroom-inline-avatar" {...room.identity} /> {room.identity.displayName}
+        </>}</span>
         <div>
           <button type="button" onClick={() => { void openDirect() }}>私聊</button>
           {room.auth.enabled && <button type="button" onClick={openAccount}>账号设置</button>}

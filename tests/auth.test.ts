@@ -69,29 +69,49 @@ describe('ChatroomAuth', () => {
     await fixture.auth.start()
     const adopted = await fixture.auth.adoptDshAuth({
       'x-dsh-auth-user-id': 'external-admin',
+      'x-dsh-auth-subject': encodeURIComponent('masonxhuang'),
       'x-dsh-auth-username': encodeURIComponent('企业管理员'),
+      'x-dsh-auth-display-name': encodeURIComponent('黄湘豫'),
+      'x-dsh-auth-picture': encodeURIComponent('https://images.example.com/mason.png'),
       'x-dsh-auth-roles': 'admin',
     } satisfies IncomingHttpHeaders)
-    expect(adopted?.account).toMatchObject({ username: '企业管理员', role: 'super-admin' })
+    expect(adopted?.account).toMatchObject({
+      username: '企业管理员', displayName: '黄湘豫', role: 'super-admin',
+      avatarUrl: 'https://images.example.com/mason.png',
+    })
 
-    const provider = await fixture.auth.saveProvider(adopted!.account, {
+    const refreshed = await fixture.auth.synchronizeDshAuthProfile({
+      'x-dsh-auth-user-id': 'external-admin',
+      'x-dsh-auth-subject': encodeURIComponent('masonxhuang'),
+      'x-dsh-auth-username': encodeURIComponent('企业管理员'),
+      'x-dsh-auth-display-name': encodeURIComponent('黄湘豫（更新）'),
+      'x-dsh-auth-picture': encodeURIComponent('https://images.example.com/mason-new.png'),
+      'x-dsh-auth-roles': 'admin',
+    } satisfies IncomingHttpHeaders, adopted!.account)
+    expect(refreshed).toMatchObject({
+      participantId: adopted!.account.participantId,
+      displayName: '黄湘豫（更新）',
+      avatarUrl: 'https://images.example.com/mason-new.png',
+    })
+
+    const provider = await fixture.auth.saveProvider(refreshed, {
       id: 'company', label: '企业统一登录', enabled: true, issuer: 'https://id.example.com',
       clientId: 'chatroom-client', clientSecret: 'private-client-secret', scopes: 'openid profile email',
       usernameClaim: 'preferred_username', displayNameClaim: 'name', autoCreateUsers: true,
     })
     expect(provider).toMatchObject({ id: 'company', hasClientSecret: true })
     expect(fixture.auth.state().autoRedirectProvider).toMatchObject({ id: 'company' })
-    expect(fixture.auth.overview(adopted!.account)).toMatchObject({
+    expect(fixture.auth.overview(refreshed)).toMatchObject({
       autoRedirectProviderId: 'company',
       loginProviders: [{ id: 'company', type: 'oidc', label: '企业统一登录' }],
     })
-    await fixture.auth.updateSettings(adopted!.account, { autoRedirectProviderId: null })
+    await fixture.auth.updateSettings(refreshed, { autoRedirectProviderId: null })
     expect(fixture.auth.state().autoRedirectProvider).toBeUndefined()
-    await fixture.auth.updateSettings(adopted!.account, { autoRedirectProviderId: 'company' })
+    await fixture.auth.updateSettings(refreshed, { autoRedirectProviderId: 'company' })
     expect(fixture.auth.state().autoRedirectProvider).toMatchObject({ id: 'company' })
     const durable = fixture.providers.get('company')
     expect(durable?.encryptedClientSecret).not.toContain('private-client-secret')
-    expect(JSON.stringify(fixture.auth.overview(adopted!.account))).not.toContain('private-client-secret')
+    expect(JSON.stringify(fixture.auth.overview(refreshed))).not.toContain('private-client-secret')
   })
 
   it('renders a standalone login gate without embedding deployment secrets', () => {

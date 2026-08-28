@@ -13,7 +13,12 @@ export interface ChatroomIdentity {
   readonly participantId: string
   readonly displayName: string
   readonly avatarId: ChatroomAvatarId
+  /** Verified enterprise profile image. Clients fall back to avatarId when it is absent or cannot load. */
+  readonly avatarUrl?: string
 }
+
+/** Compact identity fields used to compose a room avatar in the native Session directory. */
+export type ChatroomRoomAvatar = Pick<ChatroomIdentity, 'participantId' | 'avatarId' | 'avatarUrl'>
 
 /** Signed-in platform account projected without credential material. */
 export interface ChatroomAccount extends ChatroomIdentity {
@@ -173,6 +178,8 @@ export interface ChatroomInfo {
   readonly sessionId: string
   /** Up to nine member avatars used by compact room-directory surfaces. */
   readonly memberAvatarIds?: readonly ChatroomAvatarId[]
+  /** Up to nine member identities, including verified enterprise profile images when available. */
+  readonly memberAvatars?: readonly ChatroomRoomAvatar[]
 }
 
 /** Result of one room-management mutation. */
@@ -304,6 +311,7 @@ export interface ChatroomThreadMessage {
   readonly participantId: string
   readonly displayName: string
   readonly avatarId?: ChatroomAvatarId
+  readonly avatarUrl?: string
   readonly text: string
   readonly files?: readonly ChatroomFileReference[]
   readonly hasImages?: boolean

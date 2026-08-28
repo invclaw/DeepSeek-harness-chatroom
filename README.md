@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.1.9" src="https://img.shields.io/badge/version-1.1.9-4f6bff">
+    <img alt="Version 1.1.10" src="https://img.shields.io/badge/version-1.1.10-4f6bff">
     <img alt="Harness RC7 or later" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -69,7 +69,8 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 
 ### Messaging and media
 
-- Avatars, timestamps, reply quotes, emoji insertion, message reactions, Markdown, image previews, and authenticated file upload/download.
+- Verified profile images from IOA, OIDC, and other enterprise providers appear in messages, member directories, invite lists, private chat, and room collages. Missing or failed profile images fall back to the account's stable cartoon avatar.
+- Timestamps, reply quotes, emoji insertion, message reactions, Markdown, image previews, and authenticated file upload/download.
 - Pure image and file messages render directly—no extra “sent an image/file” placeholder bubble. Oversized images are resized before entering Harness attachment storage.
 - Reply, like, branch, and forward are available from the message row; copy, reaction picker, and multi-select remain available from the overflow/context menu, with a mobile bottom sheet.
 - Merged forwarding is rebuilt from authoritative Session events and retains text/Markdown, media, quotes, nested forwards, and reaction counts.
@@ -84,6 +85,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.1.10** — carry dsh-auth/IOA and OIDC profile images across every chat surface while retaining deterministic cartoon fallbacks.
 - **1.1.9** — persist native sidebar renames as room titles and add taller shared-Session rows with member-avatar collages.
 - **1.1.8** — replace blocked native branch frames with an immediate messaging fallback, retain direct access to the complete Agent, and collapse Markdown-heavy branch subjects into compact titles.
 - **1.1.7** — keep isolated branch runtimes on their target Session instead of navigating back to the parent room during startup.
@@ -109,7 +111,7 @@ When upgrading, remove the previous plugin record before installing the current 
 
 ```sh
 pnpm dsh plugin --profile web remove deepseek-harness-chatroom
-pnpm dsh plugin --profile web add github:sliverp/DeepSeek-harness-chatroom
+pnpm dsh plugin --profile web add github:invclaw/DeepSeek-harness-chatroom
 pnpm dsh --profile web
 ```
 
@@ -200,7 +202,7 @@ Enabling the plugin's account APIs does not by itself make a publicly reachable 
 2. Proxy only the explicit login/register/logout, `/auth/page`, `/auth/providers`, OIDC, and dsh-auth callback routes without authentication.
 3. Run every other Harness page, asset, API, plugin, SSE, download, and WebSocket request through an internal `forward_auth` subrequest to that verify URL.
 4. Pass the original URI as `X-Original-URI`, convert a `401` plus `X-Dsh-Auth-Login` to a `303` only for top-level page navigation, and preserve `Set-Cookie` returned by verification.
-5. Remove inbound `X-Dsh-Auth-User-Id`, `X-Dsh-Auth-Username`, and `X-Dsh-Auth-Roles` before copying verified values.
+5. Remove inbound `X-Dsh-Auth-User-Id`, `X-Dsh-Auth-Subject`, `X-Dsh-Auth-Username`, `X-Dsh-Auth-Display-Name`, `X-Dsh-Auth-Picture`, and `X-Dsh-Auth-Roles` before copying verified values. Authentication still works without the four profile headers, but the chatroom can then show only the account name and cartoon fallback.
 
 The verifier returns `204` with verified identity headers, or `401` with the standalone login location. This arrangement keeps the authentication edge independent from Harness startup: the plugin registers immediately, reports `503` until its own storage is ready, and a provider discovery/login failure does not prevent Harness from starting.
 

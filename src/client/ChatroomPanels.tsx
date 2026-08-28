@@ -18,6 +18,7 @@ import {
   switchBranchFrame,
 } from './branch-frame.js'
 import { ChatroomAccountPanels, type ChatroomAccountPanelProps } from './ChatroomAccountPanels.js'
+import { ChatroomAvatarView } from './ChatroomAvatarView.js'
 import { ChatroomMarkdown } from './ChatroomMarkdown.js'
 import {
   ChatroomInlineMessageActions,
@@ -171,7 +172,6 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
           />
           <div className="dsh-chatroom-invite-list">
             {candidates.map(candidate => {
-              const avatar = chatroomAvatar(candidate.avatarId, candidate.participantId)
               const checked = selected.includes(candidate.participantId)
               return <label key={candidate.participantId}>
                 <input
@@ -182,7 +182,7 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
                     ? current.filter(participantId => participantId !== candidate.participantId)
                     : [...current, candidate.participantId]) }}
                 />
-                <span className="dsh-chatroom-member-avatar" data-avatar={avatar.id}>{avatar.emoji}</span>
+                <ChatroomAvatarView className="dsh-chatroom-member-avatar" {...candidate} />
                 <span><strong>{candidate.displayName}</strong><small>@{candidate.username}</small></span>
               </label>
             })}
@@ -209,10 +209,9 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
         </form>}
         <div className="dsh-chatroom-member-list">
           {props.room.members.map(member => {
-            const avatar = chatroomAvatar(member.avatarId, member.participantId)
             return (
               <div className="dsh-chatroom-member" key={member.participantId}>
-                <span className="dsh-chatroom-member-avatar" data-avatar={avatar.id}>{avatar.emoji}</span>
+                <ChatroomAvatarView className="dsh-chatroom-member-avatar" {...member} />
                 <span><strong>{member.displayName} <em>{member.role === 'owner' ? '群主' : member.role === 'admin' ? '管理员' : ''}</em></strong><small>{member.online ? '在线' : `最近活跃 ${formatRelative(member.lastSeenAt)}`}</small></span>
                 {viewerRole === 'owner' && member.role !== 'owner'
                   ? <button
@@ -517,7 +516,9 @@ function ThreadMessage({
   readonly props: ChatroomPanelsProps
 }): JSX.Element {
   const own = message.participantId === props.room.identity?.participantId
-  const avatarId = message.avatarId ?? fallbackAvatarId(message.participantId)
+  const knownMember = props.room.members.find(member => member.participantId === message.participantId)
+  const avatarId = knownMember?.avatarId ?? message.avatarId ?? fallbackAvatarId(message.participantId)
+  const avatarUrl = knownMember?.avatarUrl ?? message.avatarUrl
   const avatar = message.role === 'ai' ? { id: 'ai', emoji: '✦' } : chatroomAvatar(avatarId, message.participantId)
   const target = threadMessageTarget(message)
   const onReply = props.room.identity === undefined ? undefined : () => { props.setThreadReply(target) }
@@ -545,7 +546,14 @@ function ThreadMessage({
     onContextMenu={menu.open}
   >
     <ChatroomSelectionCheckbox tools={tools} />
-    <span className="dsh-chatroom-member-avatar" data-avatar={avatar.id}>{avatar.emoji}</span>
+    {message.role === 'ai'
+      ? <span className="dsh-chatroom-member-avatar" data-avatar={avatar.id} aria-hidden>{avatar.emoji}</span>
+      : <ChatroomAvatarView
+          className="dsh-chatroom-member-avatar"
+          participantId={message.participantId}
+          avatarId={avatarId}
+          {...(avatarUrl === undefined ? {} : { avatarUrl })}
+        />}
     <div className="dsh-chatroom-thread-message-column">
       <strong>{message.displayName}<time>{formatTime(message.createdAt)}</time></strong>
       {message.reply !== undefined && <div className="dsh-chatroom-thread-reply-quote">

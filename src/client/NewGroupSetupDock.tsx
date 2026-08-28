@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { chatroomAvatar } from '../avatars.js'
 import type { ChatroomAgentTarget, ChatroomView } from './store.js'
+import { ChatroomAvatarView } from './ChatroomAvatarView.js'
 
 interface NewGroupSetupInjected {
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
@@ -89,7 +89,6 @@ export function NewGroupSetupDock(props: NewGroupSetupDockProps): JSX.Element | 
       </div>
       <div className="dsh-chatroom-group-setup-list">
         {candidates.map(candidate => {
-          const avatar = chatroomAvatar(candidate.avatarId, candidate.participantId)
           const checked = selected.includes(candidate.participantId)
           return (
             <label key={candidate.participantId}>
@@ -101,7 +100,7 @@ export function NewGroupSetupDock(props: NewGroupSetupDockProps): JSX.Element | 
                   ? current.filter(participantId => participantId !== candidate.participantId)
                   : [...current, candidate.participantId]) }}
               />
-              <span className="dsh-chatroom-member-avatar" data-avatar={avatar.id}>{avatar.emoji}</span>
+              <ChatroomAvatarView className="dsh-chatroom-member-avatar" {...candidate} />
               <span><strong>{candidate.displayName}</strong><small>@{candidate.username}</small></span>
             </label>
           )

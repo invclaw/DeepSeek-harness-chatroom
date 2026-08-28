@@ -5,6 +5,7 @@ export interface IdentityRecord {
     readonly participantId: string;
     readonly displayName: string;
     readonly avatarId?: ChatroomAvatarId;
+    readonly avatarUrl?: string;
     readonly createdAt: number;
     readonly lastSeenAt: number;
 }
@@ -45,6 +46,7 @@ export interface MemberRecord {
     readonly participantId: string;
     readonly displayName: string;
     readonly avatarId: ChatroomAvatarId;
+    readonly avatarUrl?: string;
     readonly joinedAt: number;
     readonly lastSeenAt: number;
 }
@@ -65,6 +67,7 @@ export interface ThreadMessageRecord {
     readonly participantId: string;
     readonly displayName: string;
     readonly avatarId?: ChatroomAvatarId;
+    readonly avatarUrl?: string;
     readonly text: string;
     readonly files?: readonly {
         readonly id: string;
@@ -91,6 +94,7 @@ export interface AccountRecord {
     readonly usernameKey: string;
     readonly displayName: string;
     readonly avatarId: ChatroomAvatarId;
+    readonly avatarUrl?: string;
     readonly passwordHash?: string;
     readonly role: ChatroomAccountRole;
     readonly status: ChatroomAccountStatus;

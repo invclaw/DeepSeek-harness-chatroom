@@ -268,16 +268,37 @@ var ChatroomAuth = class {
     if (!this.config.authEnabled || !this.config.authDshAuthHeaders && this.config.authDshAuthVerifyUrl === "") return void 0;
     const verified = await this.dshAuthIdentity(headers, originalUri);
     if (verified === void 0) return void 0;
-    const roles = verified.roles.split(",").map((value) => value.trim());
-    if (!roles.includes("admin")) return void 0;
-    let username;
-    try {
-      username = decodeURIComponent(verified.encodedUsername);
-    } catch {
-      throw new ChatroomAuthError("dsh-auth \u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u7BA1\u7406\u5458\u540D\u79F0\u3002");
-    }
-    const account = await this.externalAccount("dsh-auth", verified.subject, username, username, true);
+    if (!verified.roles.split(",").map((value) => value.trim()).includes("admin")) return void 0;
+    const profile = dshExternalProfile(verified);
+    const account = await this.externalAccount(
+      "dsh-auth",
+      profile.subject,
+      profile.username,
+      profile.displayName,
+      true,
+      profile.avatarUrl,
+      profile.legacySubject
+    );
     return { token: await this.issueSession(account.id), account: publicAccount(account) };
+  }
+  /** Refresh one signed-in account from the current verified dsh-auth profile without rotating its local session. */
+  async synchronizeDshAuthProfile(headers, account, originalUri = "/") {
+    if (!this.config.authEnabled || !this.config.authDshAuthHeaders && this.config.authDshAuthVerifyUrl === "") return account;
+    const verified = await this.dshAuthIdentity(headers, originalUri);
+    if (verified === void 0) return account;
+    if (!verified.roles.split(",").map((value) => value.trim()).includes("admin")) return account;
+    const profile = dshExternalProfile(verified);
+    const linked = this.externalAccounts.get(externalKey("dsh-auth", profile.subject)) ?? (profile.legacySubject === void 0 ? void 0 : this.externalAccounts.get(externalKey("dsh-auth", profile.legacySubject)));
+    if (linked?.userId !== account.participantId) return account;
+    return publicAccount(await this.externalAccount(
+      "dsh-auth",
+      profile.subject,
+      profile.username,
+      profile.displayName,
+      true,
+      profile.avatarUrl,
+      profile.legacySubject
+    ));
   }
   /** Public dsh-auth password-login location returning through the local adapter. */
   dshAuthLoginUrl(returnTo, callbackPath) {
@@ -340,7 +361,14 @@ var ChatroomAuth = class {
     if (claims?.sub === void 0) throw new ChatroomAuthError("\u4F01\u4E1A\u8EAB\u4EFD\u6CA1\u6709\u8FD4\u56DE\u7A33\u5B9A\u7684\u7528\u6237\u6807\u8BC6\u3002");
     const username = claimText(claims, provider.usernameClaim) ?? claimText(claims, "preferred_username") ?? claimText(claims, "email") ?? claims.sub;
     const displayName = claimText(claims, provider.displayNameClaim) ?? claimText(claims, "name") ?? username;
-    const account = await this.externalAccount(provider.id, claims.sub, username, displayName, provider.autoCreateUsers);
+    const account = await this.externalAccount(
+      provider.id,
+      claims.sub,
+      username,
+      displayName,
+      provider.autoCreateUsers,
+      normalizeAvatarUrl(claimText(claims, "picture"))
+    );
     return {
       token: await this.issueSession(account.id),
       account: publicAccount(account),
@@ -482,23 +510,29 @@ var ChatroomAuth = class {
     await this.accounts.put(id, account);
     return account;
   }
-  async externalAccount(providerId, subject, suggestedUsername, suggestedDisplayName, autoCreate) {
+  async externalAccount(providerId, subject, suggestedUsername, suggestedDisplayName, autoCreate, avatarUrl, legacySubject) {
     return await this.serializeAccounts(async () => this.resolveExternalAccount(
       providerId,
       subject,
       suggestedUsername,
       suggestedDisplayName,
-      autoCreate
+      autoCreate,
+      avatarUrl,
+      legacySubject
     ));
   }
-  async resolveExternalAccount(providerId, subject, suggestedUsername, suggestedDisplayName, autoCreate) {
+  async resolveExternalAccount(providerId, subject, suggestedUsername, suggestedDisplayName, autoCreate, avatarUrl, legacySubject) {
     const key = externalKey(providerId, subject);
-    const linked = this.externalAccounts.get(key);
+    const legacyKey = legacySubject === void 0 || legacySubject === subject ? void 0 : externalKey(providerId, legacySubject);
+    const linked = this.externalAccounts.get(key) ?? (legacyKey === void 0 ? void 0 : this.externalAccounts.get(legacyKey));
     if (linked !== void 0) {
       const account2 = this.accounts.get(linked.userId);
       if (account2 === void 0 || account2.status !== "active") throw new ChatroomAuthError("\u8BE5\u4F01\u4E1A\u8D26\u53F7\u5DF2\u505C\u7528\u3002");
-      const updated = { ...account2, lastLoginAt: Date.now(), updatedAt: Date.now() };
+      const updated = externalProfileAccount(account2, suggestedDisplayName, avatarUrl, Date.now());
       await this.accounts.put(account2.id, updated);
+      if (this.externalAccounts.get(key) === void 0) {
+        await this.externalAccounts.put(key, { providerId, subject, userId: account2.id, createdAt: Date.now() });
+      }
       return updated;
     }
     if (!autoCreate) throw new ChatroomAuthError("\u8BE5\u4F01\u4E1A\u8D26\u53F7\u5C1A\u672A\u7531\u7BA1\u7406\u5458\u5F00\u901A\u3002");
@@ -517,6 +551,7 @@ var ChatroomAuth = class {
       usernameKey: candidateKey,
       displayName: normalizeDisplayName(suggestedDisplayName),
       avatarId: fallbackAvatarId(id),
+      ...avatarUrl === void 0 ? {} : { avatarUrl },
       role: providerId === "dsh-auth" ? "super-admin" : "member",
       status: "active",
       createdAt: now,
@@ -582,7 +617,10 @@ var ChatroomAuth = class {
     if (this.config.authDshAuthHeaders) {
       const direct = dshIdentityHeaders(
         singleHeader(headers["x-dsh-auth-user-id"]),
+        singleHeader(headers["x-dsh-auth-subject"]),
         singleHeader(headers["x-dsh-auth-username"]),
+        singleHeader(headers["x-dsh-auth-display-name"]),
+        singleHeader(headers["x-dsh-auth-picture"]),
         singleHeader(headers["x-dsh-auth-roles"])
       );
       if (direct !== void 0) return direct;
@@ -609,7 +647,10 @@ var ChatroomAuth = class {
     if (verified.status !== 204) return void 0;
     return dshIdentityHeaders(
       verified.headers.get("x-dsh-auth-user-id") ?? void 0,
+      verified.headers.get("x-dsh-auth-subject") ?? void 0,
       verified.headers.get("x-dsh-auth-username") ?? void 0,
+      verified.headers.get("x-dsh-auth-display-name") ?? void 0,
+      verified.headers.get("x-dsh-auth-picture") ?? void 0,
       verified.headers.get("x-dsh-auth-roles") ?? void 0
     );
   }
@@ -676,6 +717,7 @@ function publicAccount(account) {
     username: account.username,
     displayName: account.displayName,
     avatarId: account.avatarId,
+    ...account.avatarUrl === void 0 ? {} : { avatarUrl: account.avatarUrl },
     role: account.role,
     status: account.status,
     createdAt: account.createdAt,
@@ -791,11 +833,63 @@ function secureTextEqual(left, right) {
   return timingSafeEqual(leftDigest, rightDigest) && left !== "" && right !== "";
 }
 function singleHeader(value) {
-  return typeof value === "string" && value.length <= 1024 ? value : void 0;
+  return typeof value === "string" && value.length <= 2048 ? value : void 0;
 }
-function dshIdentityHeaders(subject, encodedUsername, roles) {
-  if (subject === void 0 || encodedUsername === void 0 || roles === void 0 || subject === "" || encodedUsername === "" || roles === "") return void 0;
-  return { subject, encodedUsername, roles };
+function dshIdentityHeaders(legacySubject, encodedSubject, encodedUsername, encodedDisplayName, encodedPicture, roles) {
+  if ((encodedSubject ?? "") === "" && (legacySubject ?? "") === "") return void 0;
+  if (encodedUsername === void 0 || roles === void 0 || encodedUsername === "" || roles === "") return void 0;
+  return {
+    ...encodedSubject === void 0 ? {} : { encodedSubject },
+    ...legacySubject === void 0 ? {} : { legacySubject },
+    encodedUsername,
+    ...encodedDisplayName === void 0 ? {} : { encodedDisplayName },
+    ...encodedPicture === void 0 ? {} : { encodedPicture },
+    roles
+  };
+}
+function dshExternalProfile(headers) {
+  const username = decodeDshHeader(headers.encodedUsername, "\u7BA1\u7406\u5458\u540D\u79F0");
+  const subject = headers.encodedSubject === void 0 ? headers.legacySubject : decodeDshHeader(headers.encodedSubject, "\u7A33\u5B9A\u7528\u6237\u6807\u8BC6");
+  const displayName = headers.encodedDisplayName === void 0 ? username : decodeDshHeader(headers.encodedDisplayName, "\u663E\u793A\u540D\u79F0");
+  const avatarUrl = normalizeAvatarUrl(headers.encodedPicture === void 0 ? void 0 : decodeDshHeader(headers.encodedPicture, "\u5934\u50CF\u5730\u5740"));
+  return {
+    subject,
+    ...headers.legacySubject === void 0 || headers.legacySubject === subject ? {} : { legacySubject: headers.legacySubject },
+    username,
+    displayName,
+    ...avatarUrl === void 0 ? {} : { avatarUrl }
+  };
+}
+function decodeDshHeader(value, label) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new ChatroomAuthError(`dsh-auth \u8FD4\u56DE\u4E86\u65E0\u6548\u7684${label}\u3002`);
+  }
+}
+function normalizeAvatarUrl(value) {
+  if (value === void 0) return void 0;
+  if (Buffer.byteLength(value, "utf8") > 2048) throw new ChatroomAuthError("\u4F01\u4E1A\u5934\u50CF\u5730\u5740\u8FC7\u957F\u3002");
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ChatroomAuthError("\u4F01\u4E1A\u8EAB\u4EFD\u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u5934\u50CF\u5730\u5740\u3002");
+  }
+  if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.hash !== "") {
+    throw new ChatroomAuthError("\u4F01\u4E1A\u5934\u50CF\u5FC5\u987B\u4F7F\u7528\u65E0\u51ED\u636E\u3001\u65E0\u7247\u6BB5\u7684 HTTPS \u5730\u5740\u3002");
+  }
+  return url.href;
+}
+function externalProfileAccount(account, displayName, avatarUrl, now) {
+  const { avatarUrl: _previousAvatarUrl, ...rest } = account;
+  return {
+    ...rest,
+    displayName: normalizeDisplayName(displayName),
+    ...avatarUrl === void 0 ? {} : { avatarUrl },
+    lastLoginAt: now,
+    updatedAt: now
+  };
 }
 function safeReturnTo(value) {
   if (!value.startsWith("/") || value.startsWith("//") || /[\r\n]/u.test(value)) return "/";
@@ -934,10 +1028,12 @@ function isChatroomReactionEmoji(value) {
 
 // src/domain.ts
 var nonNegativeSafeInteger = z2.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+var httpsUrl = z2.url().refine((value) => new URL(value).protocol === "https:", "avatarUrl must use HTTPS");
 var identitySchema = z2.object({
   participantId: z2.uuid(),
   displayName: z2.string().min(1),
   avatarId: z2.string().refine(isChatroomAvatarId).optional(),
+  avatarUrl: httpsUrl.optional(),
   createdAt: nonNegativeSafeInteger,
   lastSeenAt: nonNegativeSafeInteger
 }).refine((record) => record.lastSeenAt >= record.createdAt, {
@@ -981,6 +1077,7 @@ var memberSchema = z2.object({
   participantId: z2.string().min(1),
   displayName: z2.string().min(1),
   avatarId: z2.string().refine(isChatroomAvatarId),
+  avatarUrl: httpsUrl.optional(),
   joinedAt: nonNegativeSafeInteger,
   lastSeenAt: nonNegativeSafeInteger
 }).refine((record) => record.lastSeenAt >= record.joinedAt, {
@@ -1017,6 +1114,7 @@ var threadMessageSchema = z2.object({
   participantId: z2.string().min(1),
   displayName: z2.string().min(1),
   avatarId: z2.string().refine(isChatroomAvatarId).optional(),
+  avatarUrl: httpsUrl.optional(),
   text: z2.string().min(1),
   files: z2.array(z2.object({
     id: z2.string().min(1),
@@ -1041,6 +1139,7 @@ var accountSchema = z2.object({
   usernameKey: z2.string().min(1),
   displayName: z2.string().min(1),
   avatarId: z2.string().refine(isChatroomAvatarId),
+  avatarUrl: httpsUrl.optional(),
   passwordHash: z2.string().min(1).optional(),
   role: z2.union([z2.literal("super-admin"), z2.literal("admin"), z2.literal("member")]),
   status: z2.union([z2.literal("active"), z2.literal("disabled")]),
@@ -1318,7 +1417,8 @@ var ChatroomRuntime = class {
       participantId: account.participantId,
       username: account.username,
       displayName: account.displayName,
-      avatarId: account.avatarId
+      avatarId: account.avatarId,
+      ...account.avatarUrl === void 0 ? {} : { avatarUrl: account.avatarUrl }
     }));
   }
   /** Maximum accepted JSON body for one text, image, and file room submission. */
@@ -1622,6 +1722,7 @@ var ChatroomRuntime = class {
         participantId: account.participantId,
         displayName: account.displayName,
         avatarId: account.avatarId,
+        ...account.avatarUrl === void 0 ? {} : { avatarUrl: account.avatarUrl },
         joinedAt: now,
         lastSeenAt: now
       });
@@ -1832,7 +1933,8 @@ var ChatroomRuntime = class {
       participantId: account.participantId,
       username: account.username,
       displayName: account.displayName,
-      avatarId: account.avatarId
+      avatarId: account.avatarId,
+      ...account.avatarUrl === void 0 ? {} : { avatarUrl: account.avatarUrl }
     }));
     const conversations = [...this.requireDirectConversations().entries()].map(([, conversation]) => conversation).filter((conversation) => conversation.participantIds.includes(identity.participantId)).map((conversation) => this.publicDirectConversation(conversation, identity.participantId)).sort((left, right) => right.updatedAt - left.updatedAt);
     return { peers, conversations };
@@ -1962,6 +2064,7 @@ var ChatroomRuntime = class {
         participantId: identity.participantId,
         displayName: identity.displayName,
         avatarId: identity.avatarId,
+        ...identity.avatarUrl === void 0 ? {} : { avatarUrl: identity.avatarUrl },
         text,
         ...files.length === 0 ? {} : { files },
         ...durable.some((block) => block.type === "image") ? { hasImages: true } : {},
@@ -2167,6 +2270,7 @@ var ChatroomRuntime = class {
       participantId: identity.participantId,
       displayName: identity.displayName,
       avatarId: identity.avatarId,
+      ...identity.avatarUrl === void 0 ? {} : { avatarUrl: identity.avatarUrl },
       joinedAt: existing?.joinedAt ?? now,
       lastSeenAt: now
     });
@@ -2185,15 +2289,20 @@ var ChatroomRuntime = class {
   }
   roomMembers(state) {
     const online = new Set([...state.clients].map((client) => client.participantId));
-    return [...this.requireMembers().entries()].map(([, record]) => record).filter((record) => record.roomId === state.record.id).sort((left, right) => Number(online.has(right.participantId)) - Number(online.has(left.participantId)) || right.lastSeenAt - left.lastSeenAt).map((record) => ({
-      participantId: record.participantId,
-      displayName: record.displayName,
-      avatarId: record.avatarId,
-      role: memberRole(state.record, record.participantId),
-      joinedAt: record.joinedAt,
-      lastSeenAt: record.lastSeenAt,
-      online: online.has(record.participantId)
-    }));
+    const accounts = new Map(this.auth.activeAccounts().map((account) => [account.participantId, account]));
+    return [...this.requireMembers().entries()].map(([, record]) => record).filter((record) => record.roomId === state.record.id).sort((left, right) => Number(online.has(right.participantId)) - Number(online.has(left.participantId)) || right.lastSeenAt - left.lastSeenAt).map((record) => {
+      const account = accounts.get(record.participantId);
+      return {
+        participantId: record.participantId,
+        displayName: account?.displayName ?? record.displayName,
+        avatarId: account?.avatarId ?? record.avatarId,
+        ...(account?.avatarUrl ?? record.avatarUrl) === void 0 ? {} : { avatarUrl: account?.avatarUrl ?? record.avatarUrl },
+        role: memberRole(state.record, record.participantId),
+        joinedAt: record.joinedAt,
+        lastSeenAt: record.lastSeenAt,
+        online: online.has(record.participantId)
+      };
+    });
   }
   reactionsForRoom(roomId) {
     const grouped = /* @__PURE__ */ new Map();
@@ -2234,7 +2343,8 @@ var ChatroomRuntime = class {
         participantId: account.participantId,
         username: account.username,
         displayName: account.displayName,
-        avatarId: account.avatarId
+        avatarId: account.avatarId,
+        ...account.avatarUrl === void 0 ? {} : { avatarUrl: account.avatarUrl }
       },
       createdAt: record.createdAt,
       updatedAt: record.updatedAt
@@ -2456,9 +2566,10 @@ var ChatroomRuntime = class {
     return this.projectRoom(this.requireState(roomId));
   }
   projectRoom(state) {
+    const members = this.roomMembers(state).slice(0, 9);
     return publicRoom(
       state.record,
-      this.roomMembers(state).slice(0, 9).map((member) => member.avatarId)
+      members
     );
   }
   acceptSessionTitle(session, title) {
@@ -2571,19 +2682,25 @@ function publicIdentity(record) {
   return {
     participantId: record.participantId,
     displayName: record.displayName,
-    avatarId: record.avatarId ?? fallbackAvatarId(record.participantId)
+    avatarId: record.avatarId ?? fallbackAvatarId(record.participantId),
+    ...record.avatarUrl === void 0 ? {} : { avatarUrl: record.avatarUrl }
   };
 }
 function publicFile(record) {
   return { id: record.id, name: record.name, mediaType: record.mediaType, bytes: record.bytes };
 }
-function publicRoom(record, memberAvatarIds) {
+function publicRoom(record, members) {
   return {
     id: record.id,
     title: record.title,
     aiDisplayName: record.aiDisplayName,
     sessionId: record.sessionId,
-    memberAvatarIds
+    memberAvatarIds: members.map((member) => member.avatarId),
+    memberAvatars: members.map((member) => ({
+      participantId: member.participantId,
+      avatarId: member.avatarId,
+      ...member.avatarUrl === void 0 ? {} : { avatarUrl: member.avatarUrl }
+    }))
   };
 }
 function memberRole(record, participantId) {
@@ -2612,7 +2729,8 @@ function publicThreadMessage(record) {
     ...record.hasImages === void 0 ? {} : { hasImages: record.hasImages },
     ...record.reply === void 0 ? {} : { reply: record.reply },
     createdAt: record.createdAt,
-    ...record.avatarId === void 0 ? {} : { avatarId: record.avatarId }
+    ...record.avatarId === void 0 ? {} : { avatarId: record.avatarId },
+    ...record.avatarUrl === void 0 ? {} : { avatarUrl: record.avatarUrl }
   };
 }
 function normalizeDisplayName2(value, maxChars) {
@@ -2989,6 +3107,8 @@ var ChatroomHttpController = class {
             account = adopted.account;
             this.setAuthCookie(response, adopted.token);
           }
+        } else {
+          account = await this.runtime.auth.synchronizeDshAuthProfile(request.headers, account);
         }
         json(response, 200, this.sessionPayload(account ?? null, account));
         return;

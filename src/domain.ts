@@ -7,11 +7,13 @@ import type { ChatroomAvatarId } from './avatars.js'
 import { isChatroomAvatarId } from './avatars.js'
 
 const nonNegativeSafeInteger = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
+const httpsUrl = z.url().refine(value => new URL(value).protocol === 'https:', 'avatarUrl must use HTTPS')
 
 export interface IdentityRecord {
   readonly participantId: string
   readonly displayName: string
   readonly avatarId?: ChatroomAvatarId
+  readonly avatarUrl?: string
   readonly createdAt: number
   readonly lastSeenAt: number
 }
@@ -56,6 +58,7 @@ export interface MemberRecord {
   readonly participantId: string
   readonly displayName: string
   readonly avatarId: ChatroomAvatarId
+  readonly avatarUrl?: string
   readonly joinedAt: number
   readonly lastSeenAt: number
 }
@@ -78,6 +81,7 @@ export interface ThreadMessageRecord {
   readonly participantId: string
   readonly displayName: string
   readonly avatarId?: ChatroomAvatarId
+  readonly avatarUrl?: string
   readonly text: string
   readonly files?: readonly {
     readonly id: string
@@ -107,6 +111,7 @@ export interface AccountRecord {
   readonly usernameKey: string
   readonly displayName: string
   readonly avatarId: ChatroomAvatarId
+  readonly avatarUrl?: string
   readonly passwordHash?: string
   readonly role: ChatroomAccountRole
   readonly status: ChatroomAccountStatus
@@ -173,6 +178,7 @@ const identitySchema = z.object({
   participantId: z.uuid(),
   displayName: z.string().min(1),
   avatarId: z.string().refine(isChatroomAvatarId).optional(),
+  avatarUrl: httpsUrl.optional(),
   createdAt: nonNegativeSafeInteger,
   lastSeenAt: nonNegativeSafeInteger,
 }).refine(record => record.lastSeenAt >= record.createdAt, {
@@ -220,6 +226,7 @@ const memberSchema = z.object({
   participantId: z.string().min(1),
   displayName: z.string().min(1),
   avatarId: z.string().refine(isChatroomAvatarId),
+  avatarUrl: httpsUrl.optional(),
   joinedAt: nonNegativeSafeInteger,
   lastSeenAt: nonNegativeSafeInteger,
 }).refine(record => record.lastSeenAt >= record.joinedAt, {
@@ -260,6 +267,7 @@ const threadMessageSchema = z.object({
   participantId: z.string().min(1),
   displayName: z.string().min(1),
   avatarId: z.string().refine(isChatroomAvatarId).optional(),
+  avatarUrl: httpsUrl.optional(),
   text: z.string().min(1),
   files: z.array(z.object({
     id: z.string().min(1),
@@ -286,6 +294,7 @@ const accountSchema = z.object({
   usernameKey: z.string().min(1),
   displayName: z.string().min(1),
   avatarId: z.string().refine(isChatroomAvatarId),
+  avatarUrl: httpsUrl.optional(),
   passwordHash: z.string().min(1).optional(),
   role: z.union([z.literal('super-admin'), z.literal('admin'), z.literal('member')]),
   status: z.union([z.literal('active'), z.literal('disabled')]),

@@ -13,7 +13,7 @@ import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { ChatroomAuth } from './auth.js'
 import type { Config } from './config.js'
-import { isChatroomAvatarId, fallbackAvatarId, type ChatroomAvatarId } from './avatars.js'
+import { isChatroomAvatarId, fallbackAvatarId } from './avatars.js'
 import {
   chatroomDomainSpec,
   type DirectConversationRecord,
@@ -170,6 +170,7 @@ export class ChatroomRuntime {
         username: account.username,
         displayName: account.displayName,
         avatarId: account.avatarId,
+        ...(account.avatarUrl === undefined ? {} : { avatarUrl: account.avatarUrl }),
       }))
   }
 
@@ -511,6 +512,7 @@ export class ChatroomRuntime {
         participantId: account.participantId,
         displayName: account.displayName,
         avatarId: account.avatarId,
+        ...(account.avatarUrl === undefined ? {} : { avatarUrl: account.avatarUrl }),
         joinedAt: now,
         lastSeenAt: now,
       })
@@ -772,6 +774,7 @@ export class ChatroomRuntime {
         username: account.username,
         displayName: account.displayName,
         avatarId: account.avatarId,
+        ...(account.avatarUrl === undefined ? {} : { avatarUrl: account.avatarUrl }),
       } satisfies ChatroomDirectPeer))
     const conversations = [...this.requireDirectConversations().entries()]
       .map(([, conversation]) => conversation)
@@ -942,6 +945,7 @@ export class ChatroomRuntime {
         participantId: identity.participantId,
         displayName: identity.displayName,
         avatarId: identity.avatarId,
+        ...(identity.avatarUrl === undefined ? {} : { avatarUrl: identity.avatarUrl }),
         text,
         ...(files.length === 0 ? {} : { files }),
         ...(durable.some(block => block.type === 'image') ? { hasImages: true } : {}),
@@ -1171,6 +1175,7 @@ export class ChatroomRuntime {
       participantId: identity.participantId,
       displayName: identity.displayName,
       avatarId: identity.avatarId,
+      ...(identity.avatarUrl === undefined ? {} : { avatarUrl: identity.avatarUrl }),
       joinedAt: existing?.joinedAt ?? now,
       lastSeenAt: now,
     })
@@ -1192,20 +1197,27 @@ export class ChatroomRuntime {
 
   private roomMembers(state: RoomState): readonly ChatroomMember[] {
     const online = new Set([...state.clients].map(client => client.participantId))
+    const accounts = new Map(this.auth.activeAccounts().map(account => [account.participantId, account]))
     return [...this.requireMembers().entries()]
       .map(([, record]) => record)
       .filter(record => record.roomId === state.record.id)
       .sort((left, right) => Number(online.has(right.participantId)) - Number(online.has(left.participantId))
         || right.lastSeenAt - left.lastSeenAt)
-      .map(record => ({
-        participantId: record.participantId,
-        displayName: record.displayName,
-        avatarId: record.avatarId,
-        role: memberRole(state.record, record.participantId),
-        joinedAt: record.joinedAt,
-        lastSeenAt: record.lastSeenAt,
-        online: online.has(record.participantId),
-      }))
+      .map(record => {
+        const account = accounts.get(record.participantId)
+        return {
+          participantId: record.participantId,
+          displayName: account?.displayName ?? record.displayName,
+          avatarId: account?.avatarId ?? record.avatarId,
+          ...((account?.avatarUrl ?? record.avatarUrl) === undefined
+            ? {}
+            : { avatarUrl: account?.avatarUrl ?? record.avatarUrl! }),
+          role: memberRole(state.record, record.participantId),
+          joinedAt: record.joinedAt,
+          lastSeenAt: record.lastSeenAt,
+          online: online.has(record.participantId),
+        }
+      })
   }
 
   private reactionsForRoom(roomId: string): readonly ChatroomReaction[] {
@@ -1258,6 +1270,7 @@ export class ChatroomRuntime {
         username: account.username,
         displayName: account.displayName,
         avatarId: account.avatarId,
+        ...(account.avatarUrl === undefined ? {} : { avatarUrl: account.avatarUrl }),
       },
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
@@ -1514,9 +1527,10 @@ export class ChatroomRuntime {
   }
 
   private projectRoom(state: RoomState): ChatroomInfo {
+    const members = this.roomMembers(state).slice(0, 9)
     return publicRoom(
       state.record,
-      this.roomMembers(state).slice(0, 9).map(member => member.avatarId),
+      members,
     )
   }
 
@@ -1649,6 +1663,7 @@ function publicIdentity(record: IdentityRecord): ChatroomIdentity {
     participantId: record.participantId,
     displayName: record.displayName,
     avatarId: record.avatarId ?? fallbackAvatarId(record.participantId),
+    ...(record.avatarUrl === undefined ? {} : { avatarUrl: record.avatarUrl }),
   }
 }
 
@@ -1656,13 +1671,18 @@ function publicFile(record: FileRecord): ChatroomFileReference {
   return { id: record.id, name: record.name, mediaType: record.mediaType, bytes: record.bytes }
 }
 
-function publicRoom(record: RoomRecord, memberAvatarIds: readonly ChatroomAvatarId[]): ChatroomInfo {
+function publicRoom(record: RoomRecord, members: readonly ChatroomMember[]): ChatroomInfo {
   return {
     id: record.id,
     title: record.title,
     aiDisplayName: record.aiDisplayName,
     sessionId: record.sessionId,
-    memberAvatarIds,
+    memberAvatarIds: members.map(member => member.avatarId),
+    memberAvatars: members.map(member => ({
+      participantId: member.participantId,
+      avatarId: member.avatarId,
+      ...(member.avatarUrl === undefined ? {} : { avatarUrl: member.avatarUrl }),
+    })),
   }
 }
 
@@ -1695,6 +1715,7 @@ function publicThreadMessage(record: ThreadMessageRecord): ChatroomThreadMessage
     ...(record.reply === undefined ? {} : { reply: record.reply }),
     createdAt: record.createdAt,
     ...(record.avatarId === undefined ? {} : { avatarId: record.avatarId }),
+    ...(record.avatarUrl === undefined ? {} : { avatarUrl: record.avatarUrl }),
   }
 }
 
