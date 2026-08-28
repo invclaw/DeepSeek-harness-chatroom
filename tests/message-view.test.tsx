@@ -283,13 +283,17 @@ describe('participant-specific native message projection', () => {
       openForward: vi.fn(),
       toggleMessageSelection,
     } as unknown as Parameters<typeof ChatroomAssistantReplyAction>[0]
-    render(<ChatroomAssistantReplyAction {...props} />)
+    render(<div data-time-hover-root><div><ChatroomAssistantReplyAction {...props} /></div></div>)
 
+    const activity = screen.getByRole('button', { name: '打开分支，1 条回复' })
+    expect(activity.parentElement?.className).toBe('dsh-chatroom-assistant-tools')
+    expect(activity.parentElement?.parentElement?.hasAttribute('data-dsh-chatroom-native-actions')).toBe(true)
+    expect(activity.previousElementSibling?.className).toBe('dsh-chatroom-assistant-actions')
     fireEvent.click(screen.getByRole('checkbox', { name: '选择 DeepSeek 的消息' }))
     expect(toggleMessageSelection).toHaveBeenCalledWith('lobby', expect.objectContaining({
       messageId: 'assistant:2', role: 'ai',
     }))
-    fireEvent.click(screen.getByRole('button', { name: '打开分支，1 条回复' }))
+    fireEvent.click(activity)
     expect(openThread).toHaveBeenCalledWith('lobby', root)
   })
 })

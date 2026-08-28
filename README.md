@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.1.12" src="https://img.shields.io/badge/version-1.1.12-4f6bff">
+    <img alt="Version 1.1.13" src="https://img.shields.io/badge/version-1.1.13-4f6bff">
     <img alt="Harness RC7 or later" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -85,6 +85,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.1.13** — match branch panels and reply summaries to the inherited light/dark color scheme, and keep AI branch activity in normal message flow above the composer.
 - **1.1.12** — bind every native sidebar collage to its authoritative Session ID, so duplicate titles, selection changes, and row reordering cannot swap room avatars.
 - **1.1.11** — keep room-collage identities and ordering stable while navigating, and include enterprise profile images in the initial room directory.
 - **1.1.10** — carry dsh-auth/IOA and OIDC profile images across every chat surface while retaining deterministic cartoon fallbacks.

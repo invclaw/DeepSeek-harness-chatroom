@@ -134,4 +134,24 @@ describe('native branch frame isolation', () => {
     expect(CHATROOM_STYLES).toContain('gap: 0 !important;')
     expect(CHATROOM_STYLES).toContain('content: "@";')
   })
+
+  it('uses inherited color-scheme fallbacks for branch surfaces', () => {
+    expect(CHATROOM_STYLES).toContain(
+      'background: var(--bg-primary, light-dark(#fff, #151517));',
+    )
+    expect(CHATROOM_STYLES).toContain(
+      'color: var(--text-secondary, light-dark(#6b7280, #aeb0b4));',
+    )
+    expect(CHATROOM_STYLES).toContain(
+      'var(--bg-secondary, light-dark(#f3f4f6, #1b1b1c))',
+    )
+  })
+
+  it('lets injected AI branch activity expand the native action row', () => {
+    expect(CHATROOM_STYLES).toContain(
+      'html[data-dsh-chatroom-active] [data-dsh-chatroom-native-actions]',
+    )
+    expect(CHATROOM_STYLES).toContain('height: auto !important;')
+    expect(CHATROOM_STYLES).toContain('overflow: visible !important;')
+  })
 })
