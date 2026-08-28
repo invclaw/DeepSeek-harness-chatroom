@@ -9,6 +9,13 @@ afterEach(() => {
 })
 
 describe('native sidebar room rows', () => {
+  function bindNativeSession(row: HTMLElement, sessionId: string): void {
+    row.draggable = true
+    row.addEventListener('dragstart', event => {
+      ;(event as DragEvent).dataTransfer?.setData('text/plain', sessionId)
+    })
+  }
+
   it('adds a nine-grid member avatar to the matching native Session row', () => {
     document.body.innerHTML = `
       <div role="treeitem" aria-selected="true">
@@ -49,12 +56,58 @@ describe('native sidebar room rows', () => {
       id: 'selected', title: '同名群', aiDisplayName: 'DeepSeek', sessionId: 'selected-session', memberAvatarIds: ['cat'],
     } as const
     const snapshot = { rooms: [first, selected], room: selected, members: [] } as unknown as ChatroomView
+    const nativeRows = [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+    bindNativeSession(nativeRows[0]!, 'selected-session')
+    bindNativeSession(nativeRows[1]!, 'first-session')
 
     reconcileSidebarRoomRows(document, snapshot)
 
     const rows = [...document.querySelectorAll<HTMLElement>('[data-dsh-chatroom-room-row]')]
-    expect(rows[0]?.dataset.dshChatroomRoomId).toBe('first')
-    expect(rows[1]?.dataset.dshChatroomRoomId).toBe('selected')
+    expect(rows[0]?.dataset.dshChatroomRoomId).toBe('selected')
+    expect(rows[1]?.dataset.dshChatroomRoomId).toBe('first')
+  })
+
+  it('keeps duplicate-title avatars bound to native session ids across selection and row reorder', () => {
+    document.body.innerHTML = `
+      <div role="treeitem" aria-selected="false"><span></span><span>workspace</span></div>
+      <div role="treeitem" aria-selected="true"><span></span><span>workspace</span></div>
+    `
+    const first = {
+      id: 'first', title: 'workspace', aiDisplayName: 'DeepSeek', sessionId: 'session-a',
+      memberAvatars: [{ participantId: 'artist', avatarId: 'whale' }],
+    } as const
+    const second = {
+      id: 'second', title: 'workspace', aiDisplayName: 'DeepSeek', sessionId: 'session-b',
+      memberAvatars: [{ participantId: 'person', avatarId: 'dog', avatarUrl: 'https://images.example.com/person.png' }],
+    } as const
+    const snapshot = { rooms: [first, second], room: second, members: [] } as unknown as ChatroomView
+    const rows = [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+    bindNativeSession(rows[0]!, 'session-a')
+    bindNativeSession(rows[1]!, 'session-b')
+
+    reconcileSidebarRoomRows(document, snapshot, 'session-b' as never)
+    const before = rows.map(row => row.querySelector<HTMLElement>('[data-dsh-chatroom-group-avatar]')?.dataset.signature)
+
+    rows[0]!.setAttribute('aria-selected', 'true')
+    rows[1]!.setAttribute('aria-selected', 'false')
+    rows[1]!.before(rows[0]!)
+    reconcileSidebarRoomRows(document, { ...snapshot, room: first } as ChatroomView, 'session-a' as never)
+
+    expect(rows[0]!.dataset.dshChatroomRoomId).toBe('first')
+    expect(rows[1]!.dataset.dshChatroomRoomId).toBe('second')
+    expect(rows.map(row => row.querySelector<HTMLElement>('[data-dsh-chatroom-group-avatar]')?.dataset.signature)).toEqual(before)
+  })
+
+  it('does not guess between duplicate room titles when a native row has no session payload', () => {
+    document.body.innerHTML = '<div role="treeitem" aria-selected="false"><span>workspace</span></div>'
+    const rooms = [
+      { id: 'first', title: 'workspace', sessionId: 'session-a' },
+      { id: 'second', title: 'workspace', sessionId: 'session-b' },
+    ]
+
+    reconcileSidebarRoomRows(document, { rooms, members: [] } as unknown as ChatroomView)
+
+    expect(document.querySelector('[data-dsh-chatroom-room-row]')).toBeNull()
   })
 
   it('uses enterprise profile images and falls back to the cartoon avatar after an image error', () => {
