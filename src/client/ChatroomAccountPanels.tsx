@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { CHATROOM_AVATARS, chatroomAvatar, type ChatroomAvatarId } from '../avatars.js'
+import { CHATROOM_AVATARS, type ChatroomAvatarId } from '../avatars.js'
+import { ChatroomAvatar } from './ChatroomAvatar.js'
 import type { ChatroomView } from './store.js'
 
 export interface ChatroomAccountPanelProps {
@@ -71,7 +72,7 @@ function AccountPanel(props: ChatroomAccountPanelProps & { embedded?: boolean })
   const account = props.room.auth.account
   const content = <section className="dsh-chatroom-card dsh-chatroom-account-card" aria-label="账号设置">
       <header><div><h2>账号设置</h2><p>{account === undefined ? '' : `${account.displayName} · @${account.username}`}</p></div>{!props.embedded && <button aria-label="关闭账号设置" type="button" onClick={props.closeAccount}>×</button>}</header>
-      <form className="dsh-chatroom-admin-form" onSubmit={async event => {
+      {account?.passwordManaged !== false && <form className="dsh-chatroom-admin-form" onSubmit={async event => {
         event.preventDefault()
         if (newPassword !== confirmation) return
         if (await props.changePassword(currentPassword, newPassword)) {
@@ -83,7 +84,8 @@ function AccountPanel(props: ChatroomAccountPanelProps & { embedded?: boolean })
         <label>确认新密码<input type="password" autoComplete="new-password" minLength={12} value={confirmation} onChange={event => { setConfirmation(event.target.value) }} /></label>
         {confirmation !== '' && confirmation !== newPassword && <div className="dsh-chatroom-error" role="alert">两次输入的新密码不一致。</div>}
         <button type="submit" disabled={props.room.accountBusy || currentPassword === '' || newPassword.length < 12 || newPassword !== confirmation}>修改密码</button>
-      </form>
+      </form>}
+      {account?.passwordManaged === false && <p className="dsh-chatroom-panel-status">此账号由企业统一登录管理，密码请在企业登录系统中修改。</p>}
       {props.room.accountError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.accountError}</div>}
     </section>
   return props.embedded ? content : <div className="dsh-chatroom-dialog-layer dsh-chatroom-account-layer" data-testid="chatroom-account">{content}</div>
@@ -91,6 +93,7 @@ function AccountPanel(props: ChatroomAccountPanelProps & { embedded?: boolean })
 
 function AdminPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): JSX.Element {
   const overview = props.room.adminOverview
+  const dshOnly = props.room.auth.authMode === 'dsh-auth-only'
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [password, setPassword] = useState('')
@@ -107,9 +110,10 @@ function AdminPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): 
               <label className="dsh-chatroom-toggle"><input
                 type="checkbox"
                 checked={overview.allowSelfRegistration}
-                disabled={props.room.adminBusy}
+                disabled={props.room.adminBusy || dshOnly}
                 onChange={event => { void props.adminSetSelfRegistration(event.target.checked) }}
               />允许用户使用账号密码自主注册</label>
+              {!dshOnly && <>
               <h3>统一创建账号</h3>
               <form className="dsh-chatroom-admin-form" onSubmit={async (event) => {
                 event.preventDefault()
@@ -135,13 +139,13 @@ function AdminPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): 
                 </fieldset>
                 <button type="submit" disabled={props.room.adminBusy || username === '' || displayName === '' || password === ''}>创建账号</button>
               </form>
+              </>}
             </section>
             <section>
               <h3>用户 · {overview.users.length}</h3>
               <div className="dsh-chatroom-user-table">{overview.users.map(user => {
-                const avatar = chatroomAvatar(user.avatarId, user.participantId)
                 return <div key={user.participantId} data-disabled={user.status === 'disabled'}>
-                  <span data-avatar={avatar.id}>{avatar.emoji}</span>
+                  <ChatroomAvatar avatarId={user.avatarId} avatarUrl={user.avatarUrl} seed={user.participantId} />
                   <span><strong>{user.displayName}</strong><small>@{user.username}</small></span>
                   <span className="dsh-chatroom-user-actions">
                     <select
@@ -158,6 +162,9 @@ function AdminPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): 
               })}</div>
             </section>
             <section className="dsh-chatroom-provider-section">
+              {dshOnly
+                ? <><h3>企业统一登录</h3><p className="dsh-chatroom-panel-status">当前部署固定使用 dsh-auth 企业登录；本地密码和 OIDC 提供方已关闭。</p></>
+                : <>
               <h3>企业 SSO / OIDC</h3>
               <label className="dsh-chatroom-admin-field">未登录用户入口<select
                 aria-label="未登录用户入口"
@@ -197,6 +204,7 @@ function AdminPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): 
                   <button type="button" onClick={() => { void props.adminDeleteProvider(item.id) }}>删除</button>
                 </span>
               </div>)}</div>
+                </>}
             </section>
           </div>}
         {props.room.adminError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.adminError}</div>}
@@ -213,11 +221,11 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
       <nav>
         <h3>最近私聊</h3>
         {props.room.directConversations.map(conversation => <button key={conversation.id} data-active={conversation.id === current?.id} type="button" onClick={() => { void props.openDirect(conversation.peer.participantId) }}>
-          <span>{chatroomAvatar(conversation.peer.avatarId, conversation.peer.participantId).emoji}</span><span><strong>{conversation.peer.displayName}</strong><small>@{conversation.peer.username}</small></span>
+          <ChatroomAvatar className="dsh-chatroom-member-avatar" avatarId={conversation.peer.avatarId} avatarUrl={conversation.peer.avatarUrl} seed={conversation.peer.participantId} /><span><strong>{conversation.peer.displayName}</strong><small>@{conversation.peer.username}</small></span>
         </button>)}
         <h3>所有用户</h3>
         {props.room.directPeers.map(peer => <button key={peer.participantId} type="button" onClick={() => { void props.openDirect(peer.participantId) }}>
-          <span>{chatroomAvatar(peer.avatarId, peer.participantId).emoji}</span><span><strong>{peer.displayName}</strong><small>@{peer.username}</small></span>
+          <ChatroomAvatar className="dsh-chatroom-member-avatar" avatarId={peer.avatarId} avatarUrl={peer.avatarUrl} seed={peer.participantId} /><span><strong>{peer.displayName}</strong><small>@{peer.username}</small></span>
         </button>)}
       </nav>
       <section>
@@ -226,7 +234,11 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
           : <>
             <div className="dsh-chatroom-direct-messages">{props.room.directMessages.map(message => {
               const own = message.senderId === props.room.identity?.participantId
-              return <article key={message.id} data-own={own}><small>{own ? '我' : current.peer.displayName}</small><p>{message.text}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></article>
+              const sender = own ? props.room.identity : current.peer
+              return <article key={message.id} data-own={own}>
+                <ChatroomAvatar className="dsh-chatroom-member-avatar" avatarId={sender?.avatarId} avatarUrl={sender?.avatarUrl} seed={sender?.participantId ?? message.senderId} />
+                <div><small>{own ? '我' : current.peer.displayName}</small><p>{message.text}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>
+              </article>
             })}</div>
             <form onSubmit={async (event) => {
               event.preventDefault()

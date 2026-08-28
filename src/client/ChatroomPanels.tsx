@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { chatroomAvatar } from '../avatars.js'
+import { ChatroomAvatar } from './ChatroomAvatar.js'
 import type {
   ChatroomForwardItem,
   ChatroomNotification,
@@ -160,7 +160,6 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
           />
           <div className="dsh-chatroom-invite-list">
             {candidates.map(candidate => {
-              const avatar = chatroomAvatar(candidate.avatarId, candidate.participantId)
               const checked = selected.includes(candidate.participantId)
               return <label key={candidate.participantId}>
                 <input
@@ -171,7 +170,7 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
                     ? current.filter(participantId => participantId !== candidate.participantId)
                     : [...current, candidate.participantId]) }}
                 />
-                <span className="dsh-chatroom-member-avatar" data-avatar={avatar.id}>{avatar.emoji}</span>
+                <ChatroomAvatar className="dsh-chatroom-member-avatar" avatarId={candidate.avatarId} avatarUrl={candidate.avatarUrl} seed={candidate.participantId} />
                 <span><strong>{candidate.displayName}</strong><small>@{candidate.username}</small></span>
               </label>
             })}
@@ -198,10 +197,9 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
         </form>}
         <div className="dsh-chatroom-member-list">
           {props.room.members.map(member => {
-            const avatar = chatroomAvatar(member.avatarId, member.participantId)
             return (
               <div className="dsh-chatroom-member" key={member.participantId}>
-                <span className="dsh-chatroom-member-avatar" data-avatar={avatar.id}>{avatar.emoji}</span>
+                <ChatroomAvatar className="dsh-chatroom-member-avatar" avatarId={member.avatarId} avatarUrl={member.avatarUrl} seed={member.participantId} />
                 <span><strong>{member.displayName} <em>{member.role === 'owner' ? '群主' : member.role === 'admin' ? '管理员' : ''}</em></strong><small>{member.online ? '在线' : `最近活跃 ${formatRelative(member.lastSeenAt)}`}</small></span>
                 {viewerRole === 'owner' && member.role !== 'owner'
                   ? <button

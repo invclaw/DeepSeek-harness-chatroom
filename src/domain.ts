@@ -7,11 +7,23 @@ import type { ChatroomAvatarId } from './avatars.js'
 import { isChatroomAvatarId } from './avatars.js'
 
 const nonNegativeSafeInteger = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
+const safeAvatarUrl = z.string().url().refine((value) => {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && url.username === '' && url.password === '' && url.hash === ''
+  } catch {
+    return false
+  }
+}, 'avatarUrl must be an HTTPS URL without credentials or fragments')
+const safeExternalText = z.string().min(1).refine((value) =>
+  Buffer.byteLength(value, 'utf8') <= 512 && !/\p{C}/u.test(value),
+  'external identity text must be at most 512 UTF-8 bytes without control characters')
 
 export interface IdentityRecord {
   readonly participantId: string
   readonly displayName: string
   readonly avatarId?: ChatroomAvatarId
+  readonly avatarUrl?: string
   readonly createdAt: number
   readonly lastSeenAt: number
 }
@@ -56,6 +68,7 @@ export interface MemberRecord {
   readonly participantId: string
   readonly displayName: string
   readonly avatarId: ChatroomAvatarId
+  readonly avatarUrl?: string
   readonly joinedAt: number
   readonly lastSeenAt: number
 }
@@ -78,6 +91,7 @@ export interface ThreadMessageRecord {
   readonly participantId: string
   readonly displayName: string
   readonly avatarId?: ChatroomAvatarId
+  readonly avatarUrl?: string
   readonly text: string
   readonly files?: readonly {
     readonly id: string
@@ -107,6 +121,9 @@ export interface AccountRecord {
   readonly usernameKey: string
   readonly displayName: string
   readonly avatarId: ChatroomAvatarId
+  readonly avatarUrl?: string
+  readonly externalProviderId?: string
+  readonly externalSubject?: string
   readonly passwordHash?: string
   readonly role: ChatroomAccountRole
   readonly status: ChatroomAccountStatus
@@ -120,6 +137,7 @@ export interface AuthSessionRecord {
   readonly createdAt: number
   readonly lastSeenAt: number
   readonly expiresAt: number
+  readonly externalValidatedAt?: number
 }
 
 export interface AuthSettingsRecord {
@@ -173,6 +191,7 @@ const identitySchema = z.object({
   participantId: z.uuid(),
   displayName: z.string().min(1),
   avatarId: z.string().refine(isChatroomAvatarId).optional(),
+  avatarUrl: safeAvatarUrl.optional(),
   createdAt: nonNegativeSafeInteger,
   lastSeenAt: nonNegativeSafeInteger,
 }).refine(record => record.lastSeenAt >= record.createdAt, {
@@ -220,6 +239,7 @@ const memberSchema = z.object({
   participantId: z.string().min(1),
   displayName: z.string().min(1),
   avatarId: z.string().refine(isChatroomAvatarId),
+  avatarUrl: safeAvatarUrl.optional(),
   joinedAt: nonNegativeSafeInteger,
   lastSeenAt: nonNegativeSafeInteger,
 }).refine(record => record.lastSeenAt >= record.joinedAt, {
@@ -260,6 +280,7 @@ const threadMessageSchema = z.object({
   participantId: z.string().min(1),
   displayName: z.string().min(1),
   avatarId: z.string().refine(isChatroomAvatarId).optional(),
+  avatarUrl: safeAvatarUrl.optional(),
   text: z.string().min(1),
   files: z.array(z.object({
     id: z.string().min(1),
@@ -286,6 +307,9 @@ const accountSchema = z.object({
   usernameKey: z.string().min(1),
   displayName: z.string().min(1),
   avatarId: z.string().refine(isChatroomAvatarId),
+  avatarUrl: safeAvatarUrl.optional(),
+  externalProviderId: z.string().min(1).optional(),
+  externalSubject: safeExternalText.optional(),
   passwordHash: z.string().min(1).optional(),
   role: z.union([z.literal('super-admin'), z.literal('admin'), z.literal('member')]),
   status: z.union([z.literal('active'), z.literal('disabled')]),
@@ -299,6 +323,7 @@ const authSessionSchema = z.object({
   createdAt: nonNegativeSafeInteger,
   lastSeenAt: nonNegativeSafeInteger,
   expiresAt: nonNegativeSafeInteger,
+  externalValidatedAt: nonNegativeSafeInteger.optional(),
 }) as z.ZodType<AuthSessionRecord>
 
 const authSettingsSchema = z.object({
@@ -325,7 +350,7 @@ const authProviderSchema = z.object({
 
 const externalAccountSchema = z.object({
   providerId: z.string().min(1),
-  subject: z.string().min(1),
+  subject: safeExternalText,
   userId: z.uuid(),
   createdAt: nonNegativeSafeInteger,
 }) as z.ZodType<ExternalAccountRecord>

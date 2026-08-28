@@ -1,6 +1,6 @@
 import { memo, type ComponentType, type ReactNode } from 'react'
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { chatroomAvatar, fallbackAvatarId, type ChatroomAvatarId } from '../avatars.js'
+import { fallbackAvatarId, type ChatroomAvatarId } from '../avatars.js'
 import type {
   ChatroomFileReference,
   ChatroomForwardBundle,
@@ -26,6 +26,7 @@ import { ChatroomThreadActivity } from './ChatroomThreadActivity.js'
 import { ChatroomMarkdown } from './ChatroomMarkdown.js'
 import type { ChatroomView } from './store.js'
 import type { ChatroomAgentTarget } from './store.js'
+import { ChatroomAvatar } from './ChatroomAvatar.js'
 
 type ParticipantNode = ChatNode<'user' | 'steering'>
 
@@ -61,15 +62,18 @@ export function projectChatroomMessage(
   readonly own: boolean
   readonly displayName?: string
   readonly avatarId: ChatroomAvatarId
+  readonly participantId?: string
   readonly reply?: ChatroomReplyReference
   readonly files: readonly ChatroomFileReference[]
   readonly forward?: ChatroomForwardBundle
   readonly text: string
+  readonly avatarUrl?: string | undefined
 } {
   let own = false
   let identityProjected = false
   let displayName: string | undefined
   let avatarId: ChatroomAvatarId | undefined
+  let participantId: string | undefined
   let reply: ChatroomReplyReference | undefined
   let forward: ChatroomForwardBundle | undefined
   const files: ChatroomFileReference[] = []
@@ -91,6 +95,7 @@ export function projectChatroomMessage(
         ? displayName === identity.displayName
         : marker.participantId === identity.participantId)
       avatarId = marker?.avatarId ?? fallbackAvatarId(displayName ?? marker?.participantId ?? 'participant')
+      participantId = marker?.participantId
       if (namePrefix !== null) visibleText = visibleText.slice(namePrefix[0].length)
       const replyProjection = projectReplyText(visibleText)
       visibleText = replyProjection.text
@@ -119,9 +124,11 @@ export function projectChatroomMessage(
       : node,
     own,
     avatarId: avatarId ?? fallbackAvatarId(identity?.participantId ?? 'participant'),
+    ...(participantId === undefined ? {} : { participantId }),
     files,
     text: texts.join('\n'),
     ...(displayName === undefined ? {} : { displayName }),
+    ...(identity !== undefined && own && identity.avatarUrl !== undefined ? { avatarUrl: identity.avatarUrl } : {}),
     ...(reply === undefined ? {} : { reply }),
     ...(forward === undefined ? {} : { forward }),
   }
@@ -143,7 +150,13 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
   if (sessionTarget === undefined) {
     return <NativeView {...props} />
   }
-  const projection = projectChatroomMessage(props.node, room.identity)
+  const projectionBase = projectChatroomMessage(props.node, room.identity)
+  const projection = {
+    ...projectionBase,
+    ...(room.members.find(member => member.participantId === projectionBase.participantId)?.avatarUrl === undefined
+      ? {}
+      : { avatarUrl: room.members.find(member => member.participantId === projectionBase.participantId)?.avatarUrl }),
+  }
   const native = <NativeView {...props} node={projection.node as ChatNode<'user'>} />
   const activeRoom = sessionTarget.room
   const message = messageTarget(String(props.sessionId), props.node, projection)
@@ -177,7 +190,13 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
   if (sessionTarget === undefined) {
     return <NativeView {...props} />
   }
-  const projection = projectChatroomMessage(props.node, room.identity)
+  const projectionBase = projectChatroomMessage(props.node, room.identity)
+  const projection = {
+    ...projectionBase,
+    ...(room.members.find(member => member.participantId === projectionBase.participantId)?.avatarUrl === undefined
+      ? {}
+      : { avatarUrl: room.members.find(member => member.participantId === projectionBase.participantId)?.avatarUrl }),
+  }
   const native = <NativeView {...props} node={projection.node as ChatNode<'steering'>} />
   const activeRoom = sessionTarget.room
   const message = messageTarget(String(props.sessionId), props.node, projection)
@@ -214,7 +233,6 @@ function ParticipantMessage({
   onReply: (() => void) | undefined
   onThread: (() => void) | undefined
 }): ReactNode {
-  const avatar = chatroomAvatar(projection.avatarId, projection.displayName ?? '')
   const menu = useChatroomMessageMenu()
   return (
     <div
@@ -225,7 +243,7 @@ function ParticipantMessage({
       onContextMenu={menu.open}
     >
       <ChatroomSelectionCheckbox tools={tools} />
-      <div className="dsh-chatroom-avatar" data-avatar={avatar.id} title={avatar.label} aria-hidden>{avatar.emoji}</div>
+      <ChatroomAvatar avatarId={projection.avatarId} avatarUrl={projection.avatarUrl} seed={projection.participantId ?? projection.displayName ?? ''} />
       <div className="dsh-chatroom-message-column">
         {projection.displayName !== undefined
           && <div className="dsh-chatroom-display-name">{projection.displayName}</div>}

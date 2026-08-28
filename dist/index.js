@@ -29,7 +29,12 @@ var Config = z.object({
   authAllowSelfRegistration: z.boolean().default(true),
   authDshAuthHeaders: z.boolean().default(false),
   authDshAuthVerifyUrl: z.string().default(""),
-  authDshAuthLoginPath: z.string().default("/auth/login")
+  authDshAuthLoginPath: z.string().default("/auth/login"),
+  authMode: z.string().pattern(/^(local|hybrid|dsh-auth-only)$/u).default("local"),
+  authDshAuthSuperAdminSubjects: z.array(z.string().min(1).max(512)).default([]),
+  authDshAuthAvatarUrlTemplate: z.string().default(""),
+  authDshAuthAvatarAllowedOrigins: z.array(z.string().min(1)).default([]),
+  authDshAuthRevalidateSeconds: z.number().step(1).min(5).max(3600).default(60)
 });
 function validateConfig(config) {
   if (!isAbsolute(config.cwd)) {
@@ -58,6 +63,45 @@ function validateConfig(config) {
     const loopback = verify.hostname === "127.0.0.1" || verify.hostname === "[::1]" || verify.hostname === "localhost";
     if (!loopback || verify.protocol !== "http:" || verify.username !== "" || verify.password !== "" || verify.hash !== "") {
       throw new Error("chatroom: authDshAuthVerifyUrl must be an uncredentialed loopback HTTP URL");
+    }
+  }
+  const mode = config.authMode ?? "local";
+  if (mode === "dsh-auth-only" && (config.authEnabled !== true || config.authDshAuthVerifyUrl === "")) {
+    throw new Error("chatroom: dsh-auth-only mode requires authEnabled and authDshAuthVerifyUrl");
+  }
+  if (mode === "dsh-auth-only" && config.authAllowSelfRegistration) {
+    throw new Error("chatroom: dsh-auth-only mode must disable self registration");
+  }
+  if (mode === "dsh-auth-only" && config.authDshAuthHeaders) {
+    throw new Error("chatroom: dsh-auth-only mode does not allow direct identity headers");
+  }
+  const allowedOrigins = config.authDshAuthAvatarAllowedOrigins ?? [];
+  for (const value of allowedOrigins) {
+    let origin;
+    try {
+      origin = new URL(value);
+    } catch {
+      throw new Error("chatroom: avatar allowed origins must be HTTPS origins");
+    }
+    if (origin.protocol !== "https:" || origin.origin !== value || origin.pathname !== "/" || origin.search !== "" || origin.hash !== "") {
+      throw new Error("chatroom: avatar allowed origins must be HTTPS origins without paths");
+    }
+  }
+  const template = config.authDshAuthAvatarUrlTemplate ?? "";
+  if (template !== "") {
+    if (!template.includes("{username}")) throw new Error("chatroom: avatar URL template must contain {username}");
+    const expanded = template.replaceAll("{username}", "user");
+    let avatar;
+    try {
+      avatar = new URL(expanded);
+    } catch {
+      throw new Error("chatroom: avatar URL template must be an HTTPS URL");
+    }
+    if (avatar.protocol !== "https:" || avatar.username !== "" || avatar.password !== "" || avatar.hash !== "") {
+      throw new Error("chatroom: avatar URL template must be an HTTPS URL");
+    }
+    if (allowedOrigins.length > 0 && !allowedOrigins.includes(avatar.origin)) {
+      throw new Error("chatroom: avatar URL template origin is not allowlisted");
     }
   }
   if (!config.authDshAuthLoginPath.startsWith("/") || config.authDshAuthLoginPath.startsWith("//") || /[?#\r\n]/u.test(config.authDshAuthLoginPath)) {
@@ -162,10 +206,31 @@ var ChatroomAuth = class {
         updatedAt: now
       });
     }
+    await this.migrateExternalAccounts(now);
     for (const [key, session] of this.sessions.entries()) {
       if (session.expiresAt <= now || this.accounts.get(session.userId)?.status !== "active") {
         await this.sessions.delete(key);
       }
+    }
+  }
+  /** Bring accounts created by the pre-profile adapter onto the stable subject/role model. */
+  async migrateExternalAccounts(now) {
+    for (const [, link] of this.externalAccounts.entries()) {
+      if (link.providerId !== "dsh-auth") continue;
+      const account = this.accounts.get(link.userId);
+      if (account === void 0) continue;
+      const role = (this.config.authDshAuthSuperAdminSubjects ?? []).includes(link.subject) ? "super-admin" : "member";
+      const avatarUrl = this.externalAvatarUrl(account.username);
+      if (account.externalProviderId === "dsh-auth" && account.externalSubject === link.subject && account.role === role && account.avatarUrl === avatarUrl) continue;
+      const { avatarUrl: _oldAvatarUrl, ...withoutAvatar } = account;
+      await this.accounts.put(account.id, {
+        ...withoutAvatar,
+        externalProviderId: "dsh-auth",
+        externalSubject: link.subject,
+        role,
+        ...avatarUrl === void 0 ? {} : { avatarUrl },
+        updatedAt: now
+      });
     }
   }
   /** Resolve one local opaque token without trusting browser-supplied identity fields. */
@@ -176,27 +241,65 @@ var ChatroomAuth = class {
     const account = this.accounts.get(session.userId);
     return account?.status === "active" ? publicAccount(account) : void 0;
   }
+  /** Resolve a request account and, in dsh-auth-only mode, revalidate the upstream session periodically. */
+  async accountForRequest(token, headers, originalUri = "/", now = Date.now()) {
+    const account = this.account(token, now);
+    if (account === void 0 || this.config.authMode !== "dsh-auth-only" || token === void 0) {
+      return account === void 0 ? {} : { account };
+    }
+    const sessionKey = secretHash(token);
+    const session = this.sessions.get(sessionKey);
+    const validatedAt = session?.externalValidatedAt ?? 0;
+    const interval = (this.config.authDshAuthRevalidateSeconds ?? 60) * 1e3;
+    if (session !== void 0 && now - validatedAt < interval) return { account };
+    const linkedSubject = this.accounts.get(account.participantId)?.externalSubject ?? [...this.externalAccounts.entries()].find(([, link]) => link.userId === account.participantId && link.providerId === "dsh-auth")?.[1].subject;
+    const verified = await this.dshAuthIdentity(headers, originalUri);
+    if (verified === void 0 || linkedSubject === void 0 || verified.subject !== linkedSubject) {
+      await this.sessions.delete(sessionKey);
+      return verified?.renewalCookie === void 0 ? {} : { renewalCookie: verified.renewalCookie };
+    }
+    const refreshed = await this.externalAccount(
+      "dsh-auth",
+      verified.subject,
+      verified.username,
+      verified.displayName ?? verified.username,
+      true,
+      verified.picture
+    );
+    if (refreshed.id !== account.participantId) {
+      await this.sessions.delete(sessionKey);
+      return verified.renewalCookie === void 0 ? {} : { renewalCookie: verified.renewalCookie };
+    }
+    if (session !== void 0) await this.sessions.put(sessionKey, { ...session, lastSeenAt: now, externalValidatedAt: now });
+    return {
+      account: publicAccount(refreshed),
+      ...verified.renewalCookie === void 0 ? {} : { renewalCookie: verified.renewalCookie }
+    };
+  }
   /** Browser-safe authentication state; unauthenticated callers receive no room metadata. */
   state(account) {
     const enabled = this.config.authEnabled;
     const providers = enabled ? this.providers() : [];
     const autoRedirectProvider = providers.find((provider) => provider.id === this.settings().autoRedirectProviderId);
+    const allowSelfRegistration = this.config.authMode === "dsh-auth-only" ? false : this.settings().allowSelfRegistration;
     return {
       enabled,
       authenticated: !enabled || account !== void 0,
+      authMode: this.config.authMode ?? "local",
       ...account === void 0 ? {} : { account },
       providers,
       ...autoRedirectProvider === void 0 ? {} : { autoRedirectProvider },
-      allowSelfRegistration: this.settings().allowSelfRegistration,
-      bootstrapRequired: enabled && this.accounts.size === 0
+      allowSelfRegistration,
+      bootstrapRequired: enabled && this.config.authMode !== "dsh-auth-only" && this.accounts.size === 0
     };
   }
   /** Enabled external sign-in choices shown on the login form. */
   providers() {
     const providers = [];
     if (this.config.authDshAuthVerifyUrl !== "" && this.config.authPublicOrigin !== "") {
-      providers.push({ id: "dsh-auth", type: "dsh-auth", label: "DeepSeek Harness \u7BA1\u7406\u5458" });
+      providers.push({ id: "dsh-auth", type: "dsh-auth", label: "\u4F01\u4E1A\u7EDF\u4E00\u767B\u5F55" });
     }
+    if (this.config.authMode === "dsh-auth-only") return providers;
     for (const [, provider] of this.providersTable.entries()) {
       if (provider.enabled) providers.push({ id: provider.id, type: "oidc", label: provider.label });
     }
@@ -206,6 +309,7 @@ var ChatroomAuth = class {
   async register(input) {
     return await this.serializeAccounts(async () => {
       this.assertEnabled();
+      if (this.config.authMode === "dsh-auth-only") throw new ChatroomAuthError("\u5F53\u524D\u90E8\u7F72\u4EC5\u652F\u6301\u4F01\u4E1A\u7EDF\u4E00\u767B\u5F55\u3002");
       const first = this.accounts.size === 0;
       if (first) {
         if (!secureTextEqual(input.bootstrapToken ?? "", this.config.authBootstrapToken)) {
@@ -224,6 +328,7 @@ var ChatroomAuth = class {
   /** Verify local credentials and issue a new opaque session. */
   async login(username, password) {
     this.assertEnabled();
+    if (this.config.authMode === "dsh-auth-only") throw new ChatroomAuthError("\u5F53\u524D\u90E8\u7F72\u4EC5\u652F\u6301\u4F01\u4E1A\u7EDF\u4E00\u767B\u5F55\u3002");
     const normalized = normalizeUsername(username);
     const now = Date.now();
     const retryAfter = this.consumeLoginAttempt(normalized.key, now);
@@ -263,21 +368,25 @@ var ChatroomAuth = class {
       return { token: await this.issueSession(current.id), account: publicAccount(updated) };
     });
   }
-  /** Adopt dsh-auth's verified administrator headers as an external super administrator. */
+  /** Adopt one dsh-auth verified identity, applying the configured subject role policy. */
   async adoptDshAuth(headers, originalUri = "/") {
     if (!this.config.authEnabled || !this.config.authDshAuthHeaders && this.config.authDshAuthVerifyUrl === "") return void 0;
     const verified = await this.dshAuthIdentity(headers, originalUri);
     if (verified === void 0) return void 0;
-    const roles = verified.roles.split(",").map((value) => value.trim());
-    if (!roles.includes("admin")) return void 0;
-    let username;
-    try {
-      username = decodeURIComponent(verified.encodedUsername);
-    } catch {
-      throw new ChatroomAuthError("dsh-auth \u8FD4\u56DE\u4E86\u65E0\u6548\u7684\u7BA1\u7406\u5458\u540D\u79F0\u3002");
-    }
-    const account = await this.externalAccount("dsh-auth", verified.subject, username, username, true);
-    return { token: await this.issueSession(account.id), account: publicAccount(account) };
+    const account = await this.externalAccount(
+      "dsh-auth",
+      verified.subject,
+      verified.username,
+      verified.displayName ?? verified.username,
+      true,
+      verified.picture,
+      verified.legacy && verified.roles.split(",").map((value) => value.trim()).includes("admin")
+    );
+    return {
+      token: await this.issueSession(account.id),
+      account: publicAccount(account),
+      ...verified.renewalCookie === void 0 ? {} : { renewalCookie: verified.renewalCookie }
+    };
   }
   /** Public dsh-auth password-login location returning through the local adapter. */
   dshAuthLoginUrl(returnTo, callbackPath) {
@@ -293,6 +402,7 @@ var ChatroomAuth = class {
   /** Build one PKCE and nonce-protected enterprise OIDC authorization redirect. */
   async startOidc(providerId, returnTo) {
     this.assertEnabled();
+    if (this.config.authMode === "dsh-auth-only") throw new ChatroomAuthError("\u5F53\u524D\u90E8\u7F72\u4EC5\u652F\u6301\u4F01\u4E1A\u7EDF\u4E00\u767B\u5F55\u3002");
     const provider = this.requireProvider(providerId);
     if (this.config.authPublicOrigin === "") {
       throw new ChatroomAuthError("\u7BA1\u7406\u5458\u5C1A\u672A\u914D\u7F6E\u4F01\u4E1A SSO \u7684\u516C\u7F51\u8BBF\u95EE\u5730\u5740\u3002");
@@ -322,6 +432,7 @@ var ChatroomAuth = class {
   /** Exchange and validate one OIDC callback, then bind or create its local account. */
   async completeOidc(providerId, currentUrl) {
     this.assertEnabled();
+    if (this.config.authMode === "dsh-auth-only") throw new ChatroomAuthError("\u5F53\u524D\u90E8\u7F72\u4EC5\u652F\u6301\u4F01\u4E1A\u7EDF\u4E00\u767B\u5F55\u3002");
     const state = currentUrl.searchParams.get("state") ?? "";
     const pending = this.pendingOidc.get(state);
     this.pendingOidc.delete(state);
@@ -352,19 +463,20 @@ var ChatroomAuth = class {
     this.assertSuperAdmin(actor);
     const settings = this.settings();
     const users = [...this.accounts.entries()].map(([, account]) => publicAccount(account)).sort((left, right) => left.username.localeCompare(right.username, "zh-CN"));
-    const providers = [...this.providersTable.entries()].map(([, provider]) => adminProvider(provider)).sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+    const providers = this.config.authMode === "dsh-auth-only" ? [] : [...this.providersTable.entries()].map(([, provider]) => adminProvider(provider)).sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
     return {
       users,
       providers,
       loginProviders: this.providers(),
       ...settings.autoRedirectProviderId == null ? {} : { autoRedirectProviderId: settings.autoRedirectProviderId },
       allowSelfRegistration: settings.allowSelfRegistration,
-      oidcCallbackBase: this.config.authPublicOrigin === "" ? "" : `${this.config.authPublicOrigin}/plugins/deepseek-harness-chatroom/api/auth/oidc/`
+      oidcCallbackBase: this.config.authMode === "dsh-auth-only" || this.config.authPublicOrigin === "" ? "" : `${this.config.authPublicOrigin}/plugins/deepseek-harness-chatroom/api/auth/oidc/`
     };
   }
   /** Create one local account from the super-administrator console. */
   async createUser(actor, input) {
     this.assertSuperAdmin(actor);
+    if (this.config.authMode === "dsh-auth-only") throw new ChatroomAuthError("\u5F53\u524D\u90E8\u7F72\u4EC5\u652F\u6301\u4F01\u4E1A\u7EDF\u4E00\u767B\u5F55\u3002");
     return await this.serializeAccounts(async () => publicAccount(await this.createAccount({ ...input, role: input.role ?? "member" })));
   }
   /** Change global role or activation state without allowing the final super administrator to disappear. */
@@ -387,6 +499,9 @@ var ChatroomAuth = class {
   /** Enable or disable autonomous password registration. */
   async updateSettings(actor, patch) {
     this.assertSuperAdmin(actor);
+    if (this.config.authMode === "dsh-auth-only" && patch.allowSelfRegistration === true) {
+      throw new ChatroomAuthError("dsh-auth-only \u6A21\u5F0F\u4E0D\u80FD\u5F00\u542F\u81EA\u4E3B\u6CE8\u518C\u3002");
+    }
     const current = this.settings();
     if (patch.autoRedirectProviderId !== void 0 && patch.autoRedirectProviderId !== null && !this.providers().some((provider) => provider.id === patch.autoRedirectProviderId)) {
       throw new ChatroomAuthError("\u81EA\u52A8\u8DF3\u8F6C\u7684\u8BA4\u8BC1\u63D0\u4F9B\u65B9\u4E0D\u5B58\u5728\u6216\u672A\u542F\u7528\u3002");
@@ -401,6 +516,7 @@ var ChatroomAuth = class {
   /** Add or replace one encrypted generic OIDC provider. */
   async saveProvider(actor, input) {
     this.assertSuperAdmin(actor);
+    if (this.config.authMode === "dsh-auth-only") throw new ChatroomAuthError("\u5F53\u524D\u90E8\u7F72\u4EC5\u652F\u6301\u4F01\u4E1A\u7EDF\u4E00\u767B\u5F55\u3002");
     const id = input.id.trim().toLowerCase();
     if (!PROVIDER_ID_PATTERN.test(id) || id === "dsh-auth" || id === "password") {
       throw new ChatroomAuthError("\u8BA4\u8BC1\u63D0\u4F9B\u65B9 ID \u53EA\u80FD\u4F7F\u7528\u5C0F\u5199\u5B57\u6BCD\u3001\u6570\u5B57\u3001\u4E0B\u5212\u7EBF\u548C\u8FDE\u5B57\u7B26\u3002");
@@ -446,6 +562,7 @@ var ChatroomAuth = class {
   /** Remove one OIDC provider without deleting accounts already linked to it. */
   async deleteProvider(actor, providerId) {
     this.assertSuperAdmin(actor);
+    if (this.config.authMode === "dsh-auth-only") throw new ChatroomAuthError("\u5F53\u524D\u90E8\u7F72\u4EC5\u652F\u6301\u4F01\u4E1A\u7EDF\u4E00\u767B\u5F55\u3002");
     await this.providersTable.delete(providerId);
     const settings = this.settings();
     if (settings.autoRedirectProviderId === providerId) {
@@ -456,6 +573,10 @@ var ChatroomAuth = class {
   /** Active public accounts for user search and private messaging. */
   activeAccounts() {
     return [...this.accounts.entries()].map(([, value]) => value).filter((value) => value.status === "active").map(publicAccount).sort((left, right) => left.displayName.localeCompare(right.displayName, "zh-CN"));
+  }
+  /** Stable subject for consumers of Chatroom's own forward-auth response. */
+  verifiedSubject(account) {
+    return this.accounts.get(account.participantId)?.externalSubject ?? account.username;
   }
   async createAccount(input) {
     const username = normalizeUsername(input.username);
@@ -482,22 +603,24 @@ var ChatroomAuth = class {
     await this.accounts.put(id, account);
     return account;
   }
-  async externalAccount(providerId, subject, suggestedUsername, suggestedDisplayName, autoCreate) {
+  async externalAccount(providerId, subject, suggestedUsername, suggestedDisplayName, autoCreate, picture, legacySuperAdmin = false) {
     return await this.serializeAccounts(async () => this.resolveExternalAccount(
       providerId,
       subject,
       suggestedUsername,
       suggestedDisplayName,
-      autoCreate
+      autoCreate,
+      picture,
+      legacySuperAdmin
     ));
   }
-  async resolveExternalAccount(providerId, subject, suggestedUsername, suggestedDisplayName, autoCreate) {
+  async resolveExternalAccount(providerId, subject, suggestedUsername, suggestedDisplayName, autoCreate, picture, legacySuperAdmin = false) {
     const key = externalKey(providerId, subject);
     const linked = this.externalAccounts.get(key);
     if (linked !== void 0) {
       const account2 = this.accounts.get(linked.userId);
       if (account2 === void 0 || account2.status !== "active") throw new ChatroomAuthError("\u8BE5\u4F01\u4E1A\u8D26\u53F7\u5DF2\u505C\u7528\u3002");
-      const updated = { ...account2, lastLoginAt: Date.now(), updatedAt: Date.now() };
+      const updated = this.externalProfile(account2, providerId, subject, suggestedUsername, suggestedDisplayName, picture, legacySuperAdmin);
       await this.accounts.put(account2.id, updated);
       return updated;
     }
@@ -511,13 +634,17 @@ var ChatroomAuth = class {
     }
     const id = randomUUID();
     const now = Date.now();
+    const avatarUrl = this.externalAvatarUrl(suggestedUsername, picture);
     const account = {
       id,
       username: candidate,
       usernameKey: candidateKey,
       displayName: normalizeDisplayName(suggestedDisplayName),
       avatarId: fallbackAvatarId(id),
-      role: providerId === "dsh-auth" ? "super-admin" : "member",
+      ...avatarUrl === void 0 ? {} : { avatarUrl },
+      externalProviderId: providerId,
+      externalSubject: subject,
+      role: providerId === "dsh-auth" && (legacySuperAdmin || (this.config.authDshAuthSuperAdminSubjects ?? []).includes(subject)) ? "super-admin" : "member",
       status: "active",
       createdAt: now,
       updatedAt: now,
@@ -526,6 +653,47 @@ var ChatroomAuth = class {
     await this.accounts.put(id, account);
     await this.externalAccounts.put(key, { providerId, subject, userId: id, createdAt: now });
     return account;
+  }
+  externalProfile(account, providerId, subject, suggestedUsername, suggestedDisplayName, picture, legacySuperAdmin = false) {
+    const username = normalizeUsername(suggestedUsername);
+    const existing = this.findUsername(username.key);
+    const next = existing === void 0 || existing.id === account.id ? username : { value: account.username, key: account.usernameKey };
+    const avatarUrl = this.externalAvatarUrl(next.value, picture);
+    const role = providerId === "dsh-auth" ? legacySuperAdmin || (this.config.authDshAuthSuperAdminSubjects ?? []).includes(subject) ? "super-admin" : "member" : account.role;
+    const { avatarUrl: _oldAvatarUrl, ...withoutAvatar } = account;
+    return {
+      ...withoutAvatar,
+      username: next.value,
+      usernameKey: next.key,
+      displayName: normalizeDisplayName(suggestedDisplayName),
+      ...avatarUrl === void 0 ? {} : { avatarUrl },
+      externalProviderId: providerId,
+      externalSubject: subject,
+      role,
+      lastLoginAt: Date.now(),
+      updatedAt: Date.now()
+    };
+  }
+  externalAvatarUrl(username, picture) {
+    const template = this.config.authDshAuthAvatarUrlTemplate ?? "";
+    const allowed = this.config.authDshAuthAvatarAllowedOrigins ?? [];
+    const candidates = [
+      picture,
+      template === "" ? void 0 : template.replaceAll("{username}", encodeURIComponent(username))
+    ];
+    for (const candidate of candidates) {
+      if (candidate === void 0) continue;
+      let url;
+      try {
+        url = new URL(candidate);
+      } catch {
+        continue;
+      }
+      if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.hash !== "") continue;
+      if (allowed.length > 0 && !allowed.includes(url.origin)) continue;
+      return url.href;
+    }
+    return void 0;
   }
   async serializeAccounts(operation) {
     const result = this.accountAdmission.then(operation);
@@ -539,15 +707,17 @@ var ChatroomAuth = class {
       userId,
       createdAt: now,
       lastSeenAt: now,
-      expiresAt: now + this.config.authSessionMaxAgeSeconds * 1e3
+      expiresAt: now + this.config.authSessionMaxAgeSeconds * 1e3,
+      ...this.config.authMode === "dsh-auth-only" ? { externalValidatedAt: now } : {}
     });
     return token;
   }
   settings() {
-    return this.settingsTable.get("auth") ?? {
+    const current = this.settingsTable.get("auth") ?? {
       allowSelfRegistration: this.config.authAllowSelfRegistration,
       updatedAt: 0
     };
+    return this.config.authMode === "dsh-auth-only" && current.allowSelfRegistration ? { ...current, allowSelfRegistration: false } : current;
   }
   findUsername(usernameKey) {
     return [...this.accounts.entries()].find(([, account]) => account.usernameKey === usernameKey)?.[1];
@@ -581,9 +751,12 @@ var ChatroomAuth = class {
   async dshAuthIdentity(headers, originalUri) {
     if (this.config.authDshAuthHeaders) {
       const direct = dshIdentityHeaders(
-        singleHeader(headers["x-dsh-auth-user-id"]),
+        singleHeader(headers["x-dsh-auth-subject"]) ?? singleHeader(headers["x-dsh-auth-user-id"]),
         singleHeader(headers["x-dsh-auth-username"]),
-        singleHeader(headers["x-dsh-auth-roles"])
+        singleHeader(headers["x-dsh-auth-display-name"]),
+        singleHeader(headers["x-dsh-auth-picture"]),
+        singleHeader(headers["x-dsh-auth-roles"]),
+        singleHeader(headers["x-dsh-auth-subject"]) === void 0
       );
       if (direct !== void 0) return direct;
     }
@@ -607,11 +780,19 @@ var ChatroomAuth = class {
       return void 0;
     }
     if (verified.status !== 204) return void 0;
-    return dshIdentityHeaders(
-      verified.headers.get("x-dsh-auth-user-id") ?? void 0,
+    const renewed = verified.headers.getSetCookie?.().find((value) => value.startsWith("__Host-dsh_auth_session=") || value.startsWith("dsh_auth_session="));
+    const standardizedSubject = verified.headers.get("x-dsh-auth-subject");
+    if (this.config.authMode === "dsh-auth-only" && standardizedSubject === null) return void 0;
+    const identity = dshIdentityHeaders(
+      standardizedSubject ?? verified.headers.get("x-dsh-auth-user-id") ?? void 0,
       verified.headers.get("x-dsh-auth-username") ?? void 0,
-      verified.headers.get("x-dsh-auth-roles") ?? void 0
+      verified.headers.get("x-dsh-auth-display-name") ?? void 0,
+      verified.headers.get("x-dsh-auth-picture") ?? void 0,
+      verified.headers.get("x-dsh-auth-roles") ?? void 0,
+      verified.headers.get("x-dsh-auth-subject") === null
     );
+    if (identity === void 0 || renewed === void 0) return identity;
+    return { ...identity, renewalCookie: renewed };
   }
   consumeLoginAttempt(key, now) {
     for (const [candidate, bucket2] of this.loginBuckets) {
@@ -676,6 +857,8 @@ function publicAccount(account) {
     username: account.username,
     displayName: account.displayName,
     avatarId: account.avatarId,
+    ...account.avatarUrl === void 0 ? {} : { avatarUrl: account.avatarUrl },
+    ...account.passwordHash === void 0 ? { passwordManaged: false } : { passwordManaged: true },
     role: account.role,
     status: account.status,
     createdAt: account.createdAt,
@@ -791,11 +974,27 @@ function secureTextEqual(left, right) {
   return timingSafeEqual(leftDigest, rightDigest) && left !== "" && right !== "";
 }
 function singleHeader(value) {
-  return typeof value === "string" && value.length <= 1024 ? value : void 0;
+  return typeof value === "string" && value.length <= 2048 ? value : void 0;
 }
-function dshIdentityHeaders(subject, encodedUsername, roles) {
-  if (subject === void 0 || encodedUsername === void 0 || roles === void 0 || subject === "" || encodedUsername === "" || roles === "") return void 0;
-  return { subject, encodedUsername, roles };
+function dshIdentityHeaders(subject, encodedUsername, encodedDisplayName, picture, roles, legacy) {
+  if (subject === void 0 || subject === "") return void 0;
+  const decode = (value, label) => {
+    let decoded;
+    try {
+      decoded = decodeURIComponent(value);
+    } catch {
+      throw new ChatroomAuthError(`dsh-auth \u8FD4\u56DE\u4E86\u65E0\u6548\u7684${label}\u3002`);
+    }
+    if (decoded === "" || /\p{C}/u.test(decoded) || Buffer.byteLength(decoded, "utf8") > 512) {
+      throw new ChatroomAuthError(`dsh-auth \u8FD4\u56DE\u4E86\u65E0\u6548\u7684${label}\u3002`);
+    }
+    return decoded;
+  };
+  const decodedSubject = decode(subject, "\u8EAB\u4EFD\u6807\u8BC6");
+  const username = encodedUsername === void 0 || encodedUsername === "" ? decodedSubject : decode(encodedUsername, "\u8D26\u53F7\u540D\u79F0");
+  const displayName = encodedDisplayName === void 0 || encodedDisplayName === "" ? void 0 : decode(encodedDisplayName, "\u663E\u793A\u540D\u79F0");
+  const decodedPicture = picture === void 0 || picture === "" ? void 0 : decode(picture, "\u5934\u50CF\u5730\u5740");
+  return { subject: decodedSubject, username, ...displayName === void 0 ? {} : { displayName }, ...decodedPicture === void 0 ? {} : { picture: decodedPicture }, roles: roles ?? "", legacy };
 }
 function safeReturnTo(value) {
   if (!value.startsWith("/") || value.startsWith("//") || /[\r\n]/u.test(value)) return "/";
@@ -812,7 +1011,8 @@ function authProviderStartLocation(prefix, provider, returnTo) {
   return `${route}?returnTo=${encodeURIComponent(returnTo)}`;
 }
 function automaticAuthRedirect(prefix, state, returnTo, requestUrl) {
-  if (state.bootstrapRequired || state.autoRedirectProvider === void 0 || localLoginRequested(requestUrl, returnTo)) return void 0;
+  if (state.bootstrapRequired || state.autoRedirectProvider === void 0) return void 0;
+  if (state.authMode !== "dsh-auth-only" && localLoginRequested(requestUrl, returnTo)) return void 0;
   return authProviderStartLocation(prefix, state.autoRedirectProvider, returnTo);
 }
 function localLoginRequested(requestUrl, returnTo) {
@@ -934,10 +1134,23 @@ function isChatroomReactionEmoji(value) {
 
 // src/domain.ts
 var nonNegativeSafeInteger = z2.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+var safeAvatarUrl = z2.string().url().refine((value) => {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.username === "" && url.password === "" && url.hash === "";
+  } catch {
+    return false;
+  }
+}, "avatarUrl must be an HTTPS URL without credentials or fragments");
+var safeExternalText = z2.string().min(1).refine(
+  (value) => Buffer.byteLength(value, "utf8") <= 512 && !/\p{C}/u.test(value),
+  "external identity text must be at most 512 UTF-8 bytes without control characters"
+);
 var identitySchema = z2.object({
   participantId: z2.uuid(),
   displayName: z2.string().min(1),
   avatarId: z2.string().refine(isChatroomAvatarId).optional(),
+  avatarUrl: safeAvatarUrl.optional(),
   createdAt: nonNegativeSafeInteger,
   lastSeenAt: nonNegativeSafeInteger
 }).refine((record) => record.lastSeenAt >= record.createdAt, {
@@ -981,6 +1194,7 @@ var memberSchema = z2.object({
   participantId: z2.string().min(1),
   displayName: z2.string().min(1),
   avatarId: z2.string().refine(isChatroomAvatarId),
+  avatarUrl: safeAvatarUrl.optional(),
   joinedAt: nonNegativeSafeInteger,
   lastSeenAt: nonNegativeSafeInteger
 }).refine((record) => record.lastSeenAt >= record.joinedAt, {
@@ -1017,6 +1231,7 @@ var threadMessageSchema = z2.object({
   participantId: z2.string().min(1),
   displayName: z2.string().min(1),
   avatarId: z2.string().refine(isChatroomAvatarId).optional(),
+  avatarUrl: safeAvatarUrl.optional(),
   text: z2.string().min(1),
   files: z2.array(z2.object({
     id: z2.string().min(1),
@@ -1041,6 +1256,9 @@ var accountSchema = z2.object({
   usernameKey: z2.string().min(1),
   displayName: z2.string().min(1),
   avatarId: z2.string().refine(isChatroomAvatarId),
+  avatarUrl: safeAvatarUrl.optional(),
+  externalProviderId: z2.string().min(1).optional(),
+  externalSubject: safeExternalText.optional(),
   passwordHash: z2.string().min(1).optional(),
   role: z2.union([z2.literal("super-admin"), z2.literal("admin"), z2.literal("member")]),
   status: z2.union([z2.literal("active"), z2.literal("disabled")]),
@@ -1052,7 +1270,8 @@ var authSessionSchema = z2.object({
   userId: z2.uuid(),
   createdAt: nonNegativeSafeInteger,
   lastSeenAt: nonNegativeSafeInteger,
-  expiresAt: nonNegativeSafeInteger
+  expiresAt: nonNegativeSafeInteger,
+  externalValidatedAt: nonNegativeSafeInteger.optional()
 });
 var authSettingsSchema = z2.object({
   allowSelfRegistration: z2.boolean(),
@@ -1076,7 +1295,7 @@ var authProviderSchema = z2.object({
 });
 var externalAccountSchema = z2.object({
   providerId: z2.string().min(1),
-  subject: z2.string().min(1),
+  subject: safeExternalText,
   userId: z2.uuid(),
   createdAt: nonNegativeSafeInteger
 });
@@ -1317,7 +1536,8 @@ var ChatroomRuntime = class {
       participantId: account.participantId,
       username: account.username,
       displayName: account.displayName,
-      avatarId: account.avatarId
+      avatarId: account.avatarId,
+      ...account.avatarUrl === void 0 ? {} : { avatarUrl: account.avatarUrl }
     }));
   }
   /** Maximum accepted JSON body for one text, image, and file room submission. */
@@ -1618,6 +1838,7 @@ var ChatroomRuntime = class {
         participantId: account.participantId,
         displayName: account.displayName,
         avatarId: account.avatarId,
+        ...account.avatarUrl === void 0 ? {} : { avatarUrl: account.avatarUrl },
         joinedAt: now,
         lastSeenAt: now
       });
@@ -1828,7 +2049,8 @@ var ChatroomRuntime = class {
       participantId: account.participantId,
       username: account.username,
       displayName: account.displayName,
-      avatarId: account.avatarId
+      avatarId: account.avatarId,
+      ...account.avatarUrl === void 0 ? {} : { avatarUrl: account.avatarUrl }
     }));
     const conversations = [...this.requireDirectConversations().entries()].map(([, conversation]) => conversation).filter((conversation) => conversation.participantIds.includes(identity.participantId)).map((conversation) => this.publicDirectConversation(conversation, identity.participantId)).sort((left, right) => right.updatedAt - left.updatedAt);
     return { peers, conversations };
@@ -1958,6 +2180,7 @@ var ChatroomRuntime = class {
         participantId: identity.participantId,
         displayName: identity.displayName,
         avatarId: identity.avatarId,
+        ...identity.avatarUrl === void 0 ? {} : { avatarUrl: identity.avatarUrl },
         text,
         ...files.length === 0 ? {} : { files },
         ...durable.some((block) => block.type === "image") ? { hasImages: true } : {},
@@ -2158,6 +2381,7 @@ var ChatroomRuntime = class {
       participantId: identity.participantId,
       displayName: identity.displayName,
       avatarId: identity.avatarId,
+      ...identity.avatarUrl === void 0 ? {} : { avatarUrl: identity.avatarUrl },
       joinedAt: existing?.joinedAt ?? now,
       lastSeenAt: now
     });
@@ -2180,6 +2404,7 @@ var ChatroomRuntime = class {
       participantId: record.participantId,
       displayName: record.displayName,
       avatarId: record.avatarId,
+      ...record.avatarUrl === void 0 ? {} : { avatarUrl: record.avatarUrl },
       role: memberRole(state.record, record.participantId),
       joinedAt: record.joinedAt,
       lastSeenAt: record.lastSeenAt,
@@ -2225,7 +2450,8 @@ var ChatroomRuntime = class {
         participantId: account.participantId,
         username: account.username,
         displayName: account.displayName,
-        avatarId: account.avatarId
+        avatarId: account.avatarId,
+        ...account.avatarUrl === void 0 ? {} : { avatarUrl: account.avatarUrl }
       },
       createdAt: record.createdAt,
       updatedAt: record.updatedAt
@@ -2529,7 +2755,8 @@ function publicIdentity(record) {
   return {
     participantId: record.participantId,
     displayName: record.displayName,
-    avatarId: record.avatarId ?? fallbackAvatarId(record.participantId)
+    avatarId: record.avatarId ?? fallbackAvatarId(record.participantId),
+    ...record.avatarUrl === void 0 ? {} : { avatarUrl: record.avatarUrl }
   };
 }
 function publicFile(record) {
@@ -2569,7 +2796,8 @@ function publicThreadMessage(record) {
     ...record.hasImages === void 0 ? {} : { hasImages: record.hasImages },
     ...record.reply === void 0 ? {} : { reply: record.reply },
     createdAt: record.createdAt,
-    ...record.avatarId === void 0 ? {} : { avatarId: record.avatarId }
+    ...record.avatarId === void 0 ? {} : { avatarId: record.avatarId },
+    ...record.avatarUrl === void 0 ? {} : { avatarUrl: record.avatarUrl }
   };
 }
 function normalizeDisplayName2(value, maxChars) {
@@ -2897,7 +3125,7 @@ var ChatroomHttpController = class {
         return;
       }
       if (route.endpoint.startsWith("/files/")) {
-        this.handleFile(request, response, route.endpoint.slice("/files/".length));
+        await this.handleFile(request, response, route.endpoint.slice("/files/".length));
         return;
       }
       if (route.endpoint.startsWith("/images/")) {
@@ -2909,7 +3137,7 @@ var ChatroomHttpController = class {
         return;
       }
       if (route.endpoint === "/notifications" && request.method === "GET") {
-        this.handleNotifications(request, response);
+        await this.handleNotifications(request, response);
         return;
       }
       if (route.endpoint.startsWith("/configuration/")) {
@@ -2939,12 +3167,13 @@ var ChatroomHttpController = class {
     const token = this.token(request);
     if (request.method === "GET") {
       if (this.config.authEnabled) {
-        let account = this.runtime.auth.account(this.authToken(request));
+        let account = await this.requestAccount(request, response);
         if (account === void 0) {
           const adopted = await this.runtime.auth.adoptDshAuth(request.headers);
           if (adopted !== void 0) {
             account = adopted.account;
             this.setAuthCookie(response, adopted.token);
+            this.forwardDshAuthRenewal(response, adopted.renewalCookie);
           }
         }
         json(response, 200, this.sessionPayload(account ?? null, account));
@@ -3000,12 +3229,13 @@ var ChatroomHttpController = class {
         methodNotAllowed(response, "GET, HEAD");
         return;
       }
-      let account = this.runtime.auth.account(this.authToken(request));
+      let account = await this.requestAccount(request, response);
       if (account === void 0) {
         const adopted = await this.runtime.auth.adoptDshAuth(request.headers, originalRequestUri(request));
         if (adopted !== void 0) {
           account = adopted.account;
           this.setAuthCookie(response, adopted.token);
+          this.forwardDshAuthRenewal(response, adopted.renewalCookie);
         }
       }
       if (account === void 0) {
@@ -3023,7 +3253,10 @@ var ChatroomHttpController = class {
         "Cache-Control": "no-store, max-age=0",
         Vary: "Cookie",
         "X-Dsh-Auth-User-Id": account.participantId,
+        "X-Dsh-Auth-Subject": encodeURIComponent(this.runtime.auth.verifiedSubject(account)),
         "X-Dsh-Auth-Username": encodeURIComponent(account.username),
+        ...account.displayName === account.username ? {} : { "X-Dsh-Auth-Display-Name": encodeURIComponent(account.displayName) },
+        ...account.avatarUrl === void 0 ? {} : { "X-Dsh-Auth-Picture": encodeURIComponent(account.avatarUrl) },
         "X-Dsh-Auth-Roles": account.role
       });
       response.end();
@@ -3035,12 +3268,13 @@ var ChatroomHttpController = class {
         return;
       }
       const returnTo = safeReturnPath(url.searchParams.get("returnTo") ?? "/");
-      let account = this.runtime.auth.account(this.authToken(request));
+      let account = await this.requestAccount(request, response);
       if (account === void 0) {
         const adopted = await this.runtime.auth.adoptDshAuth(request.headers, returnTo);
         if (adopted !== void 0) {
           account = adopted.account;
           this.setAuthCookie(response, adopted.token);
+          this.forwardDshAuthRenewal(response, adopted.renewalCookie);
         }
       }
       if (account !== void 0) {
@@ -3058,11 +3292,11 @@ var ChatroomHttpController = class {
         response.end();
         return;
       }
-      html(response, 200, renderAuthPage(cookiePath, state, returnTo), request.method === "HEAD");
+      html(response, 200, renderAuthPage(cookiePath, state, returnTo), request.method === "HEAD", this.config);
       return;
     }
     if (endpoint === "/auth/providers" && request.method === "GET") {
-      const account = this.runtime.auth.account(this.authToken(request));
+      const account = await this.requestAccount(request, response);
       json(response, 200, this.runtime.auth.state(account));
       return;
     }
@@ -3127,6 +3361,7 @@ var ChatroomHttpController = class {
       const adopted = await this.runtime.auth.adoptDshAuth(request.headers, returnTo);
       if (adopted === void 0) throw new ChatroomAuthError("dsh-auth \u767B\u5F55\u672A\u5B8C\u6210\u6216\u5DF2\u5931\u6548\u3002");
       this.setAuthCookie(response, adopted.token);
+      this.forwardDshAuthRenewal(response, adopted.renewalCookie);
       response.writeHead(302, { Location: returnTo, "Cache-Control": "no-store" });
       response.end();
       return;
@@ -3134,7 +3369,7 @@ var ChatroomHttpController = class {
     methodNotAllowed(response, endpoint.endsWith("/start") || endpoint.endsWith("/callback") ? "GET" : "POST");
   }
   async handleAdministration(request, response) {
-    const actor = this.requireAccount(request, response);
+    const actor = await this.requireAccount(request, response);
     if (actor === void 0) return;
     if (request.method === "GET") {
       json(response, 200, this.runtime.auth.overview(actor));
@@ -3208,7 +3443,7 @@ var ChatroomHttpController = class {
       return;
     }
     assertSameOrigin(request);
-    const actor = this.requireAccount(request, response);
+    const actor = await this.requireAccount(request, response);
     if (actor === void 0) return;
     const body = await readJson(request, 4096);
     if (fieldString(body, "action") !== "change-password") throw new ChatroomAuthError("\u8D26\u53F7\u64CD\u4F5C\u65E0\u6548\u3002");
@@ -3221,7 +3456,7 @@ var ChatroomHttpController = class {
     json(response, 200, { account: changed.account });
   }
   async handleDirect(request, response) {
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     if (request.method === "GET") {
       json(response, 200, this.runtime.directDirectory(identity));
@@ -3241,7 +3476,7 @@ var ChatroomHttpController = class {
       return;
     }
     assertSameOrigin(request);
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     const body = await readJson(request, this.config.maxMessageTextChars * 4 + 4096);
     json(response, 201, await this.runtime.sendDirect(
@@ -3252,7 +3487,7 @@ var ChatroomHttpController = class {
   }
   async handleRooms(request, response) {
     if (request.method === "GET") {
-      if (this.requireIdentity(request, response) === void 0) return;
+      if (await this.requireIdentity(request, response) === void 0) return;
       json(response, 200, { rooms: this.runtime.rooms });
       return;
     }
@@ -3261,7 +3496,7 @@ var ChatroomHttpController = class {
       return;
     }
     assertSameOrigin(request);
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     const body = await readJson(request, smallRequestLimit(this.config));
     const room = await this.runtime.createRoom(fieldString(body, "title"), identity);
@@ -3273,7 +3508,7 @@ var ChatroomHttpController = class {
       return;
     }
     assertSameOrigin(request);
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     const body = await readJson(request, smallRequestLimit(this.config));
     const room = await this.runtime.ensureSessionRoom(
@@ -3289,14 +3524,14 @@ var ChatroomHttpController = class {
       return;
     }
     assertSameOrigin(request);
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     const body = await readJson(request, smallRequestLimit(this.config));
     const room = await this.runtime.selectRoom(fieldString(body, "roomId"), identity);
     json(response, 200, { room });
   }
   async handleRoomManagement(request, response) {
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     if (request.method === "GET") {
       const url = new URL(request.url ?? "/", "http://chatroom.local");
@@ -3357,7 +3592,7 @@ var ChatroomHttpController = class {
       return;
     }
     assertSameOrigin(request);
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     const body = await readJson(request, smallRequestLimit(this.config) + 2048);
     const root = threadRootRequest(body.root);
@@ -3370,7 +3605,7 @@ var ChatroomHttpController = class {
       return;
     }
     assertSameOrigin(request);
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     const body = await readJson(request, this.runtime.maxPromptRequestBytes);
     const parsed = promptRequest({ ...body, roomId: "__thread__" }, this.config);
@@ -3395,7 +3630,7 @@ var ChatroomHttpController = class {
       return;
     }
     assertSameOrigin(request);
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     const body = await readJson(request, this.runtime.maxPromptRequestBytes);
     const prompt = promptRequest(body, this.config);
@@ -3408,7 +3643,7 @@ var ChatroomHttpController = class {
       return;
     }
     assertSameOrigin(request);
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     const body = await readJson(request, smallRequestLimit(this.config));
     const emoji = body.emoji;
@@ -3427,7 +3662,7 @@ var ChatroomHttpController = class {
       return;
     }
     assertSameOrigin(request);
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     const body = await readJson(request, this.config.maxMessageTextChars * 12 + 32768);
     const result = await this.runtime.forwardMessages(
@@ -3438,12 +3673,12 @@ var ChatroomHttpController = class {
     );
     json(response, 200, result);
   }
-  handleFile(request, response, fileId) {
+  async handleFile(request, response, fileId) {
     if (request.method !== "GET") {
       methodNotAllowed(response, "GET");
       return;
     }
-    if (this.requireIdentity(request, response) === void 0) return;
+    if (await this.requireIdentity(request, response) === void 0) return;
     if (fileId === "" || fileId.includes("/")) throw new ChatroomInputError("\u6587\u4EF6\u7F16\u53F7\u65E0\u6548\u3002");
     const file = this.runtime.file(fileId);
     response.writeHead(200, {
@@ -3460,7 +3695,7 @@ var ChatroomHttpController = class {
       methodNotAllowed(response, "GET");
       return;
     }
-    if (this.requireIdentity(request, response) === void 0) return;
+    if (await this.requireIdentity(request, response) === void 0) return;
     let value;
     try {
       value = JSON.parse(decodeURIComponent(encoded));
@@ -3484,7 +3719,7 @@ var ChatroomHttpController = class {
     response.end(stored.data);
   }
   async handleEvents(request, response, search) {
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     const roomId = search.get("roomId");
     if (roomId === null || roomId === "") throw new ChatroomInputError("\u7F3A\u5C11\u5171\u4EAB\u4F1A\u8BDD\u7F16\u53F7\u3002");
@@ -3499,13 +3734,28 @@ var ChatroomHttpController = class {
     const heartbeat = setInterval(() => {
       if (!response.destroyed && !response.writableEnded) response.write(": heartbeat\n\n");
     }, this.config.sseHeartbeatMs);
+    const revalidate = this.config.authMode === "dsh-auth-only" ? setInterval(() => {
+      void this.requestAccount(request).then((account) => {
+        if (account !== void 0 || response.destroyed || response.writableEnded) return;
+        clearInterval(revalidate);
+        clearInterval(heartbeat);
+        unsubscribe();
+        response.end();
+      }).catch(() => {
+        clearInterval(revalidate);
+        clearInterval(heartbeat);
+        unsubscribe();
+        response.end();
+      });
+    }, (this.config.authDshAuthRevalidateSeconds ?? 60) * 1e3) : void 0;
     request.once("close", () => {
       clearInterval(heartbeat);
+      if (revalidate !== void 0) clearInterval(revalidate);
       unsubscribe();
     });
   }
-  handleNotifications(request, response) {
-    const identity = this.requireIdentity(request, response);
+  async handleNotifications(request, response) {
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
     response.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
@@ -3517,8 +3767,23 @@ var ChatroomHttpController = class {
     const heartbeat = setInterval(() => {
       if (!response.destroyed && !response.writableEnded) response.write(": heartbeat\n\n");
     }, this.config.sseHeartbeatMs);
+    const revalidate = this.config.authMode === "dsh-auth-only" ? setInterval(() => {
+      void this.requestAccount(request).then((account) => {
+        if (account !== void 0 || response.destroyed || response.writableEnded) return;
+        clearInterval(revalidate);
+        clearInterval(heartbeat);
+        unsubscribe();
+        response.end();
+      }).catch(() => {
+        clearInterval(revalidate);
+        clearInterval(heartbeat);
+        unsubscribe();
+        response.end();
+      });
+    }, (this.config.authDshAuthRevalidateSeconds ?? 60) * 1e3) : void 0;
     request.once("close", () => {
       clearInterval(heartbeat);
+      if (revalidate !== void 0) clearInterval(revalidate);
       unsubscribe();
     });
   }
@@ -3532,9 +3797,9 @@ var ChatroomHttpController = class {
       return;
     }
     assertSameOrigin(request);
-    const identity = this.requireIdentity(request, response);
+    const identity = await this.requireIdentity(request, response);
     if (identity === void 0) return;
-    const account = this.config.authEnabled ? this.runtime.auth.account(this.authToken(request)) : void 0;
+    const account = this.config.authEnabled ? await this.requestAccount(request, response) : void 0;
     if (account?.role !== "super-admin" && !canManageRemoteSettings(this.config, identity.participantId)) {
       json(response, 403, { error: "\u5F53\u524D\u804A\u5929\u5BA4\u8EAB\u4EFD\u6CA1\u6709\u6A21\u578B\u8BBE\u7F6E\u7BA1\u7406\u6743\u9650\u3002" });
       return;
@@ -3560,8 +3825,8 @@ var ChatroomHttpController = class {
       ...this.config.authEnabled && account === void 0 ? {} : { room: this.runtime.room }
     };
   }
-  requireIdentity(request, response) {
-    const identity = this.config.authEnabled ? this.runtime.auth.account(this.authToken(request)) : this.runtime.identity(this.token(request));
+  async requireIdentity(request, response) {
+    const identity = this.config.authEnabled ? await this.requestAccount(request, response) : this.runtime.identity(this.token(request));
     if (identity === void 0) {
       json(response, 401, {
         error: this.config.authEnabled ? "\u8BF7\u5148\u767B\u5F55\u3002" : "\u8BF7\u5148\u9009\u62E9\u804A\u5929\u5BA4\u8EAB\u4EFD\u3002"
@@ -3569,10 +3834,25 @@ var ChatroomHttpController = class {
     }
     return identity;
   }
-  requireAccount(request, response) {
-    const account = this.runtime.auth.account(this.authToken(request));
+  async requireAccount(request, response) {
+    const account = await this.requestAccount(request, response);
     if (account === void 0) json(response, 401, { error: "\u8BF7\u5148\u767B\u5F55\u3002" });
     return account;
+  }
+  async requestAccount(request, response) {
+    const resolved = await this.runtime.auth.accountForRequest(
+      this.authToken(request),
+      request.headers,
+      originalRequestUri(request)
+    );
+    if (response !== void 0) this.forwardDshAuthRenewal(response, resolved.renewalCookie);
+    return resolved.account;
+  }
+  forwardDshAuthRenewal(response, cookie) {
+    if (cookie === void 0) return;
+    const current = response.getHeader("Set-Cookie");
+    const values = current === void 0 ? [] : Array.isArray(current) ? current.map(String) : [String(current)];
+    response.setHeader("Set-Cookie", [...values, cookie]);
   }
   token(request) {
     return cookieValue(request.headers.cookie, this.config.cookieName);
@@ -3625,17 +3905,21 @@ function json(response, status, payload) {
   });
   response.end(body);
 }
-function html(response, status, body, head) {
+function html(response, status, body, head, config) {
   response.writeHead(status, {
     "Content-Type": "text/html; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
     "Cache-Control": "no-store, max-age=0",
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "Content-Security-Policy": chatroomContentSecurityPolicy(config),
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY"
   });
   response.end(head ? void 0 : body);
+}
+function chatroomContentSecurityPolicy(config) {
+  const imageSources = ["'self'", "data:", ...config.authDshAuthAvatarAllowedOrigins ?? []].join(" ");
+  return `default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src ${imageSources}; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`;
 }
 function methodNotAllowed(response, allow) {
   response.setHeader("Allow", allow);

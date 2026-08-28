@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from 'node:http'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChatroomAuth } from '../src/auth.js'
 import { renderAuthPage } from '../src/auth-page.js'
 import type { Config } from '../src/config.js'
@@ -11,6 +11,8 @@ import type {
   AuthSettingsRecord,
   ExternalAccountRecord,
 } from '../src/domain.js'
+
+afterEach(() => { vi.unstubAllGlobals() })
 
 describe('ChatroomAuth', () => {
   it('prefers dsh-auth as the initial login provider when it is installed', async () => {
@@ -92,6 +94,106 @@ describe('ChatroomAuth', () => {
     const durable = fixture.providers.get('company')
     expect(durable?.encryptedClientSecret).not.toContain('private-client-secret')
     expect(JSON.stringify(fixture.auth.overview(adopted!.account))).not.toContain('private-client-secret')
+  })
+
+  it('maps standardized dsh-auth subjects to stable accounts and configured roles', async () => {
+    const fixture = createAuth({
+      authDshAuthHeaders: true,
+      authDshAuthSuperAdminSubjects: ['alice'],
+      authDshAuthAvatarUrlTemplate: 'https://avatars.example.com/{username}.png',
+      authDshAuthAvatarAllowedOrigins: ['https://avatars.example.com'],
+    })
+    await fixture.auth.start()
+    const mason = await fixture.auth.adoptDshAuth({
+      'x-dsh-auth-subject': 'alice',
+      'x-dsh-auth-username': 'alice',
+      'x-dsh-auth-display-name': encodeURIComponent('黄先生'),
+      'x-dsh-auth-picture': encodeURIComponent('https://avatars.example.com/mason-direct.png'),
+      'x-dsh-auth-roles': 'admin',
+    } satisfies IncomingHttpHeaders)
+    expect(mason?.account).toMatchObject({
+      username: 'alice',
+      displayName: '黄先生',
+      role: 'super-admin',
+      avatarUrl: 'https://avatars.example.com/mason-direct.png',
+    })
+
+    const sameSubject = await fixture.auth.adoptDshAuth({
+      'x-dsh-auth-subject': 'alice',
+      'x-dsh-auth-username': 'alice',
+      'x-dsh-auth-display-name': encodeURIComponent('黄先生（更新）'),
+    } satisfies IncomingHttpHeaders)
+    expect(sameSubject?.account.participantId).toBe(mason?.account.participantId)
+    expect(sameSubject?.account.displayName).toBe('黄先生（更新）')
+    expect(sameSubject?.account.avatarUrl).toBe('https://avatars.example.com/alice.png')
+
+    const member = await fixture.auth.adoptDshAuth({
+      'x-dsh-auth-subject': 'mauriceniu',
+      'x-dsh-auth-username': 'mauriceniu',
+      'x-dsh-auth-display-name': 'Maurice',
+      'x-dsh-auth-roles': 'admin',
+    } satisfies IncomingHttpHeaders)
+    expect(member?.account.role).toBe('member')
+  })
+
+  it('revalidates dsh-auth-only sessions, refreshes profiles, and revokes stale local sessions', async () => {
+    const verified = (displayName: string, cookie: string) => new Response(null, {
+      status: 204,
+      headers: {
+        'x-dsh-auth-subject': 'mauriceniu',
+        'x-dsh-auth-username': 'mauriceniu',
+        'x-dsh-auth-display-name': encodeURIComponent(displayName),
+        'set-cookie': cookie,
+      },
+    })
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(verified('Maurice', 'dsh_auth_session=renewed-1; HttpOnly; Path=/'))
+      .mockResolvedValueOnce(verified('Maurice 更新', 'dsh_auth_session=renewed-2; HttpOnly; Path=/'))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+    vi.stubGlobal('fetch', fetcher)
+    const fixture = createAuth({
+      authMode: 'dsh-auth-only',
+      authAllowSelfRegistration: false,
+      authDshAuthVerifyUrl: 'http://127.0.0.1:3080/auth/verify',
+      authDshAuthRevalidateSeconds: 5,
+    })
+    await fixture.auth.start()
+
+    expect(fixture.auth.state()).toMatchObject({
+      providers: [{ id: 'dsh-auth', type: 'dsh-auth' }],
+      allowSelfRegistration: false,
+      bootstrapRequired: false,
+    })
+    await expect(fixture.auth.login('local-user', 'local password 123')).rejects.toThrow('企业统一登录')
+    await expect(fixture.auth.register({
+      username: 'local-user', password: 'local password 123', displayName: 'Local',
+    })).rejects.toThrow('企业统一登录')
+    await expect(fixture.auth.startOidc('company', '/')).rejects.toThrow('企业统一登录')
+
+    const adopted = await fixture.auth.adoptDshAuth({ cookie: 'dsh_auth_session=original' })
+    expect(adopted).toMatchObject({
+      account: { username: 'mauriceniu', displayName: 'Maurice', role: 'member' },
+      renewalCookie: 'dsh_auth_session=renewed-1; HttpOnly; Path=/',
+    })
+    const refreshed = await fixture.auth.accountForRequest(
+      adopted?.token,
+      { cookie: 'dsh_auth_session=renewed-1' },
+      '/plugins/deepseek-harness-chatroom/api/session',
+      Date.now() + 10_000,
+    )
+    expect(refreshed).toMatchObject({
+      account: { participantId: adopted?.account.participantId, displayName: 'Maurice 更新' },
+      renewalCookie: 'dsh_auth_session=renewed-2; HttpOnly; Path=/',
+    })
+
+    const revoked = await fixture.auth.accountForRequest(
+      adopted?.token,
+      { cookie: 'dsh_auth_session=renewed-2' },
+      '/',
+      Date.now() + 20_000,
+    )
+    expect(revoked.account).toBeUndefined()
+    expect(fixture.auth.account(adopted?.token)).toBeUndefined()
   })
 
   it('renders a standalone login gate without embedding deployment secrets', () => {

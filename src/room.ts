@@ -169,6 +169,7 @@ export class ChatroomRuntime {
         username: account.username,
         displayName: account.displayName,
         avatarId: account.avatarId,
+        ...(account.avatarUrl === undefined ? {} : { avatarUrl: account.avatarUrl }),
       }))
   }
 
@@ -507,6 +508,7 @@ export class ChatroomRuntime {
         participantId: account.participantId,
         displayName: account.displayName,
         avatarId: account.avatarId,
+        ...(account.avatarUrl === undefined ? {} : { avatarUrl: account.avatarUrl }),
         joinedAt: now,
         lastSeenAt: now,
       })
@@ -768,6 +770,7 @@ export class ChatroomRuntime {
         username: account.username,
         displayName: account.displayName,
         avatarId: account.avatarId,
+        ...(account.avatarUrl === undefined ? {} : { avatarUrl: account.avatarUrl }),
       } satisfies ChatroomDirectPeer))
     const conversations = [...this.requireDirectConversations().entries()]
       .map(([, conversation]) => conversation)
@@ -938,6 +941,7 @@ export class ChatroomRuntime {
         participantId: identity.participantId,
         displayName: identity.displayName,
         avatarId: identity.avatarId,
+        ...(identity.avatarUrl === undefined ? {} : { avatarUrl: identity.avatarUrl }),
         text,
         ...(files.length === 0 ? {} : { files }),
         ...(durable.some(block => block.type === 'image') ? { hasImages: true } : {}),
@@ -1162,6 +1166,7 @@ export class ChatroomRuntime {
       participantId: identity.participantId,
       displayName: identity.displayName,
       avatarId: identity.avatarId,
+      ...(identity.avatarUrl === undefined ? {} : { avatarUrl: identity.avatarUrl }),
       joinedAt: existing?.joinedAt ?? now,
       lastSeenAt: now,
     })
@@ -1192,6 +1197,7 @@ export class ChatroomRuntime {
         participantId: record.participantId,
         displayName: record.displayName,
         avatarId: record.avatarId,
+        ...(record.avatarUrl === undefined ? {} : { avatarUrl: record.avatarUrl }),
         role: memberRole(state.record, record.participantId),
         joinedAt: record.joinedAt,
         lastSeenAt: record.lastSeenAt,
@@ -1249,6 +1255,7 @@ export class ChatroomRuntime {
         username: account.username,
         displayName: account.displayName,
         avatarId: account.avatarId,
+        ...(account.avatarUrl === undefined ? {} : { avatarUrl: account.avatarUrl }),
       },
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
@@ -1605,6 +1612,7 @@ function publicIdentity(record: IdentityRecord): ChatroomIdentity {
     participantId: record.participantId,
     displayName: record.displayName,
     avatarId: record.avatarId ?? fallbackAvatarId(record.participantId),
+    ...(record.avatarUrl === undefined ? {} : { avatarUrl: record.avatarUrl }),
   }
 }
 
@@ -1650,6 +1658,7 @@ function publicThreadMessage(record: ThreadMessageRecord): ChatroomThreadMessage
     ...(record.reply === undefined ? {} : { reply: record.reply }),
     createdAt: record.createdAt,
     ...(record.avatarId === undefined ? {} : { avatarId: record.avatarId }),
+    ...(record.avatarUrl === undefined ? {} : { avatarUrl: record.avatarUrl }),
   }
 }
 

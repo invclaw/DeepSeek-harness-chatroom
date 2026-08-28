@@ -35,6 +35,18 @@ describe('automatic authentication redirect', () => {
       new URL('https://chat.example.com/auth/page'),
     )).toBeUndefined()
   })
+
+  it('does not expose the local recovery switch in dsh-auth-only mode', () => {
+    expect(automaticAuthRedirect(
+      prefix,
+      state({
+        authMode: 'dsh-auth-only',
+        autoRedirectProvider: { id: 'dsh-auth', type: 'dsh-auth', label: '企业统一登录' },
+      }),
+      '/workspace?local=1',
+      new URL('https://chat.example.com/auth/page?local=1'),
+    )).toBe(`${prefix}/auth/dsh-auth/start?returnTo=%2Fworkspace%3Flocal%3D1`)
+  })
 })
 
 function state(patch: Partial<ChatroomAuthState>): ChatroomAuthState {

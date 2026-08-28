@@ -34,6 +34,8 @@ export declare class ChatroomHttpController {
     private sessionPayload;
     private requireIdentity;
     private requireAccount;
+    private requestAccount;
+    private forwardDshAuthRenewal;
     private token;
     private authToken;
     private setAuthCookie;
@@ -42,4 +44,6 @@ export declare class ChatroomHttpController {
 export declare function isRemoteConfigurationMethod(method: string): boolean;
 /** Whether one authenticated chatroom identity may use the remote model-settings bridge. */
 export declare function canManageRemoteSettings(config: Config, participantId: string): boolean;
+/** Keep document image loading limited to same-origin assets and configured avatar origins. */
+export declare function chatroomContentSecurityPolicy(config: Pick<Config, 'authDshAuthAvatarAllowedOrigins'>): string;
 //# sourceMappingURL=http.d.ts.map

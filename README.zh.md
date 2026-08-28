@@ -141,6 +141,11 @@ pnpm dsh --profile web
     authDshAuthHeaders: !!js process.env.DSH_CHATROOM_DSH_AUTH_HEADERS === 'enabled'
     authDshAuthVerifyUrl: !!js process.env.DSH_CHATROOM_DSH_AUTH_VERIFY_URL ?? ''
     authDshAuthLoginPath: !!js process.env.DSH_CHATROOM_DSH_AUTH_LOGIN_PATH ?? '/auth/login'
+    authMode: !!js process.env.DSH_CHATROOM_AUTH_MODE ?? 'local'
+    authDshAuthSuperAdminSubjects: !!js (process.env.DSH_CHATROOM_DSH_AUTH_SUPER_ADMINS ?? '').split(',').map(value => value.trim()).filter(Boolean)
+    authDshAuthAvatarUrlTemplate: !!js process.env.DSH_CHATROOM_DSH_AUTH_AVATAR_TEMPLATE ?? ''
+    authDshAuthAvatarAllowedOrigins: !!js (process.env.DSH_CHATROOM_DSH_AUTH_AVATAR_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean)
+    authDshAuthRevalidateSeconds: !!js Number(process.env.DSH_CHATROOM_DSH_AUTH_REVALIDATE_SECONDS ?? 60)
 ```
 
 需要调整时，在 Web profile 的 `cordis.patch.yml` 覆盖配置：
@@ -178,15 +183,20 @@ pnpm dsh --profile web
     authDshAuthHeaders: false
     authDshAuthVerifyUrl: ''
     authDshAuthLoginPath: /auth/login
+    authMode: local
+    authDshAuthSuperAdminSubjects: []
+    authDshAuthAvatarUrlTemplate: ''
+    authDshAuthAvatarAllowedOrigins: []
+    authDshAuthRevalidateSeconds: 60
 ```
 
 `authSecret` 用于加密 OIDC Client Secret，必须稳定保存在 Git 之外。本地密码使用带随机盐的 scrypt。第一次密码注册必须填写 `authBootstrapToken`，该账号会成为初始超级管理员；后续注册遵循“系统管理”里的动态策略。登录失败有内存限流，停用账号会撤销其全部会话，修改密码会轮换当前会话并撤销旧会话。认证 Cookie 是随机值，服务端只保存 SHA-256 摘要，使用 `HttpOnly`、`SameSite=Strict`、根路径，并在 `authPublicOrigin` 为 HTTPS 时加上 `Secure`。
 
 ### 企业 OIDC 与 dsh-auth
 
-OIDC 提供方在 Harness 原生“设置 → 群聊与账号”中添加，界面显示的回调地址必须原样登记到企业身份平台。发现与授权码交换使用 OIDC discovery、PKCE、state 和 nonce；Client Secret 使用 `authSecret` 派生的 AES-256-GCM 密钥加密，不会回显到管理界面。部署 dsh-auth 时它会成为初始默认入口；没有 dsh-auth 时，唯一启用的外部认证会成为默认入口。超级管理员可以改选其他提供方或恢复登录选择页。需要排查 SSO 或使用本地超级管理员时，在原访问地址查询参数中加入 `local=1`。
+OIDC 提供方在 Harness 原生“设置 → 群聊与账号”中添加，界面显示的回调地址必须原样登记到企业身份平台。发现与授权码交换使用 OIDC discovery、PKCE、state 和 nonce；Client Secret 使用 `authSecret` 派生的 AES-256-GCM 密钥加密，不会回显到管理界面。部署 dsh-auth 时它会成为初始默认入口；没有 dsh-auth 时，唯一启用的外部认证会成为默认入口。超级管理员可以改选其他提供方或恢复登录选择页。`local=1` 应急入口仅适用于 `hybrid`/`local` 模式。
 
-要在保留本地多用户账号的同时复用 [`dsh-auth`](https://github.com/hxy91819/dsh-auth)，需让它的 `/auth/*` 路由继续在同一公网 Origin 可访问，并将 `DSH_CHATROOM_DSH_AUTH_VERIFY_URL` 指向它的回环 `/auth/verify`（如果插件运行在同一个 Harness listener，通常为 `http://127.0.0.1:3080/auth/verify`）。聊天室只把浏览器中的 dsh-auth Cookie 转发给该回环校验接口，并把验证成功的管理员导入为本地超级管理员。`DSH_CHATROOM_DSH_AUTH_HEADERS=enabled` 则直接信任代理注入的 `X-Dsh-Auth-*`，适用于已有 dsh-auth 托管网关的部署，网关必须先删除客户端伪造的同名 Header。dsh-auth 外层网关本身只允许它的单一管理员通过；若还要允许本地成员账号登录，应使用“回环校验适配”，而不是把单用户 dsh-auth 放在最外层。
+要在保留本地多用户账号的同时复用 [`dsh-auth`](https://github.com/hxy91819/dsh-auth)，需让它的 `/auth/*` 路由继续在同一公网 Origin 可访问，并将 `DSH_CHATROOM_DSH_AUTH_VERIFY_URL` 指向它的回环 `/auth/verify`（如果插件运行在同一个 Harness listener，通常为 `http://127.0.0.1:3080/auth/verify`）。聊天室只把浏览器中的 dsh-auth Cookie 转发给该回环校验接口，并把验证成功的账号导入为普通成员；`authDshAuthSuperAdminSubjects` 中列出的 subject 才是全局超级管理员。生产环境可设 `authMode: dsh-auth-only`、关闭自主注册并将复核周期保持为 60 秒；此模式隐藏本地密码和 OIDC 入口，并在上游会话撤销后拒绝访问，`local=1` 应急入口仅适用于 `hybrid`/`local` 模式。`DSH_CHATROOM_DSH_AUTH_HEADERS=enabled` 仅适用于受信任网关兼容场景，网关必须先删除客户端伪造的同名 Header。头像只保存 HTTPS URL；可用 `authDshAuthAvatarUrlTemplate` 并配合 `authDshAuthAvatarAllowedOrigins`，加载失败自动回退内置头像。
 
 ### 整站网关保护
 
