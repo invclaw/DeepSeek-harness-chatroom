@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.1.14" src="https://img.shields.io/badge/version-1.1.14-4f6bff">
+    <img alt="Version 1.1.15" src="https://img.shields.io/badge/version-1.1.15-4f6bff">
     <img alt="Harness RC7 or later" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -85,6 +85,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.1.15** — add a Chromium regression gate for branch theme and geometry, and keep the full-width mobile branch panel inside its viewport.
 - **1.1.14** — make the Harness action row expand around injected AI branch activity instead of letting the summary overlap the sticky composer.
 - **1.1.13** — match branch panels and reply summaries to the inherited light/dark color scheme, and keep AI branch activity in normal message flow above the composer.
 - **1.1.12** — bind every native sidebar collage to its authoritative Session ID, so duplicate titles, selection changes, and row reordering cannot swap room avatars.
@@ -108,6 +109,10 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 - pnpm 10.33.4
 - DeepSeek Harness 0.1.0-rc.7 or later
 - A working default model selection in the Harness Web profile
+
+### Regression gates
+
+`pnpm check` runs type checks, observable-behavior tests, and production builds. CI additionally installs Chromium and runs `pnpm test:browser`, which verifies the branch panel's computed light/dark colors and proves that injected AI branch activity expands the native Harness actions row without overlapping the composer. These browser assertions deliberately use geometry and computed styles instead of screenshot snapshots.
 
 ## Install from GitHub
 

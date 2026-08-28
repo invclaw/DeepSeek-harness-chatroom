@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.1.14" src="https://img.shields.io/badge/version-1.1.14-4f6bff">
+    <img alt="版本 1.1.15" src="https://img.shields.io/badge/version-1.1.15-4f6bff">
     <img alt="Harness RC7 或更高" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -85,6 +85,7 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.1.15** — 增加分支主题与盒模型的 Chromium 回归门禁，并避免移动端全宽分支面板超出视口。
 - **1.1.14** — 让 Harness 消息操作行随 AI 分支摘要自动增高，避免摘要与吸底输入框重叠。
 - **1.1.13** — 分支面板和回复摘要跟随宿主明暗配色，并让 AI 分支摘要进入消息正常布局、稳定停留在输入框上方。
 - **1.1.12** — 每个原生侧栏群头像都按权威 Session ID 绑定，同名会话、选中态变化和行重排不再导致群头像串换。
@@ -108,6 +109,10 @@
 - pnpm 10.33.4
 - DeepSeek Harness 0.1.0-rc.7 或更高版本
 - Web profile 已配置可用的默认模型
+
+### 回归门禁
+
+`pnpm check` 负责类型检查、可观察行为测试和生产构建。CI 还会安装 Chromium 并运行 `pnpm test:browser`，验证分支面板的明暗 computed color，以及 AI 分支摘要会撑开 Harness 原生操作行且不与输入框重叠。浏览器断言使用盒模型和计算样式，不依赖易碎的截图快照。
 
 ## 从 GitHub 安装
 

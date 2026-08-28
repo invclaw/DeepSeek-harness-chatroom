@@ -815,6 +815,7 @@ html[data-dsh-chatroom-active] [data-dsh-chatroom-native-actions] {
 
 .dsh-chatroom-thread-panel {
   pointer-events: auto;
+  box-sizing: border-box;
   position: fixed;
   top: 0;
   right: 0;
