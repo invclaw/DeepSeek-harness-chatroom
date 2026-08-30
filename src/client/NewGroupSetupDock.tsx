@@ -43,6 +43,30 @@ export function NewGroupSetupDock(props: NewGroupSetupDockProps): JSX.Element | 
     }
   }, [blank, props.sessionId, view.branchFrame])
 
+  useEffect(() => {
+    if (!blank || nativeHeroBody === undefined || mode === undefined) return
+    let workspaceButton: HTMLButtonElement | null = null
+    let container: HTMLElement | null = nativeHeroBody
+    while (container !== null && workspaceButton === null) {
+      workspaceButton = container.querySelector<HTMLButtonElement>('button[aria-label="选择工作区"]')
+      container = container.parentElement
+    }
+    const workspaceLabel = workspaceButton?.querySelector<HTMLSpanElement>('span')
+    if (workspaceButton === null || workspaceLabel === undefined || workspaceLabel === null) return
+    const originalLabel = workspaceLabel.textContent ?? ''
+    const modeLabel = mode === 'solo' ? 'Solo' : '群聊'
+    workspaceLabel.textContent = modeLabel
+    workspaceButton.title = originalLabel === ''
+      ? `当前会话类型：${modeLabel}`
+      : `当前会话类型：${modeLabel}；工作区：${originalLabel}`
+    workspaceButton.setAttribute('data-dsh-chatroom-session-mode', mode)
+    return () => {
+      workspaceLabel.textContent = originalLabel
+      workspaceButton.removeAttribute('title')
+      workspaceButton.removeAttribute('data-dsh-chatroom-session-mode')
+    }
+  }, [blank, mode, nativeHeroBody])
+
   if (!blank || view.branchFrame !== undefined || mode === undefined) return null
   const activeMode = mode === 'solo' ? 'solo' : 'group'
   const chooser = (

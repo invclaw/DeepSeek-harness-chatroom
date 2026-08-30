@@ -30,19 +30,31 @@ describe('blank Session mode switch', () => {
 
   it('reuses the native Harness welcome hero', () => {
     document.body.innerHTML = `
-      <div data-native-stack>
-        <div data-native-headline><span>🐋</span><span>探索未至之境</span><span>预览版</span></div>
-        <div data-native-body></div>
+      <div data-native-composer>
+        <div data-native-root>
+          <div data-native-stack>
+            <div data-native-headline><span>🐋</span><span>探索未至之境</span><span>预览版</span></div>
+            <div data-native-body></div>
+          </div>
+        </div>
+        <button aria-label="选择工作区"><span>deepseek-harness</span></button>
       </div>
     `
-    const { unmount } = render(<NewGroupSetupDock {...dockProps('group')} />)
+    const { rerender, unmount } = render(<NewGroupSetupDock {...dockProps('group')} />)
 
     expect(screen.getByText('今天有什么工作要处理？')).toBeTruthy()
     expect(document.querySelector('[data-native-body] [aria-label="新会话模式"]')).toBeTruthy()
     expect(document.querySelector('[data-dsh-chatroom-new-session-hero]')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '选择工作区' }).textContent).toBe('群聊')
+    expect(screen.getByRole('button', { name: '选择工作区' }).getAttribute('title'))
+      .toBe('当前会话类型：群聊；工作区：deepseek-harness')
+
+    rerender(<NewGroupSetupDock {...dockProps('solo')} />)
+    expect(screen.getByRole('button', { name: '选择工作区' }).textContent).toBe('Solo')
 
     unmount()
     expect(screen.getByText('探索未至之境')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '选择工作区' }).textContent).toBe('deepseek-harness')
   })
 
   it('registers a blank native Session when the Session list has not reported it yet', () => {
