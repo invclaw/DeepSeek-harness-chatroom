@@ -27,6 +27,7 @@ interface ChatroomEntryInjected {
     renameRoom?(title: string): Promise<boolean>;
     setMemberRole?(participantId: string, role: 'admin' | 'member'): Promise<boolean>;
     addRoomMembers?(participantIds: readonly string[]): Promise<boolean>;
+    setRoomAutoTrigger?(enabled: boolean): Promise<boolean>;
     closeThread(): void;
     setThreadReply(reply: ChatroomReplyReference): void;
     clearThreadReply(): void;
@@ -67,9 +68,11 @@ interface ChatroomEntryInjected {
         autoCreateUsers: boolean;
     }): Promise<boolean>;
     adminDeleteProvider(providerId: string): Promise<boolean>;
+    loadAutomation?(): Promise<void>;
+    saveAutomation?(provider: string, model: string, mainAgentPrompt: string, controllerPrompt: string): Promise<boolean>;
     openDirect(peerId?: string): Promise<void>;
     closeDirect(): void;
-    sendDirect(text: string): Promise<boolean>;
+    sendDirect(text: string, files?: readonly File[]): Promise<boolean>;
 }
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected;
 /** Authentication and first-identity overlays plus persistent chatroom panels. */

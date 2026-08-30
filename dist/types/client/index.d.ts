@@ -9,8 +9,10 @@ export declare function apply(ctx: ClientContext): void;
 export declare function activateRemoteSettingsMirror(settingsScope: unknown): () => void;
 /** Mount one wrapper only after its native renderer exists, independent of client-plugin load order. */
 export declare function mountAfterNativeMessageView<T>(readNative: () => T | undefined, subscribe: (listener: () => void) => () => void, mount: (native: T) => () => void): () => void;
-/** Build the room-scoped AI and member source contributed to RC7's native @ menu. */
+/** Build the room-scoped AI source contributed to RC7's native @ menu. */
 export declare function createChatroomAiSource(store: ChatroomClientStore): InputTriggerSource;
+/** Build the room-scoped human member source contributed to RC7's native @ menu. */
+export declare function createChatroomMemberSource(store: ChatroomClientStore): InputTriggerSource;
 declare const _default: {
     inject: string[];
     apply: typeof apply;

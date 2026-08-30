@@ -115,9 +115,14 @@ export function projectForwardText(text: string): { text: string; forward?: Chat
 
 /** Whether visible room text explicitly mentions the generic or configured AI name. */
 export function mentionsAi(content: readonly ChatroomPromptContentPart[], aiDisplayName: string): boolean {
+  return [aiDisplayName, 'AI'].some(name => mentionsName(content, name))
+}
+
+/** Whether visible room text explicitly mentions one participant or account name. */
+export function mentionsName(content: readonly ChatroomPromptContentPart[], name: string): boolean {
   const text = content.filter((part): part is Extract<ChatroomPromptContentPart, { type: 'text' }> =>
     part.type === 'text').map(part => part.text).join('\n')
-  return [aiDisplayName, 'AI'].some(name => mentionPattern(name).test(text))
+  return mentionPattern(name).test(text)
 }
 
 /** Whether the native command dispatcher must retain ownership of this submission. */

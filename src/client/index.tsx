@@ -7,9 +7,11 @@ import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/
 import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import { chatroomAvatar } from '../avatars.js'
 import { ChatroomEntry } from './ChatroomEntry.js'
 import { ChatroomSettingsSection } from './ChatroomAccountPanels.js'
 import { ChatroomAssistantReplyAction } from './ChatroomAssistantReplyAction.js'
+import { ChatroomAssistantNodeView } from './ChatroomAssistantNodeView.js'
 import { ChatroomComposerDock, ChatroomFileAction } from './ChatroomComposer.js'
 import {
   ChatroomSteeringMessageNodeView,
@@ -21,7 +23,7 @@ import { NewGroupSetupDock } from './NewGroupSetupDock.js'
 import { installRemoteConfigurationApi } from './remote-configuration.js'
 import { RoomIdentityAction } from './RoomIdentityAction.js'
 import { installSidebarRoomRows } from './sidebar-rooms.js'
-import { ChatroomClientStore } from './store.js'
+import { ChatroomClientStore, newGroupMentionName } from './store.js'
 import { CHATROOM_STYLES } from './styles.js'
 import {
   branchFrameSwitchFromMessage,
@@ -60,7 +62,9 @@ export function apply(ctx: ClientContext): void {
     if (!response.result.ok) {
       throw new Error(`new shared session failed: ${response.result.error.code}: ${response.result.error.message}`)
     }
-    return response.result.value.sessionId
+    const sessionId = response.result.value.sessionId
+    store.registerNewSession(String(sessionId))
+    return sessionId
   }), 'chatroom: distinct native New Session')
   ctx.effect(() => {
     if (branchFrame !== undefined) document.documentElement.setAttribute('data-dsh-chatroom-branch-frame', '')
@@ -117,6 +121,11 @@ export function apply(ctx: ClientContext): void {
       const list = sessions.list.getSnapshot()
       const current = list.current
       const summary = current === undefined ? undefined : list.byId[current]
+      if (current !== undefined && summary?.blank === true && summary.origin !== 'subagent'
+        && store.roomForSession(String(current)) === undefined
+        && store.newSessionMode(String(current)) === undefined) {
+        store.registerNewSession(String(current))
+      }
       store.activateSession(
         current === undefined ? undefined : String(current),
         summary?.displayTitle ?? '新会话',
@@ -148,7 +157,9 @@ export function apply(ctx: ClientContext): void {
   }, 'chatroom: browser state and styles')
 
   const aiSource = createChatroomAiSource(store)
-  ctx.effect(() => inputTriggers.registerSource(aiSource), 'chatroom: @AI input source')
+  const memberSource = createChatroomMemberSource(store)
+  ctx.effect(() => inputTriggers.registerSource(aiSource), 'chatroom: AI mention source')
+  ctx.effect(() => inputTriggers.registerSource(memberSource), 'chatroom: member mention source')
 
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',
@@ -173,6 +184,7 @@ export function apply(ctx: ClientContext): void {
       renameRoom: store.renameRoom,
       setMemberRole: store.setMemberRole,
       addRoomMembers: store.addRoomMembers,
+      setRoomAutoTrigger: store.setRoomAutoTrigger,
       closeThread: store.closeThread,
       setThreadReply: store.setThreadReply,
       clearThreadReply: store.clearThreadReply,
@@ -193,6 +205,8 @@ export function apply(ctx: ClientContext): void {
       adminSetAutoRedirectProvider: store.adminSetAutoRedirectProvider,
       adminSaveProvider: store.adminSaveProvider,
       adminDeleteProvider: store.adminDeleteProvider,
+      loadAutomation: store.loadAutomation,
+      saveAutomation: store.saveAutomation,
       openDirect: store.openDirect,
       closeDirect: store.closeDirect,
       sendDirect: store.sendDirect,
@@ -216,6 +230,8 @@ export function apply(ctx: ClientContext): void {
       adminSetAutoRedirectProvider: store.adminSetAutoRedirectProvider,
       adminSaveProvider: store.adminSaveProvider,
       adminDeleteProvider: store.adminDeleteProvider,
+      loadAutomation: store.loadAutomation,
+      saveAutomation: store.saveAutomation,
       openDirect: store.openDirect,
       closeDirect: store.closeDirect,
       sendDirect: store.sendDirect,
@@ -252,9 +268,9 @@ export function apply(ctx: ClientContext): void {
     order: -30,
     inject: () => ({
       hooks: { chatroom: store },
-      resolveTarget: store.agentTargetForSession.bind(store),
-      loadRoomMemberCandidates: store.loadRoomMemberCandidates,
-      completeGroupSetup: store.completeGroupSetup,
+      registerNewSession: store.registerNewSession,
+      newSessionMode: store.newSessionMode,
+      chooseNewSessionMode: store.chooseNewSessionMode,
     }),
   }, NewGroupSetupDock))
 
@@ -286,6 +302,24 @@ export function apply(ctx: ClientContext): void {
       toggleMessageSelection: store.toggleMessageSelection,
     }),
   }, ChatroomAssistantReplyAction))
+
+  ctx.slots.inject('conversation.chat.node', () => mountAfterNativeMessageView(
+    () => ctx.slots.entries('conversation.chat.node').find(entry =>
+      entry.options.key === 'assistant-step' && (entry.options.priority ?? 0) === 0)?.component as
+        | ComponentType<ChatNodeViewProps<'assistant-step'>>
+        | undefined,
+    listener => ctx.slots.subscribe('conversation.chat.node', listener),
+    nativeMessageView => ctx.slots.register({
+      name: 'conversation.chat.node',
+      key: 'assistant-step',
+      priority: -10,
+      locale: 'conversation',
+      inject: () => ({
+        nativeMessageView,
+        resolveTarget: store.agentTargetForSession.bind(store),
+      }),
+    }, ChatroomAssistantNodeView),
+  ))
 
   ctx.slots.inject('conversation.chat.node', () => mountAfterNativeMessageView(
     () => ctx.slots.entries('conversation.chat.node').find(entry =>
@@ -396,36 +430,85 @@ function chatroomMessageInjection<T extends 'user' | 'steering'>(
   }
 }
 
-/** Build the room-scoped AI and member source contributed to RC7's native @ menu. */
+/** Build the room-scoped AI source contributed to RC7's native @ menu. */
 export function createChatroomAiSource(store: ChatroomClientStore): InputTriggerSource {
   return {
     trigger: '@',
-    name: 'AI',
+    name: 'AI 助手',
     order: -100,
-    candidates(session, { query }) {
+    async candidates(session, { query }) {
       const room = store.roomForSession(String(session.sessionId))
-      if (room === undefined) return Promise.resolve([])
-      const snapshot = store.getSnapshot()
-      const candidates = [
-        ...[...new Set(['AI', room.aiDisplayName])].map(name => ({ name, icon: '✦', description: '提及后触发 AI 回复' })),
-        ...snapshot.members
-          .filter(member => member.participantId !== snapshot.identity?.participantId)
-          .map(member => ({ name: member.displayName, icon: '●', description: member.online ? '在线成员' : '群成员' })),
-      ].filter((candidate, index, all) => all.findIndex(item => item.name === candidate.name) === index)
+      const newGroup = room === undefined && store.newSessionMode(String(session.sessionId)) === 'group'
+      if (room === undefined && !newGroup) return []
+      const candidates = [{
+        name: aiMentionMenuName(room?.aiDisplayName ?? 'DeepSeek'),
+        icon: '✦',
+        description: room === undefined ? '创建群聊后立即回复' : '提及后回复',
+      }]
       const needle = query.toLocaleLowerCase()
-      return Promise.resolve(candidates.filter(candidate => candidate.name.toLocaleLowerCase().includes(needle)))
+      return candidates.filter(candidate => candidate.name.toLocaleLowerCase().includes(needle))
     },
     lexicon(session) {
       const room = store.roomForSession(String(session.sessionId))
-      if (room === undefined) return []
+      if (room === undefined) {
+        if (store.newSessionMode(String(session.sessionId)) !== 'group') return []
+        return ['AI', 'DeepSeek']
+      }
+      return [...new Set(['AI', room.aiDisplayName])]
+    },
+    subscribeLexicon(_session, listener) {
+      return store.subscribe(listener)
+    },
+    onPick({ candidate }) {
+      return { text: `@${mentionToken(candidate.name)} ` }
+    },
+  }
+}
+
+/** Build the room-scoped human member source contributed to RC7's native @ menu. */
+export function createChatroomMemberSource(store: ChatroomClientStore): InputTriggerSource {
+  return {
+    trigger: '@',
+    name: '群聊成员',
+    order: -90,
+    async candidates(session, { query }) {
+      const room = store.roomForSession(String(session.sessionId))
+      const newGroup = room === undefined && store.newSessionMode(String(session.sessionId)) === 'group'
+      if (room === undefined && !newGroup) return []
+      if (newGroup && store.getSnapshot().directPeers.length === 0) await store.loadDirectDirectory()
       const snapshot = store.getSnapshot()
-      return [...new Set([
-        'AI',
-        room.aiDisplayName,
-        ...snapshot.members
+      const candidates = room === undefined
+        ? snapshot.directPeers
+          .filter(peer => peer.participantId !== snapshot.identity?.participantId)
+          .map(peer => ({
+            name: newGroupMentionName(peer, snapshot.directPeers),
+            icon: chatroomAvatar(peer.avatarId, peer.participantId).emoji,
+            description: `创建群聊时自动邀请 · @${peer.username}`,
+          }))
+        : snapshot.members
           .filter(member => member.participantId !== snapshot.identity?.participantId)
-          .map(member => member.displayName),
-      ])]
+          .map(member => ({
+            name: member.displayName,
+            icon: chatroomAvatar(member.avatarId, member.participantId).emoji,
+            description: member.online ? '在线成员' : '群成员',
+          }))
+      const needle = query.toLocaleLowerCase()
+      return candidates
+        .filter((candidate, index, all) => all.findIndex(item => item.name === candidate.name) === index)
+        .filter(candidate => candidate.name.toLocaleLowerCase().includes(needle))
+    },
+    lexicon(session) {
+      const room = store.roomForSession(String(session.sessionId))
+      const snapshot = store.getSnapshot()
+      if (room === undefined) {
+        if (store.newSessionMode(String(session.sessionId)) !== 'group') return []
+        return [...new Set(snapshot.directPeers
+          .filter(peer => peer.participantId !== snapshot.identity?.participantId)
+          .map(peer => newGroupMentionName(peer, snapshot.directPeers)))]
+      }
+      return [...new Set(snapshot.members
+        .filter(member => member.participantId !== snapshot.identity?.participantId)
+        .map(member => member.displayName))]
     },
     subscribeLexicon(_session, listener) {
       return store.subscribe(listener)
@@ -434,6 +517,18 @@ export function createChatroomAiSource(store: ChatroomClientStore): InputTrigger
       return { text: `@${candidate.name} ` }
     },
   }
+}
+
+const AI_MENTION_MENU_SUFFIX = '（AI 助手）'
+
+function aiMentionMenuName(name: string): string {
+  return `${name}${AI_MENTION_MENU_SUFFIX}`
+}
+
+function mentionToken(menuName: string): string {
+  return menuName.endsWith(AI_MENTION_MENU_SUFFIX)
+    ? menuName.slice(0, -AI_MENTION_MENU_SUFFIX.length)
+    : menuName
 }
 
 export default { inject, apply }

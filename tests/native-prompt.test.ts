@@ -131,4 +131,41 @@ describe('native prompt admission', () => {
     expect(original).not.toHaveBeenCalled()
     expect(store.completeComposition).toHaveBeenCalledOnce()
   })
+
+  it('invites people mentioned in the first new-Group prompt before sending it', async () => {
+    const original = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      accepted: true, aiTriggered: false,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const api = { sessions: { prompt: original } } as unknown as IApiClient
+    const room = { id: 'new-room', sessionId: 'new-session' }
+    const addRoomMembers = vi.fn(async () => true)
+    const store = {
+      agentTargetForSession: () => undefined,
+      newSessionMode: () => 'group',
+      ensurePromptTarget: vi.fn(async () => ({ kind: 'room' as const, room })),
+      newGroupInvitees: vi.fn(() => ['bob-id']),
+      addRoomMembers,
+      getSnapshot: () => ({
+        identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' },
+        managementError: undefined,
+      }),
+      composition: () => ({ roomId: room.id, revision: 0, files: [], reply: undefined }),
+      completeComposition: vi.fn(),
+    } as unknown as ChatroomClientStore
+    installNativePromptIdentity(api, store)
+
+    await api.sessions.prompt({
+      sessionId: 'new-session' as never,
+      mode: 'queue',
+      content: [{ type: 'text', text: '@Bob 大家开始吧' }],
+    })
+
+    expect(store.newGroupInvitees).toHaveBeenCalledWith([{ type: 'text', text: '@Bob 大家开始吧' }])
+    expect(addRoomMembers).toHaveBeenCalledWith(['bob-id'])
+    expect(fetchMock).toHaveBeenCalledWith('/plugins/deepseek-harness-chatroom/api/prompt', expect.anything())
+    expect(addRoomMembers.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[0]!)
+    expect(original).not.toHaveBeenCalled()
+  })
 })

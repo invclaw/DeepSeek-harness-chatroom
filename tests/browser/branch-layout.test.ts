@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { page } from 'vitest/browser'
+import { page } from '@vitest/browser/context'
 import { CHATROOM_STYLES } from '../../src/client/styles.js'
 
 afterEach(() => {

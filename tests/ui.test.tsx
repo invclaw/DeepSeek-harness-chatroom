@@ -144,9 +144,37 @@ describe('native chatroom integration', () => {
       id: 'company', label: '企业统一登录', issuer: 'https://id.example.com', clientId: 'client-id',
     }))
     expect(screen.getByText('私聊内容')).toBeTruthy()
-    fireEvent.change(screen.getByPlaceholderText('给 Bob 发消息'), { target: { value: '收到' } })
-    fireEvent.click(screen.getByRole('button', { name: '发送' }))
-    expect(sendDirect).toHaveBeenCalledWith('收到')
+    const directInput = screen.getByPlaceholderText('给 Bob 发消息') as HTMLTextAreaElement
+    fireEvent.change(directInput, { target: { value: '收到' } })
+    fireEvent.click(screen.getByRole('button', { name: '选择私聊表情' }))
+    fireEvent.click(screen.getByRole('button', { name: '插入 🎉' }))
+    expect(directInput.value).toBe('收到🎉')
+    const attachment = new File(['private'], 'private.txt', { type: 'text/plain' })
+    fireEvent.change(screen.getByLabelText('选择私聊文件'), { target: { files: [attachment] } })
+    expect(screen.getByText('private.txt')).toBeTruthy()
+    fireEvent.keyDown(directInput, { key: 'Enter', shiftKey: true })
+    expect(sendDirect).not.toHaveBeenCalled()
+    fireEvent.keyDown(directInput, { key: 'Enter' })
+    expect(sendDirect).toHaveBeenCalledWith('收到🎉', [attachment])
+  })
+
+  it('edits the main and controller system prompts in native settings', () => {
+    const saveAutomation = vi.fn(async () => true)
+    renderSettings(view({
+      automationOverview: {
+        canManage: true,
+        provider: 'deepseek',
+        model: 'chat',
+        mainAgentPrompt: '原主提示词',
+        controllerPrompt: '原判断提示词',
+        models: [{ provider: 'deepseek', model: 'chat', label: 'DeepSeek · Chat' }],
+      },
+    }), { saveAutomation })
+
+    fireEvent.change(screen.getByLabelText('群聊主 Agent 系统提示词'), { target: { value: '新主提示词' } })
+    fireEvent.change(screen.getByLabelText('自动回复判断 Agent 系统提示词'), { target: { value: '新判断提示词' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存系统提示词' }))
+    expect(saveAutomation).toHaveBeenCalledWith('deepseek', 'chat', '新主提示词', '新判断提示词')
   })
 
   it('lists existing rooms and creates a new independent shared Session', () => {
@@ -216,6 +244,7 @@ describe('native chatroom integration', () => {
     const renameRoom = vi.fn(async () => true)
     const setMemberRole = vi.fn(async () => true)
     const addRoomMembers = vi.fn(async () => true)
+    const setRoomAutoTrigger = vi.fn(async () => true)
     const closeThread = vi.fn()
     const room = view({
       membersOpen: true,
@@ -243,7 +272,7 @@ describe('native chatroom integration', () => {
         root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
       },
     })
-    const overrides = { renameRoom, setMemberRole, addRoomMembers, closeThread }
+    const overrides = { renameRoom, setMemberRole, addRoomMembers, setRoomAutoTrigger, closeThread }
     const rendered = renderEntry(room, overrides)
     expect(screen.getByTestId('chatroom-members')).toBeTruthy()
     expect(screen.getByTestId('chatroom-thread-panel')).toBeTruthy()
@@ -253,6 +282,8 @@ describe('native chatroom integration', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /Dave/ }))
     fireEvent.click(screen.getByRole('button', { name: '添加选中的 2 位' }))
     expect(addRoomMembers).toHaveBeenCalledWith(['carol-id', 'dave-id'])
+    fireEvent.click(screen.getByRole('checkbox', { name: '无需 @AI 自动回复' }))
+    expect(setRoomAutoTrigger).toHaveBeenCalledWith(true)
     const frame = screen.getByTitle('分支回复：主题消息') as HTMLIFrameElement
     const frameUrl = new URL(frame.src)
     expect(frameUrl.searchParams.get('dsh-chatroom-thread')).toBe('thread')
@@ -301,6 +332,23 @@ describe('native chatroom integration', () => {
     const retainedFrame = screen.getByTitle('分支回复：一条较长的 AI 回复') as HTMLIFrameElement
     expect(retainedFrame).toBe(frame)
     expect(retainedFrame.src).toBe(frameUrl.href)
+  })
+
+  it('lets every room member change the automatic-reply policy', () => {
+    const setRoomAutoTrigger = vi.fn(async () => true)
+    renderEntry(view({
+      membersOpen: true,
+      members: [{
+        participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale', role: 'member',
+        joinedAt: 1, lastSeenAt: Date.now(), online: true,
+      }],
+    }), { setRoomAutoTrigger })
+
+    expect(screen.getByText('无需 @AI 自动回复')).toBeTruthy()
+    const autoReply = screen.getByRole('checkbox', { name: '无需 @AI 自动回复' }) as HTMLInputElement
+    expect(autoReply.disabled).toBe(false)
+    fireEvent.click(autoReply)
+    expect(setRoomAutoTrigger).toHaveBeenCalledWith(true)
   })
 
   it('does not mount a second chatroom shell inside the native branch frame', () => {
@@ -433,6 +481,9 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     adminBusy: false,
     adminOverview: undefined,
     adminError: undefined,
+    automationBusy: false,
+    automationOverview: undefined,
+    automationError: undefined,
     directOpen: false,
     directBusy: false,
     directPeers: [],
@@ -440,6 +491,7 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     directConversation: undefined,
     directMessages: [],
     directError: undefined,
+    newSessionModes: {},
     ...patch,
   }
 }

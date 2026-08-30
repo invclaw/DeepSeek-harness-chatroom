@@ -125,6 +125,10 @@ describe('native branch frame isolation', () => {
       'html[data-dsh-chatroom-branch-frame] [data-dsh-chatroom-branch-shell] > :nth-child(2)',
     )
     expect(CHATROOM_STYLES).toContain('grid-column: 2 !important;')
+    expect(CHATROOM_STYLES).toContain('[data-dsh-chatroom-process-row][hidden] { display: none !important; }')
+    expect(CHATROOM_STYLES).toContain('html[data-dsh-chatroom-active] [data-conversation-scroll]')
+    expect(CHATROOM_STYLES).toContain('--dsh-chat-content-width: 100%;')
+    expect(CHATROOM_STYLES).toContain('--dsh-composer-card-max-width: 100%;')
   })
 
   it('renders native mention chips with their literal sigil instead of the reference icon', () => {

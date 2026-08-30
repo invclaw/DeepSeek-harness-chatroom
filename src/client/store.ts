@@ -1,6 +1,7 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   ChatroomAccount,
+  ChatroomAutomationOverview,
   ChatroomAdminOverview,
   ChatroomAuthProviderAdmin,
   ChatroomAuthState,
@@ -35,10 +36,25 @@ import type {
   ChatroomThreadRoot,
 } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
+import { mentionsName } from '../message.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
 
 export type ChatroomPhase = 'loading' | 'auth-required' | 'identity-required' | 'ready' | 'error'
 export type ChatroomConnection = 'offline' | 'connecting' | 'online'
+export type ChatroomNewSessionMode = 'choose' | 'group' | 'solo'
+
+/** Pick an unambiguous visible @ token for one account in the new-Group directory. */
+export function newGroupMentionName(
+  peer: ChatroomDirectPeer,
+  peers: readonly ChatroomDirectPeer[],
+): string {
+  const displayName = peer.displayName.trim()
+  const reserved = displayName.localeCompare('AI', undefined, { sensitivity: 'accent' }) === 0
+    || displayName.localeCompare('DeepSeek', undefined, { sensitivity: 'accent' }) === 0
+  const duplicate = peers.some(candidate => candidate.participantId !== peer.participantId
+    && candidate.displayName.trim().localeCompare(displayName, undefined, { sensitivity: 'accent' }) === 0)
+  return displayName === '' || reserved || duplicate ? peer.username : displayName
+}
 
 /** Browser-owned file waiting to be merged into the next room submission. */
 export interface PendingChatroomFile {
@@ -112,6 +128,9 @@ export interface ChatroomView {
   readonly adminBusy: boolean
   readonly adminOverview: ChatroomAdminOverview | undefined
   readonly adminError: string | undefined
+  readonly automationBusy: boolean
+  readonly automationOverview: ChatroomAutomationOverview | undefined
+  readonly automationError: string | undefined
   readonly directOpen: boolean
   readonly directBusy: boolean
   readonly directPeers: readonly ChatroomDirectPeer[]
@@ -119,6 +138,7 @@ export interface ChatroomView {
   readonly directConversation: ChatroomDirectConversation | undefined
   readonly directMessages: readonly ChatroomDirectMessage[]
   readonly directError: string | undefined
+  readonly newSessionModes: Readonly<Record<string, ChatroomNewSessionMode>>
 }
 
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
@@ -173,6 +193,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     adminBusy: false,
     adminOverview: undefined,
     adminError: undefined,
+    automationBusy: false,
+    automationOverview: undefined,
+    automationError: undefined,
     directOpen: false,
     directBusy: false,
     directPeers: [],
@@ -180,6 +203,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     directConversation: undefined,
     directMessages: [],
     directError: undefined,
+    newSessionModes: {},
   }
   private readonly listeners = new Set<() => void>()
   private eventSource: EventSource | undefined
@@ -221,6 +245,47 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     return frame?.sessionId === sessionId
       ? { kind: 'thread', room, threadId: frame.threadId }
       : { kind: 'room', room }
+  }
+
+  /** Mark a newly created native Session as a Group by default. */
+  registerNewSession = (sessionId: string): void => {
+    this.set({
+      newSessionModes: { ...this.snapshot.newSessionModes, [sessionId]: 'group' },
+    })
+  }
+
+  /** Read the explicit creation mode for one newly created native Session. */
+  newSessionMode = (sessionId: string): ChatroomNewSessionMode | undefined =>
+    this.snapshot.newSessionModes[sessionId]
+
+  /** Choose whether a new Session becomes a shared room on first prompt or stays Solo. */
+  chooseNewSessionMode = async (sessionId: string, mode: 'group' | 'solo'): Promise<boolean> => {
+    if (this.snapshot.newSessionModes[sessionId] === undefined) return false
+    this.set({
+      newSessionModes: { ...this.snapshot.newSessionModes, [sessionId]: mode },
+      error: undefined,
+    })
+    return true
+  }
+
+  /** Resolve a prompt target, creating the default Group only when its first prompt is sent. */
+  ensurePromptTarget = async (sessionId: string): Promise<ChatroomAgentTarget | undefined> => {
+    const current = this.agentTargetForSession(sessionId)
+    if (current !== undefined || this.snapshot.newSessionModes[sessionId] !== 'group'
+      || this.activeNativeSession?.id !== sessionId) return current
+    await this.ensureActiveSessionRoom()
+    return this.agentTargetForSession(sessionId)
+  }
+
+  /** Resolve accounts explicitly mentioned while composing the first message of a new Group. */
+  newGroupInvitees = (content: readonly ChatroomPromptContentPart[]): readonly string[] => {
+    const peers = this.snapshot.directPeers.filter(peer =>
+      peer.participantId !== this.snapshot.identity?.participantId)
+    return peers.filter(peer => {
+      const token = newGroupMentionName(peer, peers)
+      return mentionsName(content, token)
+        || (token !== peer.username && mentionsName(content, peer.username))
+    }).map(peer => peer.participantId)
   }
 
   /** Retarget one retained native branch runtime without carrying composer state across threads. */
@@ -391,6 +456,41 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.set({ adminOpen: false, adminError: undefined })
   }
 
+  /** Load the global automatic-response controller settings and model catalog. */
+  loadAutomation = async (): Promise<void> => {
+    if (this.snapshot.automationBusy) return
+    this.set({ automationBusy: true, automationError: undefined })
+    try {
+      const overview = await requestJson<ChatroomAutomationOverview>(`${CHATROOM_API_PREFIX}/automation`)
+      this.set({ automationBusy: false, automationOverview: overview })
+    } catch (error) {
+      this.set({ automationBusy: false, automationError: errorMessage(error) })
+    }
+  }
+
+  /** Persist the global controller model and both chatroom prompt roles. */
+  saveAutomation = async (
+    provider: string,
+    model: string,
+    mainAgentPrompt: string,
+    controllerPrompt: string,
+  ): Promise<boolean> => {
+    if (this.snapshot.automationBusy) return false
+    this.set({ automationBusy: true, automationError: undefined })
+    try {
+      const overview = await requestJson<ChatroomAutomationOverview>(`${CHATROOM_API_PREFIX}/automation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, model, mainAgentPrompt, controllerPrompt }),
+      })
+      this.set({ automationBusy: false, automationOverview: overview })
+      return true
+    } catch (error) {
+      this.set({ automationBusy: false, automationError: errorMessage(error) })
+      return false
+    }
+  }
+
   /** Create a local account from the super-administrator console. */
   adminCreateUser = async (input: {
     username: string
@@ -454,23 +554,45 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     }
   }
 
+  /** Refresh the private-message directory without opening its conversation panel. */
+  loadDirectDirectory = async (): Promise<boolean> => {
+    if (this.snapshot.phase !== 'ready' || this.snapshot.identity === undefined) return false
+    try {
+      const response = await requestJson<ChatroomDirectResponse>(`${CHATROOM_API_PREFIX}/direct`)
+      this.set({
+        directPeers: response.peers,
+        directConversations: response.conversations,
+        directError: undefined,
+      })
+      return true
+    } catch (error) {
+      this.set({ directError: errorMessage(error) })
+      return false
+    }
+  }
+
   closeDirect = (): void => {
     this.set({ directOpen: false, directError: undefined })
   }
 
-  /** Send one message inside the selected private conversation. */
-  sendDirect = async (text: string): Promise<boolean> => {
+  /** Send one text/media message inside the selected private conversation. */
+  sendDirect = async (text: string, files: readonly File[] = []): Promise<boolean> => {
     const conversation = this.snapshot.directConversation
-    if (conversation === undefined || text.trim() === '' || this.snapshot.directBusy) return false
+    if (conversation === undefined || (text.trim() === '' && files.length === 0) || this.snapshot.directBusy) return false
     this.set({ directBusy: true, directError: undefined })
     try {
+      const media = await serializeBrowserFiles(files)
+      const content: ChatroomPromptContentPart[] = [
+        ...(text.trim() === '' ? [] : [{ type: 'text' as const, text }]),
+        ...media,
+      ]
       const response = await requestJson<{
         conversation: ChatroomDirectConversation
         message: ChatroomDirectMessage
       }>(`${CHATROOM_API_PREFIX}/direct/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: conversation.id, text }),
+        body: JSON.stringify({ conversationId: conversation.id, content }),
       })
       const messages = this.snapshot.directMessages.some(message => message.id === response.message.id)
         ? this.snapshot.directMessages
@@ -553,6 +675,41 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     }
   }
 
+  /** Pin or unpin one room for the current participant. */
+  setRoomPinned = async (roomId: string, pinned: boolean): Promise<boolean> => {
+    try {
+      const result = await requestJson<ChatroomRoomManageResponse>(`${CHATROOM_API_PREFIX}/rooms/manage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, action: 'set-pinned', pinned }),
+      })
+      this.applyRoomManagement(result)
+      return true
+    } catch (error) {
+      this.set({ managementError: errorMessage(error) })
+      return false
+    }
+  }
+
+  /** Change the current room's model-controlled automatic-response policy. */
+  setRoomAutoTrigger = async (enabled: boolean): Promise<boolean> => {
+    const room = this.snapshot.room
+    if (room === undefined || this.snapshot.managementBusy) return false
+    this.set({ managementBusy: true, managementError: undefined })
+    try {
+      const result = await requestJson<ChatroomRoomManageResponse>(`${CHATROOM_API_PREFIX}/rooms/manage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId: room.id, action: 'set-auto-trigger', enabled }),
+      })
+      this.applyRoomManagement(result)
+      return true
+    } catch (error) {
+      this.set({ managementBusy: false, managementError: errorMessage(error) })
+      return false
+    }
+  }
+
   /** Rename the active room through the server-enforced management endpoint. */
   renameRoom = async (title: string): Promise<boolean> => {
     const room = this.snapshot.room
@@ -608,7 +765,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.set({ open: false, error: undefined })
   }
 
-  /** Track native navigation and adopt ordinary Harness Sessions as shared rooms. */
+  /** Track native navigation without changing unbound native Sessions into shared rooms. */
   activateSession = (
     sessionId: string | undefined,
     title = '新会话',
@@ -636,8 +793,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         selectionRoomId: undefined,
         selectedMessages: [],
         forwardOpen: false,
+        directOpen: false,
+        directError: undefined,
       })
-      if (sessionId !== undefined && shareable) void this.ensureActiveSessionRoom()
       return
     }
     this.updateActiveDocumentRoom(true)
@@ -662,6 +820,8 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       selectionRoomId: undefined,
       selectedMessages: [],
       forwardOpen: false,
+      directOpen: false,
+      directError: undefined,
     })
     this.clearUnread()
     this.openEvents(room)
@@ -1039,6 +1199,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     const active = this.activeNativeSession
     if (active === undefined || !active.shareable
       || this.snapshot.phase !== 'ready' || this.snapshot.identity === undefined
+      || this.snapshot.newSessionModes[active.id] !== 'group'
       || this.roomForSession(active.id) !== undefined) return
     if (this.roomEnsure?.sessionId === active.id) return await this.roomEnsure.promise
     const promise = (async () => {
@@ -1261,11 +1422,15 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   }
 
   private applyRoomManagement(result: ChatroomRoomManageResponse | ChatroomRoomManagementResponse): void {
-    const rooms = this.snapshot.rooms.map(room => room.id === result.room.id ? result.room : room)
+    const current = this.snapshot.rooms.find(room => room.id === result.room.id)
+    const room = current?.pinned !== undefined && result.room.pinned === undefined
+      ? { ...result.room, pinned: current.pinned }
+      : result.room
+    const rooms = sortRooms(this.snapshot.rooms.map(candidate => candidate.id === room.id ? room : candidate))
     const memberIds = new Set(result.members.map(member => member.participantId))
     this.set({
       rooms,
-      ...(this.snapshot.room?.id === result.room.id ? { room: result.room, members: result.members } : {}),
+      ...(this.snapshot.room?.id === room.id ? { room, members: result.members } : {}),
       memberCandidates: 'candidates' in result
         ? result.candidates
         : this.snapshot.memberCandidates.filter(candidate => !memberIds.has(candidate.participantId)),
@@ -1281,7 +1446,10 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     const isCurrent = this.snapshot.room?.id === notification.roomId
       && (notification.threadId === undefined || notification.threadId === this.snapshot.thread?.id)
     const unreadCount = isVisible && isCurrent ? this.snapshot.unreadCount : this.snapshot.unreadCount + 1
-    this.set({ toasts, unreadCount })
+    const rooms = sortRooms(this.snapshot.rooms.map(room => room.id === notification.roomId
+      ? { ...room, updatedAt: Math.max(room.updatedAt ?? 0, notification.createdAt) }
+      : room))
+    this.set({ toasts, unreadCount, rooms })
     if (this.snapshot.notificationsEnabled && typeof Notification !== 'undefined' && !isVisible) {
       try {
         new Notification(`${notification.displayName} · ${notification.roomTitle}`, { body: notification.text })
@@ -1360,9 +1528,16 @@ function replaceThreadPreview(
 }
 
 function replaceRoom(rooms: readonly ChatroomInfo[], room: ChatroomInfo): readonly ChatroomInfo[] {
-  return rooms.some(candidate => candidate.id === room.id)
+  const replaced = rooms.some(candidate => candidate.id === room.id)
     ? rooms.map(candidate => candidate.id === room.id ? room : candidate)
     : [...rooms, room]
+  return sortRooms(replaced)
+}
+
+function sortRooms(rooms: readonly ChatroomInfo[]): readonly ChatroomInfo[] {
+  return [...rooms].sort((left, right) => Number(right.pinned === true) - Number(left.pinned === true)
+    || (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+    || left.id.localeCompare(right.id))
 }
 
 function withMemberAvatarIds(room: ChatroomInfo, members: readonly ChatroomMember[]): ChatroomInfo {
@@ -1431,7 +1606,12 @@ export async function submitThreadPrompt(
 export async function serializePendingFiles(
   files: readonly PendingChatroomFile[],
 ): Promise<ChatroomPromptContentPart[]> {
-  return await Promise.all(files.map(async ({ file }): Promise<ChatroomPromptContentPart> => {
+  return await serializeBrowserFiles(files.map(({ file }) => file))
+}
+
+/** Serialize browser Files for a message without retaining their bytes in client state. */
+export async function serializeBrowserFiles(files: readonly File[]): Promise<ChatroomPromptContentPart[]> {
+  return await Promise.all(files.map(async (file): Promise<ChatroomPromptContentPart> => {
     const data = bytesToBase64(new Uint8Array(await file.arrayBuffer()))
     if (file.type === 'image/png' || file.type === 'image/jpeg' || file.type === 'image/webp' || file.type === 'image/gif') {
       return { type: 'image', name: file.name, mediaType: file.type, data }

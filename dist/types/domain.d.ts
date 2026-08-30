@@ -1,4 +1,4 @@
-import type { ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js';
+import type { ChatroomFileReference, ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js';
 import type { ChatroomReactionEmoji } from './reactions.js';
 import type { ChatroomAvatarId } from './avatars.js';
 export interface IdentityRecord {
@@ -37,9 +37,24 @@ export interface RoomRecord {
     readonly aiDisplayName: string;
     readonly sessionId: string;
     readonly createdAt: number;
+    readonly updatedAt?: number;
     readonly createdBy: string;
     readonly ownerParticipantId?: string;
     readonly adminParticipantIds?: readonly string[];
+    readonly autoTriggerEnabled?: boolean;
+}
+export interface RoomPreferenceRecord {
+    readonly roomId: string;
+    readonly participantId: string;
+    readonly pinned: boolean;
+    readonly updatedAt: number;
+}
+export interface AutomationSettingsRecord {
+    readonly provider: string;
+    readonly model: string;
+    readonly mainAgentPrompt?: string;
+    readonly controllerPrompt?: string;
+    readonly updatedAt: number;
 }
 export interface MemberRecord {
     readonly roomId: string;
@@ -151,6 +166,7 @@ export interface DirectMessageRecord {
     readonly sequence: number;
     readonly senderId: string;
     readonly text: string;
+    readonly files?: readonly ChatroomFileReference[];
     readonly createdAt: number;
 }
 /** Durable identities, rooms, and the version-zero message table retained for on-disk compatibility. */
@@ -161,6 +177,8 @@ export declare const chatroomDomainSpec: {
         identities: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, IdentityRecord>;
         messages: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, MessageRecord>;
         rooms: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, RoomRecord>;
+        room_preferences: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, RoomPreferenceRecord>;
+        automation_settings: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, AutomationSettingsRecord>;
         files: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, FileRecord>;
         members: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, MemberRecord>;
         threads: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, ThreadRecord>;

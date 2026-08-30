@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
-import type { ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js'
+import type { ChatroomFileReference, ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js'
 import type { ChatroomReactionEmoji } from './reactions.js'
 import { isChatroomReactionEmoji } from './reactions.js'
 import type { ChatroomAvatarId } from './avatars.js'
@@ -58,9 +58,26 @@ export interface RoomRecord {
   readonly aiDisplayName: string
   readonly sessionId: string
   readonly createdAt: number
+  readonly updatedAt?: number
   readonly createdBy: string
   readonly ownerParticipantId?: string
   readonly adminParticipantIds?: readonly string[]
+  readonly autoTriggerEnabled?: boolean
+}
+
+export interface RoomPreferenceRecord {
+  readonly roomId: string
+  readonly participantId: string
+  readonly pinned: boolean
+  readonly updatedAt: number
+}
+
+export interface AutomationSettingsRecord {
+  readonly provider: string
+  readonly model: string
+  readonly mainAgentPrompt?: string
+  readonly controllerPrompt?: string
+  readonly updatedAt: number
 }
 
 export interface MemberRecord {
@@ -184,6 +201,7 @@ export interface DirectMessageRecord {
   readonly sequence: number
   readonly senderId: string
   readonly text: string
+  readonly files?: readonly ChatroomFileReference[]
   readonly createdAt: number
 }
 
@@ -229,10 +247,27 @@ const roomSchema = z.object({
   aiDisplayName: z.string().min(1),
   sessionId: z.string().min(1),
   createdAt: nonNegativeSafeInteger,
+  updatedAt: nonNegativeSafeInteger.optional(),
   createdBy: z.string().min(1),
   ownerParticipantId: z.string().min(1).optional(),
   adminParticipantIds: z.array(z.string().min(1)).optional(),
+  autoTriggerEnabled: z.boolean().optional(),
 }) as z.ZodType<RoomRecord>
+
+const roomPreferenceSchema = z.object({
+  roomId: z.string().min(1),
+  participantId: z.string().min(1),
+  pinned: z.boolean(),
+  updatedAt: nonNegativeSafeInteger,
+}) as z.ZodType<RoomPreferenceRecord>
+
+const automationSettingsSchema = z.object({
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  mainAgentPrompt: z.string().optional(),
+  controllerPrompt: z.string().optional(),
+  updatedAt: nonNegativeSafeInteger,
+}) as z.ZodType<AutomationSettingsRecord>
 
 const memberSchema = z.object({
   roomId: z.string().min(1),
@@ -368,8 +403,16 @@ const directMessageSchema = z.object({
   conversationId: z.uuid(),
   sequence: nonNegativeSafeInteger,
   senderId: z.uuid(),
-  text: z.string().min(1),
+  text: z.string(),
+  files: z.array(z.object({
+    id: z.uuid(),
+    name: z.string().min(1),
+    mediaType: z.string().min(1),
+    bytes: nonNegativeSafeInteger,
+  })).optional(),
   createdAt: nonNegativeSafeInteger,
+}).refine(record => record.text.trim() !== '' || (record.files?.length ?? 0) > 0, {
+  message: 'direct message must include text or files',
 }) as z.ZodType<DirectMessageRecord>
 
 /** Durable identities, rooms, and the version-zero message table retained for on-disk compatibility. */
@@ -380,6 +423,8 @@ export const chatroomDomainSpec = defineDomain({
     identities: domainTable<string, IdentityRecord>(identitySchema),
     messages: domainTable<string, MessageRecord>(messageSchema),
     rooms: domainTable<string, RoomRecord>(roomSchema),
+    room_preferences: domainTable<string, RoomPreferenceRecord>(roomPreferenceSchema),
+    automation_settings: domainTable<string, AutomationSettingsRecord>(automationSettingsSchema),
     files: domainTable<string, FileRecord>(fileSchema),
     members: domainTable<string, MemberRecord>(memberSchema),
     threads: domainTable<string, ThreadRecord>(threadSchema),

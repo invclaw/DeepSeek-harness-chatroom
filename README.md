@@ -10,7 +10,7 @@
   </p>
 </div>
 
-Turn every native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Session into a persistent shared room—without replacing the sidebar, conversation stream, Agent runtime, model picker, permission controls, trajectory, or Session log.
+Add Group, Solo, and direct-message modes to the native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) workspace without replacing the conversation stream, Agent runtime, model picker, permission controls, trajectory, or Session log.
 
 <p align="center">
   <img src="docs/assets/group-chat.jpg" alt="A shared Harness room with avatars, mentions, reactions, images, message actions, and a branch preview" width="100%">
@@ -31,8 +31,8 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
   <tr>
     <td width="50%">
       <img src="docs/assets/new-group-setup.jpg" alt="Create a group from the native blank Session screen"><br>
-      <strong>Create the room before the first message</strong><br>
-      Name the room, search the platform user directory, select several members, and keep the native new-Session composer.
+      <strong>Choose Group or Solo in the native welcome screen</strong><br>
+      Group is selected by default and becomes a Room on the first regular message. Invite known accounts later from Group management.
     </td>
     <td width="50%">
       <img src="docs/assets/group-management.jpg" alt="Group management drawer with account directory and room members"><br>
@@ -55,15 +55,19 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 
 ### Shared rooms and human-first AI
 
-- Every ordinary Harness Session becomes a durable room on first use; **New session** always creates a distinct room.
-- Human messages synchronize in real time without waking the Agent. `@AI` or the configured AI display name explicitly requests an Agent reply.
+- The workspace sidebar groups activity into **Group / Solo / Direct**. Shared Rooms appear under Group, native one-person Agent Sessions under Solo, and every available platform account under Direct.
+- **New session** keeps the native welcome screen and composer, with Group selected by default in a Group/Solo switch. The first regular Group message creates its Room; Solo remains a native one-person Agent Session.
+- Human messages synchronize in real time. `@AI` or the configured AI display name always requests an Agent reply directly; rooms may also enable model-controlled replies for messages without an explicit mention.
+- **Settings → Chatroom & accounts** selects the global auto-reply decision model and edits separate system prompts for the main/branch Agent and the auto-reply decision Agent. Prompt changes apply to the next turn without restarting Harness.
 - The native `@` menu lists the Agent and current room members together. Participant identity is attached on the Host before Session admission, so browsers and the model see the same sender.
 - Shared Session rows retain the native sidebar while adding a roomier member-avatar collage. Native Session renames update the durable room title, so the name survives navigation and restarts.
+- Shared rooms use the full available conversation column for the transcript and composer instead of the native fixed-width cap.
 - The Session header shows the current identity, online count, and **Group management**. New-message toasts, title unread counts, and opt-in browser notifications work across rooms.
 
 ### Complete native Agent runtime
 
 - The native sidebar, Conversation/Trajectory tabs, composer, model and permission selectors, reasoning/tool flow, Session log, approvals, questions, slash commands, stop/queue/steer, failures, and retries remain intact.
+- While an Agent is running, Think and tool rows stay visible. Once the final answer arrives, the preceding process rows collapse into one expandable summary.
 - Persistent branches open in a right-side panel and own independent Harness Sessions. Branches support Markdown, `@` candidates, images/files, quotes, reactions, forwarding, selection, and the full Agent runtime without nested chatroom branches. Gateways that reject embedded documents switch immediately to an inline compatibility view instead of waiting for a timeout, with the complete Agent available in a new tab.
 - Historical images remain durable. For text-only models, only the model request receives deterministic text markers in place of image input; the UI keeps the original media.
 
@@ -80,7 +84,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 - Optional local password registration, super-administrator account provisioning, roles/status, password rotation, disabled-account revocation, and one identity reused across rooms.
 - Pluggable authentication through local accounts, [`dsh-auth`](https://github.com/hxy91819/dsh-auth), or enterprise OIDC Authorization Code with discovery, PKCE, state, and nonce.
 - The chosen external provider can automatically receive unauthenticated users; `local=1` keeps a local recovery entry.
-- Durable private text conversations are visible only to their two participants and reuse the same unread/toast/browser-notification channel.
+- Durable private conversations are visible only to their two participants, support Enter-to-send, Shift+Enter newlines, emoji, images, and files, and reuse the same unread/toast/browser-notification channel. The Direct folder is also the account directory: clicking any profile starts the conversation in the main Harness conversation area.
 
 <details>
 <summary><strong>Recent releases</strong></summary>
@@ -131,7 +135,7 @@ pnpm dsh plugin --profile web add /absolute/path/to/DeepSeek-harness-chatroom
 pnpm dsh --profile web
 ```
 
-The browser bundle is discovered through the plugin's `dsh.client` manifest. It idempotently binds ordinary Harness Sessions to shared rooms and contributes identity status, group management, input candidates, and file/reply controls. It does not replace the conversation, sidebar, details, or native text composer.
+The browser bundle is discovered through the plugin's `dsh.client` manifest. New Sessions default to Group and bind to a shared Room only when their first regular message is sent; Solo remains native. The plugin contributes identity status, categorized sidebar folders, the account directory, group management, input candidates, and file/reply controls without replacing the conversation, details, or native text composer.
 
 ## Configure
 

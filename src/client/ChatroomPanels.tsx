@@ -34,6 +34,7 @@ interface ChatroomPanelsProps extends ChatroomAccountPanelProps {
   renameRoom?(title: string): Promise<boolean>
   setMemberRole?(participantId: string, role: 'admin' | 'member'): Promise<boolean>
   addRoomMembers?(participantIds: readonly string[]): Promise<boolean>
+  setRoomAutoTrigger?(enabled: boolean): Promise<boolean>
   closeThread(): void
   setThreadReply(reply: ChatroomReplyReference): void
   clearThreadReply(): void
@@ -207,6 +208,19 @@ function MemberPanel(props: ChatroomPanelsProps): JSX.Element {
           <input value={title} maxLength={160} aria-label="群聊名称" onChange={event => { setTitle(event.target.value) }} />
           <button type="submit" disabled={props.room.managementBusy || title.trim() === '' || title.trim() === props.room.room?.title}>保存名称</button>
         </form>}
+        <section className="dsh-chatroom-auto-trigger" aria-label="AI 自动回复">
+          <div><strong>无需 @AI 自动回复</strong><small>开启后，由设置中选择的判断模型决定普通消息是否需要 AI 回复。群内所有成员都可以修改。</small></div>
+          <label className="dsh-chatroom-switch">
+            <input
+              type="checkbox"
+              aria-label="无需 @AI 自动回复"
+              checked={props.room.room?.autoTriggerEnabled ?? false}
+              disabled={props.room.managementBusy}
+              onChange={event => { void props.setRoomAutoTrigger?.(event.target.checked) }}
+            />
+            <span aria-hidden />
+          </label>
+        </section>
         <div className="dsh-chatroom-member-list">
           {props.room.members.map(member => {
             return (

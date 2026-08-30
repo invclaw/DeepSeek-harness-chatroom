@@ -4,6 +4,7 @@ import {
   identifyPrompt,
   isSlashCommand,
   mentionsAi,
+  mentionsName,
   projectForwardText,
 } from '../src/message.js'
 
@@ -13,6 +14,11 @@ describe('human-first room messages', () => {
     expect(mentionsAi([{ type: 'text', text: '@AI 请总结' }], 'DeepSeek')).toBe(true)
     expect(mentionsAi([{ type: 'text', text: '请 @deepseek 看一下' }], 'DeepSeek')).toBe(true)
     expect(mentionsAi([{ type: 'text', text: '@Aileen 你好' }], 'DeepSeek')).toBe(false)
+  })
+
+  it('matches a complete participant mention without consuming longer names', () => {
+    expect(mentionsName([{ type: 'text', text: '@Bob 一起看看' }], 'Bob')).toBe(true)
+    expect(mentionsName([{ type: 'text', text: '@Bobby 一起看看' }], 'Bob')).toBe(false)
   })
 
   it('keeps slash commands on the native Harness command path', () => {

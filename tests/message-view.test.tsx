@@ -10,6 +10,7 @@ import {
   type ChatroomUserMessageNodeViewProps,
 } from '../src/client/ChatroomMessageNodeView.js'
 import { ChatroomAssistantReplyAction } from '../src/client/ChatroomAssistantReplyAction.js'
+import { ChatroomAssistantNodeView } from '../src/client/ChatroomAssistantNodeView.js'
 import type { ChatroomIdentity } from '../src/types.js'
 import { identifyFileText, identifyForwardText, identifyReplyText } from '../src/message.js'
 
@@ -296,6 +297,57 @@ describe('participant-specific native message projection', () => {
     fireEvent.click(activity)
     expect(openThread).toHaveBeenCalledWith('lobby', root)
   })
+
+  it('folds completed Think and tool rows into one expandable process summary', () => {
+    const finalNode = {
+      key: 'assistant-final',
+      kind: 'assistant-step',
+      location: { kind: 'step', turn: { turn: 1 } },
+      data: {
+        status: 'settled', turn: 1, step: 2,
+        blocks: [{ kind: 'reasoning', text: '最后一步 Think' }, { kind: 'text', text: '最终答案' }], time: 4,
+        finalNode: { kind: 'assistant', seq: 4, messageId: 'assistant:4', time: 4, turn: 1, step: 2, blocks: [] },
+      },
+    }
+    const processNodes = [
+      { key: 'assistant-think', kind: 'assistant-step', location: { kind: 'step', turn: { turn: 1 } } },
+      { key: 'tool-bash', kind: 'tool-call', location: { kind: 'step', turn: { turn: 1 } } },
+      { key: 'user-question', kind: 'user', location: { kind: 'turn', turn: { turn: 1 } } },
+    ]
+    const nodes = new Map([...processNodes, finalNode].map(node => [node.key, node]))
+    const Native = () => <div><div data-testid="inline-think" data-variant="think">最后一步 Think</div><div>最终答案</div></div>
+    const props = {
+      node: finalNode,
+      sessionId: 'chatroom-v1-lobby',
+      nativeMessageView: Native,
+      resolveTarget: () => ({ kind: 'room', room: { id: 'lobby' } }),
+      useTurnData: () => ({ closing: { finalNode: { seq: 4 } } }),
+      useSession: (selector: (snapshot: unknown) => unknown) => selector({
+        chat: { order: [...nodes.keys()], nodes },
+      }),
+    } as unknown as Parameters<typeof ChatroomAssistantNodeView>[0]
+
+    render(
+      <div data-chat-flow="">
+        <div data-testid="think" data-chat-flow-key="assistant-think">Think</div>
+        <div data-testid="tool" data-chat-flow-key="tool-bash">Bash</div>
+        <div data-testid="user" data-chat-flow-key="user-question">问题</div>
+        <div data-chat-flow-key="assistant-final"><ChatroomAssistantNodeView {...props} /></div>
+      </div>,
+    )
+
+    expect(screen.getByTestId('think').hidden).toBe(true)
+    expect(screen.getByTestId('tool').hidden).toBe(true)
+    expect(screen.getByTestId('inline-think').hidden).toBe(true)
+    expect(screen.getByTestId('user').hidden).toBe(false)
+    const toggle = screen.getByRole('button', { name: '执行过程 · 3 项' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(screen.getByTestId('think').hidden).toBe(false)
+    expect(screen.getByTestId('tool').hidden).toBe(false)
+    expect(screen.getByTestId('inline-think').hidden).toBe(false)
+    expect(screen.getByRole('button', { name: '收起执行过程 · 3 项' }).getAttribute('aria-expanded')).toBe('true')
+  })
 })
 
 function userNode(text: string): ChatNode<'user'> {
@@ -375,6 +427,9 @@ function messageProps(
       adminBusy: false,
       adminOverview: undefined,
       adminError: undefined,
+      automationBusy: false,
+      automationOverview: undefined,
+      automationError: undefined,
       directOpen: false,
       directBusy: false,
       directPeers: [],
@@ -382,6 +437,7 @@ function messageProps(
       directConversation: undefined,
       directMessages: [],
       directError: undefined,
+      newSessionModes: {},
       ...viewPatch,
     }),
     nativeMessageView,

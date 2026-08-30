@@ -12,6 +12,7 @@ import { isChatroomReactionEmoji } from './reactions.js'
 import type {
   ChatroomErrorResponse,
   ChatroomAccount,
+  ChatroomAutomationOverview,
   ChatroomPromptContentPart,
   ChatroomPromptRequest,
   ChatroomForwardItem,
@@ -95,6 +96,10 @@ export class ChatroomHttpController {
       }
       if (route.endpoint === '/rooms/manage') {
         await this.handleRoomManagement(request, response)
+        return
+      }
+      if (route.endpoint === '/automation') {
+        await this.handleAutomation(request, response)
         return
       }
       if (route.endpoint === '/prompt') {
@@ -491,18 +496,20 @@ export class ChatroomHttpController {
     assertSameOrigin(request)
     const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
-    const body = await readJson(request, this.config.maxMessageTextChars * 4 + 4_096)
+    const body = await readJson(request, this.runtime.maxPromptRequestBytes)
+    const parsed = promptRequest({ ...body, roomId: '__direct__', mode: 'queue' }, this.config)
     json(response, 201, await this.runtime.sendDirect(
       fieldString(body, 'conversationId'),
-      fieldString(body, 'text'),
+      parsed.content,
       identity,
     ))
   }
 
   private async handleRooms(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method === 'GET') {
-      if (await this.requireIdentity(request, response) === undefined) return
-      json(response, 200, { rooms: this.runtime.rooms } satisfies ChatroomRoomsResponse)
+      const identity = await this.requireIdentity(request, response)
+      if (identity === undefined) return
+      json(response, 200, { rooms: this.runtime.roomsFor(identity) } satisfies ChatroomRoomsResponse)
       return
     }
     if (request.method !== 'POST') {
@@ -554,7 +561,7 @@ export class ChatroomHttpController {
       const url = new URL(request.url ?? '/', 'http://chatroom.local')
       const roomId = url.searchParams.get('roomId')
       if (roomId === null || roomId === '') throw new ChatroomInputError('缺少群聊标识。')
-      const room = this.runtime.rooms.find(item => item.id === roomId)
+      const room = this.runtime.roomsFor(identity).find(item => item.id === roomId)
       if (room === undefined) throw new ChatroomInputError('共享会话不存在。')
       json(response, 200, {
         room,
@@ -576,6 +583,16 @@ export class ChatroomHttpController {
       json(response, 200, { room, members: this.runtime.membersForRoom(roomId) } satisfies ChatroomRoomManageResponse)
       return
     }
+    if (action === 'set-pinned') {
+      const room = await this.runtime.setRoomPinned(roomId, fieldBoolean(body, 'pinned'), identity)
+      json(response, 200, { room, members: this.runtime.membersForRoom(roomId) } satisfies ChatroomRoomManageResponse)
+      return
+    }
+    if (action === 'set-auto-trigger') {
+      const room = await this.runtime.setRoomAutoTrigger(roomId, fieldBoolean(body, 'enabled'), identity)
+      json(response, 200, { room, members: this.runtime.membersForRoom(roomId) } satisfies ChatroomRoomManageResponse)
+      return
+    }
     if (action === 'set-role') {
       const role = fieldString(body, 'role')
       if (role !== 'admin' && role !== 'member') throw new ChatroomInputError('群成员角色无效。')
@@ -585,7 +602,7 @@ export class ChatroomHttpController {
         role,
         identity,
       )
-      json(response, 200, { room: this.runtime.rooms.find(item => item.id === roomId)!, members } satisfies ChatroomRoomManageResponse)
+      json(response, 200, { room: this.runtime.roomsFor(identity).find(item => item.id === roomId)!, members } satisfies ChatroomRoomManageResponse)
       return
     }
     if (action === 'add-members') {
@@ -595,13 +612,42 @@ export class ChatroomHttpController {
         identity,
       )
       json(response, 200, {
-        room: this.runtime.rooms.find(item => item.id === roomId)!,
+        room: this.runtime.roomsFor(identity).find(item => item.id === roomId)!,
         members,
         candidates: this.runtime.roomInviteCandidates(roomId, identity),
       } satisfies ChatroomRoomManagementResponse)
       return
     }
     throw new ChatroomInputError('群管理操作无效。')
+  }
+
+  private async handleAutomation(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const canManage = !this.config.authEnabled
+      || ('role' in identity && identity.role === 'super-admin')
+      || this.config.settingsAdminParticipantIds.includes(identity.participantId)
+    if (request.method === 'GET') {
+      json(response, 200, await this.runtime.automationOverview(canManage) satisfies ChatroomAutomationOverview)
+      return
+    }
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'GET, POST')
+      return
+    }
+    assertSameOrigin(request)
+    if (!canManage) {
+      json(response, 403, { error: '当前聊天室身份没有自动响应设置管理权限。' } satisfies ChatroomErrorResponse)
+      return
+    }
+    const body = await readJson(request, this.config.maxSettingsRequestBytes)
+    await this.runtime.updateAutomationSettings(
+      fieldString(body, 'provider'),
+      fieldString(body, 'model'),
+      fieldString(body, 'mainAgentPrompt'),
+      fieldString(body, 'controllerPrompt'),
+    )
+    json(response, 200, await this.runtime.automationOverview(true) satisfies ChatroomAutomationOverview)
   }
 
   private async handleThreadOpen(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -701,9 +747,10 @@ export class ChatroomHttpController {
       methodNotAllowed(response, 'GET')
       return
     }
-    if (await this.requireIdentity(request, response) === undefined) return
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
     if (fileId === '' || fileId.includes('/')) throw new ChatroomInputError('文件编号无效。')
-    const file = this.runtime.file(fileId)
+    const file = this.runtime.file(fileId, identity)
     response.writeHead(200, {
       'Content-Type': file.ref.mediaType,
       'Content-Length': file.data.byteLength,
@@ -864,8 +911,10 @@ export class ChatroomHttpController {
     return {
       auth: this.runtime.auth.state(account),
       identity,
-      rooms: this.config.authEnabled && account === undefined ? [] : this.runtime.rooms,
-      ...(this.config.authEnabled && account === undefined ? {} : { room: this.runtime.room }),
+      rooms: this.config.authEnabled && account === undefined || identity === null ? [] : this.runtime.roomsFor(identity),
+      ...(this.config.authEnabled && account === undefined || identity === null
+        ? {}
+        : { room: this.runtime.roomsFor(identity).find(room => room.id === this.config.roomId) ?? this.runtime.room }),
     }
   }
 
