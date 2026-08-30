@@ -335,7 +335,7 @@ function ThreadPanel(props: ChatroomPanelsProps & {
       aria-label="分支回复"
     >
       <header>
-        <div><strong>分支回复</strong><small>{thread.root.displayName}：{summary}</small></div>
+        <div><strong>分支回复</strong><small>来自 {props.room.room?.title ?? '群聊'} · {thread.root.displayName}：{summary}</small></div>
         <button aria-label="关闭分支" type="button" onClick={props.closeThread}>×</button>
       </header>
       {parentSessionId === undefined

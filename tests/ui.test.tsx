@@ -247,6 +247,7 @@ describe('native chatroom integration', () => {
     const rendered = renderEntry(room, overrides)
     expect(screen.getByTestId('chatroom-members')).toBeTruthy()
     expect(screen.getByTestId('chatroom-thread-panel')).toBeTruthy()
+    expect(screen.getByText(/来自 AI 聊天室 · Bob：主题消息/)).toBeTruthy()
     expect(screen.getByText('新消息')).toBeTruthy()
     expect(screen.queryByRole('button', { name: '复制邀请链接' })).toBeNull()
     fireEvent.click(screen.getByRole('checkbox', { name: /Carol/ }))

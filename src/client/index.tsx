@@ -78,7 +78,7 @@ export function apply(ctx: ClientContext): void {
     const restoreConfiguration = installRemoteConfigurationApi(connection)
     const restoreSettingsMirror = activateRemoteSettingsMirror(ctx.get('settingsScope'))
     const restorePrompt = installNativePromptIdentity(connection.api, store)
-    const restoreSidebarRoomRows = installSidebarRoomRows(store)
+    const restoreSidebarRoomRows = installSidebarRoomRows(store, sessions)
     let activeBranchFrame = branchFrame
     let branchStaged = false
     const stageBranch = () => {
