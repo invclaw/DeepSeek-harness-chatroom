@@ -332,7 +332,9 @@ describe('native chatroom integration', () => {
     rendered.rerender(entry({ ...room, thread: nextThread }, overrides))
     const retainedFrame = screen.getByTitle('分支回复：一条较长的 AI 回复') as HTMLIFrameElement
     expect(retainedFrame).toBe(frame)
-    expect(retainedFrame.src).toBe(frameUrl.href)
+    const nextFrameUrl = new URL(retainedFrame.src)
+    expect(nextFrameUrl.searchParams.get('dsh-chatroom-thread')).toBe('thread-2')
+    expect(nextFrameUrl.searchParams.get('dsh-chatroom-thread-session')).toBe('chatroom-thread-v1-thread-2')
   })
 
   it('lets every room member change the automatic-reply policy', () => {

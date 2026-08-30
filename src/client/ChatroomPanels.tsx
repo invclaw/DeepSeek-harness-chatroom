@@ -265,7 +265,13 @@ function ThreadPanel(props: ChatroomPanelsProps & {
   const [preparedAttempt, setPreparedAttempt] = useState(-1)
   const [ready, setReady] = useState(false)
   const [compatibilityMode, setCompatibilityMode] = useState(branchFrameCompatibilityPreferred)
-  if (frameSeed.current === undefined && parentSessionId !== undefined) {
+  if (parentSessionId !== undefined && (frameSeed.current === undefined
+    || frameSeed.current.parentSessionId !== parentSessionId
+    || frameSeed.current.thread.id !== thread.id
+    || frameSeed.current.thread.sessionId !== thread.sessionId
+    || frameSeed.current.thread.roomId !== thread.roomId)) {
+    // Keep the retained iframe optimization for updates within one branch, but
+    // never carry a previous branch URL into a newly selected thread.
     frameSeed.current = { thread, parentSessionId }
   }
   useLayoutEffect(() => {
