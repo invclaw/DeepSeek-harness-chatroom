@@ -40,6 +40,7 @@ interface ChatroomMessageNodeInjected<Kind extends 'user' | 'steering'> {
   setReply(roomId: string, reply: ChatroomReplyReference): void
   openThread(roomId: string, root: ChatroomThreadRoot): Promise<void>
   toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>
+  recallMessage(roomId: string, messageId: string): Promise<boolean>
   openForward(roomId: string, message: ChatroomForwardItem): void
   toggleMessageSelection(roomId: string, message: ChatroomForwardItem): void
 }
@@ -172,7 +173,7 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
   const onThread = room.identity === undefined || sessionTarget.kind === 'thread'
     ? undefined
     : () => { void props.openThread(activeRoom.id, threadRoot) }
-  const tools = messageTools(props, room, activeRoom.id, message, message.text, onReply, onThread)
+  const tools = messageTools(props, room, activeRoom.id, message, message.text, projection.own, onReply, onThread)
   const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, 'human')
   return <ParticipantMessage
     native={native}
@@ -212,7 +213,7 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
   const onThread = room.identity === undefined || sessionTarget.kind === 'thread'
     ? undefined
     : () => { void props.openThread(activeRoom.id, threadRoot) }
-  const tools = messageTools(props, room, activeRoom.id, message, message.text, onReply, onThread)
+  const tools = messageTools(props, room, activeRoom.id, message, message.text, projection.own, onReply, onThread)
   const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, 'human')
   return <ParticipantMessage
     native={native}
@@ -253,15 +254,19 @@ function ParticipantMessage({
       <div className="dsh-chatroom-message-column">
         {projection.displayName !== undefined
           && <div className="dsh-chatroom-display-name">{projection.displayName}</div>}
-        {projection.reply !== undefined && (
+        {!tools.recalled && projection.reply !== undefined && (
           <div className="dsh-chatroom-reply-quote">
             <strong>回复 {projection.reply.displayName}</strong>
             <span>{projection.reply.text}</span>
           </div>
         )}
-        {projection.node.data.content.length > 0 && <div className="dsh-chatroom-native-message">{native}</div>}
-        {projection.files.map(file => <FileCard file={file} key={file.id} />)}
-        {projection.forward !== undefined && <ForwardCard forward={projection.forward} />}
+        {tools.recalled
+          ? <div className="dsh-chatroom-recalled-message">消息已撤回</div>
+          : <>
+              {projection.node.data.content.length > 0 && <div className="dsh-chatroom-native-message">{native}</div>}
+              {projection.files.map(file => <FileCard file={file} key={file.id} />)}
+              {projection.forward !== undefined && <ForwardCard forward={projection.forward} />}
+            </>}
         <ChatroomReactionBar {...tools} />
         <ChatroomThreadActivity preview={threadPreview} open={onThread} />
         <ChatroomInlineMessageActions tools={tools} />
@@ -384,6 +389,7 @@ function messageTools(
   roomId: string,
   message: ChatroomForwardItem,
   copyText: string,
+  canRecall: boolean,
   onReply: (() => void) | undefined,
   onBranch: (() => void) | undefined,
 ): ChatroomMessageToolsProps {
@@ -394,12 +400,15 @@ function messageTools(
     identity: room.identity,
     selecting: room.selectionRoomId === roomId,
     selected: room.selectionRoomId === roomId && room.selectedMessages.some(item => item.messageId === message.messageId),
+    recalled: room.recalls.some(item => item.messageId === message.messageId),
+    canRecall,
     copyText,
     onReply,
     onBranch,
     toggleReaction: props.toggleReaction,
     openForward: props.openForward,
     toggleSelection: props.toggleMessageSelection,
+    recallMessage: props.recallMessage,
   }
 }
 

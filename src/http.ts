@@ -118,6 +118,10 @@ export class ChatroomHttpController {
         await this.handleReactionToggle(request, response)
         return
       }
+      if (route.endpoint === '/messages/recall') {
+        await this.handleMessageRecall(request, response)
+        return
+      }
       if (route.endpoint === '/forward') {
         await this.handleForward(request, response)
         return
@@ -722,6 +726,23 @@ export class ChatroomHttpController {
       identity,
     )
     json(response, 200, reaction)
+  }
+
+  private async handleMessageRecall(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, smallRequestLimit(this.config))
+    const recall = await this.runtime.recallMessage(
+      fieldString(body, 'roomId'),
+      fieldString(body, 'messageId'),
+      identity,
+    )
+    json(response, 200, recall)
   }
 
   private async handleForward(request: IncomingMessage, response: ServerResponse): Promise<void> {

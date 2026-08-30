@@ -101,6 +101,12 @@ export interface ReactionRecord {
     readonly participantId: string;
     readonly createdAt: number;
 }
+export interface RecallRecord {
+    readonly roomId: string;
+    readonly messageId: string;
+    readonly participantId: string;
+    readonly createdAt: number;
+}
 export type ChatroomAccountRole = 'super-admin' | 'admin' | 'member';
 export type ChatroomAccountStatus = 'active' | 'disabled';
 export interface AccountRecord {
@@ -184,6 +190,7 @@ export declare const chatroomDomainSpec: {
         threads: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, ThreadRecord>;
         thread_messages: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, ThreadMessageRecord>;
         reactions: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, ReactionRecord>;
+        recalls: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, RecallRecord>;
         accounts: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, AccountRecord>;
         auth_sessions: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, AuthSessionRecord>;
         auth_settings: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, AuthSettingsRecord>;

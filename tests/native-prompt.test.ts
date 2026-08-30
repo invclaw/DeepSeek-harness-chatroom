@@ -168,4 +168,35 @@ describe('native prompt admission', () => {
     expect(addRoomMembers.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[0]!)
     expect(original).not.toHaveBeenCalled()
   })
+
+  it('waits for an in-flight automatic-response setting before admitting a message', async () => {
+    const order: string[] = []
+    const original = vi.fn()
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => {
+      order.push('prompt')
+      return new Response(JSON.stringify({ accepted: true, aiTriggered: true }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const api = { sessions: { prompt: original } } as unknown as IApiClient
+    const room = { id: 'room', sessionId: 'room-session' }
+    const store = {
+      roomForSession: () => room,
+      waitForRoomAutoTrigger: vi.fn(async () => { order.push('setting') }),
+      getSnapshot: () => ({ identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' } }),
+      composition: () => ({ roomId: 'room', revision: 0, files: [], reply: undefined }),
+      completeComposition: vi.fn(),
+    } as unknown as ChatroomClientStore
+    installNativePromptIdentity(api, store)
+
+    await api.sessions.prompt({
+      sessionId: 'room-session' as never,
+      mode: 'queue',
+      content: [{ type: 'text', text: 'DeepSeek你说话啊' }],
+    })
+
+    expect(store.waitForRoomAutoTrigger).toHaveBeenCalledWith('room')
+    expect(order).toEqual(['setting', 'prompt'])
+  })
 })

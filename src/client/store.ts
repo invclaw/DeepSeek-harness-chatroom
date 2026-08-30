@@ -21,6 +21,7 @@ import type {
   ChatroomPromptRequest,
   ChatroomPromptResponse,
   ChatroomReaction,
+  ChatroomRecall,
   ChatroomReplyReference,
   ChatroomRoomResponse,
   ChatroomRoomManageResponse,
@@ -98,6 +99,7 @@ export interface ChatroomView {
   readonly members: readonly ChatroomMember[]
   readonly memberCandidates: readonly ChatroomRoomInviteCandidate[]
   readonly reactions: readonly ChatroomReaction[]
+  readonly recalls: readonly ChatroomRecall[]
   readonly threadPreviews: readonly ChatroomThreadPreview[]
   readonly membersOpen: boolean
   readonly managementBusy?: boolean
@@ -163,6 +165,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     members: [],
     memberCandidates: [],
     reactions: [],
+    recalls: [],
     threadPreviews: [],
     membersOpen: false,
     managementBusy: false,
@@ -216,6 +219,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private originalTitle: string | undefined
   private activeNativeSession: { readonly id: string; readonly title: string; readonly shareable: boolean } | undefined
   private roomEnsure: { readonly sessionId: string; readonly promise: Promise<void> } | undefined
+  private readonly pendingAutoTriggerWrites = new Map<string, Promise<boolean>>()
 
   constructor(
     private readonly openSession: (sessionId: string) => boolean = () => false,
@@ -692,20 +696,53 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   }
 
   /** Change the current room's model-controlled automatic-response policy. */
-  setRoomAutoTrigger = async (enabled: boolean): Promise<boolean> => {
+  setRoomAutoTrigger = (enabled: boolean): Promise<boolean> => {
     const room = this.snapshot.room
-    if (room === undefined || this.snapshot.managementBusy) return false
+    if (room === undefined || this.snapshot.managementBusy) return Promise.resolve(false)
     this.set({ managementBusy: true, managementError: undefined })
+    const task = (async (): Promise<boolean> => {
+      try {
+        const result = await requestJson<ChatroomRoomManageResponse>(`${CHATROOM_API_PREFIX}/rooms/manage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId: room.id, action: 'set-auto-trigger', enabled }),
+        })
+        this.applyRoomManagement(result)
+        return true
+      } catch (error) {
+        this.set({ managementBusy: false, managementError: errorMessage(error) })
+        return false
+      }
+    })()
+    this.pendingAutoTriggerWrites.set(room.id, task)
+    void task.then(() => {
+      if (this.pendingAutoTriggerWrites.get(room.id) === task) {
+        this.pendingAutoTriggerWrites.delete(room.id)
+      }
+    })
+    return task
+  }
+
+  /** Wait until the current room's automatic-response policy is durably applied. */
+  async waitForRoomAutoTrigger(roomId: string): Promise<void> {
+    const pending = this.pendingAutoTriggerWrites.get(roomId)
+    if (pending !== undefined && !await pending) {
+      throw new Error(this.snapshot.managementError ?? '自动回复设置保存失败。')
+    }
+  }
+
+  /** Recall one owned human message from the active room or branch. */
+  recallMessage = async (roomId: string, messageId: string): Promise<boolean> => {
     try {
-      const result = await requestJson<ChatroomRoomManageResponse>(`${CHATROOM_API_PREFIX}/rooms/manage`, {
+      const recall = await requestJson<ChatroomRecall>(`${CHATROOM_API_PREFIX}/messages/recall`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId: room.id, action: 'set-auto-trigger', enabled }),
+        body: JSON.stringify({ roomId, messageId }),
       })
-      this.applyRoomManagement(result)
+      this.replaceRecall(recall)
       return true
     } catch (error) {
-      this.set({ managementBusy: false, managementError: errorMessage(error) })
+      this.set({ composerError: errorMessage(error) })
       return false
     }
   }
@@ -785,6 +822,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         members: [],
         memberCandidates: [],
         reactions: [],
+        recalls: [],
         threadPreviews: [],
         membersOpen: false,
         thread: undefined,
@@ -812,6 +850,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       members: [],
       memberCandidates: [],
       reactions: [],
+      recalls: [],
       threadPreviews: [],
       membersOpen: false,
       thread: undefined,
@@ -1243,6 +1282,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       members: [],
       memberCandidates: [],
       reactions: [],
+      recalls: [],
       threadPreviews: [],
       thread: undefined,
       threadMessages: [],
@@ -1380,6 +1420,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           online: event.online,
           members: event.members,
           reactions: event.reactions,
+          recalls: event.recalls ?? [],
           threadPreviews: event.threadPreviews,
           error: undefined,
         })
@@ -1408,6 +1449,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       case 'reaction':
         this.replaceReaction(event.reaction)
         return
+      case 'message-recalled':
+        this.replaceRecall(event.recall)
+        return
       case 'room-updated':
         this.applyRoomManagement({ room: event.room, members: event.members })
         return
@@ -1419,6 +1463,16 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     const without = this.snapshot.reactions.filter(item =>
       item.messageId !== reaction.messageId || item.emoji !== reaction.emoji)
     this.set({ reactions: reaction.participantIds.length === 0 ? without : [...without, reaction] })
+  }
+
+  private replaceRecall(recall: ChatroomRecall): void {
+    if (this.snapshot.room?.id !== recall.roomId) return
+    const without = this.snapshot.recalls.filter(item => item.messageId !== recall.messageId)
+    this.set({
+      recalls: [...without, recall],
+      reactions: this.snapshot.reactions.filter(item => item.messageId !== recall.messageId),
+      selectedMessages: this.snapshot.selectedMessages.filter(item => item.messageId !== recall.messageId),
+    })
   }
 
   private applyRoomManagement(result: ChatroomRoomManageResponse | ChatroomRoomManagementResponse): void {

@@ -966,7 +966,7 @@ async function verifyPassword(password, encoded) {
   return timingSafeEqual(actual, expected);
 }
 function scrypt(password, salt) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve2, reject) => {
     deriveScrypt(password, salt, 32, {
       N: SCRYPT_N,
       r: SCRYPT_R,
@@ -974,7 +974,7 @@ function scrypt(password, salt) {
       maxmem: 64 * 1024 * 1024
     }, (error, derived) => {
       if (error !== null) reject(error);
-      else resolve(derived);
+      else resolve2(derived);
     });
   });
 }
@@ -1138,14 +1138,15 @@ function matchChatroomApi(pathname) {
 
 // src/room.ts
 import { createHash as createHash2, randomBytes as randomBytes2, randomUUID as randomUUID2 } from "crypto";
+import { readFile } from "fs/promises";
+import { basename, relative, resolve } from "path";
 import { resolveSessionPreset } from "@deepseek-ai/dsh-agent-presets";
 import { AttachmentError } from "@deepseek-ai/dsh-attachment";
 import { BlockAssembler, createAssistantMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
 
-// src/domain.ts
-import { z as z2 } from "zod";
-import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
+// src/agent-tools.ts
+import { defineTool } from "@deepseek-ai/dsh-tools";
 
 // src/reactions.ts
 var CHATROOM_REACTION_EMOJIS = ["\u{1F44D}", "\u2764\uFE0F", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F389}"];
@@ -1153,7 +1154,89 @@ function isChatroomReactionEmoji(value) {
   return typeof value === "string" && CHATROOM_REACTION_EMOJIS.includes(value);
 }
 
+// src/agent-tools.ts
+var CHATROOM_AGENT_ACTIONS = [
+  "send_message",
+  "send_file",
+  "react",
+  "reply",
+  "start_branch",
+  "invite_members",
+  "recall_message"
+];
+function registerChatroomAgentTools(ctx, host, sessionId) {
+  ctx.tools.register(defineTool({
+    name: "chatroom_capabilities",
+    description: "List the current chatroom or branch scope, members, invite candidates, and the collaboration actions you can perform.",
+    parameters: {},
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          room: { type: "string", required: true },
+          scope: { type: "string", required: true, enum: ["room", "branch"] },
+          members: { type: "array", required: true, items: { type: "string" } },
+          inviteCandidates: { type: "array", required: true, items: { type: "string" } },
+          recentMessages: {
+            type: "array",
+            required: true,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                messageId: { type: "string", required: true },
+                role: { type: "string", required: true, enum: ["human", "ai"] },
+                displayName: { type: "string", required: true },
+                text: { type: "string", required: true }
+              }
+            }
+          },
+          actions: { type: "array", required: true, items: { type: "string", enum: [...CHATROOM_AGENT_ACTIONS] } }
+        }
+      },
+      render: (_args, value) => [{ type: "text", text: `Chatroom ${value.room}: ${value.actions.join(", ")}` }]
+    },
+    execute: () => host.agentCapabilities(sessionId),
+    presentCall: () => ({ card: "generic", title: "Inspect chatroom capabilities", kind: "read" })
+  }));
+  ctx.tools.register(defineTool({
+    name: "chatroom_action",
+    description: "Perform a collaboration action in the current chatroom. Use send_message for a proactive room message; reply quotes a message; send_file uploads a workspace file; react adds an emoji; start_branch opens a branch from a room message; invite_members adds accounts to the group; recall_message recalls one of your own room messages.",
+    parameters: {
+      action: { type: "string", required: true, enum: [...CHATROOM_AGENT_ACTIONS] },
+      text: { type: "string", description: "Message text for send_message or reply." },
+      messageId: { type: "string", description: "Target message id from chatroom_capabilities for react, reply, start_branch, or recall_message." },
+      emoji: { type: "string", enum: [...CHATROOM_REACTION_EMOJIS], description: "Reaction emoji for react." },
+      participantIds: { type: "array", items: { type: "string" }, description: "Account ids, usernames, or display names for invite_members." },
+      path: { type: "string", description: "Workspace-relative file path for send_file." },
+      caption: { type: "string", description: "Optional text shown with a sent file." }
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          action: { type: "string", required: true, enum: [...CHATROOM_AGENT_ACTIONS] },
+          summary: { type: "string", required: true }
+        }
+      },
+      render: (_args, value) => [{ type: "text", text: value.summary }]
+    },
+    async execute(args, exec) {
+      const result = await host.agentAction(sessionId, args);
+      if (args.action === "send_message" || args.action === "send_file" || args.action === "reply") {
+        exec.concludeTurn();
+      }
+      return result;
+    },
+    presentCall: (args) => ({ card: "generic", title: `Chatroom: ${args.action}`, kind: "other", rawInput: args })
+  }));
+}
+
 // src/domain.ts
+import { z as z2 } from "zod";
+import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
 var nonNegativeSafeInteger = z2.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 var safeAvatarUrl = z2.string().url().refine((value) => {
   try {
@@ -1286,6 +1369,12 @@ var reactionSchema = z2.object({
   participantId: z2.string().min(1),
   createdAt: nonNegativeSafeInteger
 });
+var recallSchema = z2.object({
+  roomId: z2.string().min(1),
+  messageId: z2.string().min(1),
+  participantId: z2.string().min(1),
+  createdAt: nonNegativeSafeInteger
+});
 var accountSchema = z2.object({
   id: z2.uuid(),
   username: z2.string().min(1),
@@ -1372,6 +1461,7 @@ var chatroomDomainSpec = defineDomain({
     threads: domainTable(threadSchema),
     thread_messages: domainTable(threadMessageSchema),
     reactions: domainTable(reactionSchema),
+    recalls: domainTable(recallSchema),
     accounts: domainTable(accountSchema),
     auth_sessions: domainTable(authSessionSchema),
     auth_settings: domainTable(authSettingsSchema),
@@ -1469,6 +1559,15 @@ function projectForwardText(text) {
 function mentionsAi(content, aiDisplayName) {
   return [aiDisplayName, "AI"].some((name2) => mentionsName(content, name2));
 }
+function addressesAi(content, aiDisplayName) {
+  const text = content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+  return [aiDisplayName, "DeepSeek", "AI"].some((name2) => {
+    const normalized = name2.trim();
+    if (normalized === "") return false;
+    const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escaped}(?=\\s*(?:[\uFF0C,:\uFF1A]\\s*)?(?:\u4F60|\u8BF7|\u5E2E|\u80FD|\u53EF\u4EE5|\u8BF4|\u56DE\u7B54|\u56DE\u590D|\u770B\u770B|\u770B\u4E0B|\u603B\u7ED3|\u5206\u6790|\u5904\u7406))`, "iu").test(text);
+  });
+}
 function mentionsName(content, name2) {
   const text = content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
   return mentionPattern(name2).test(text);
@@ -1551,6 +1650,7 @@ var ChatroomRuntime = class {
   threads;
   threadMessages;
   reactions;
+  recalls;
   directConversations;
   directMessages;
   authentication;
@@ -1648,6 +1748,78 @@ var ChatroomRuntime = class {
   ownsSession(sessionId) {
     return [...this.states.values()].some((state) => state.record.sessionId === sessionId) || [...this.threadStates.values()].some((state) => state.record.sessionId === sessionId);
   }
+  /** Describe the collaboration operations available to one room-scoped Agent. */
+  async agentCapabilities(sessionId) {
+    const target = this.agentToolTarget(sessionId);
+    const memberIds = new Set(this.roomMembers(target.room).map((member) => member.participantId));
+    return {
+      room: target.room.record.title,
+      scope: target.thread === void 0 ? "room" : "branch",
+      members: this.roomMembers(target.room).map((member) => `${member.displayName} (${member.participantId})`),
+      inviteCandidates: this.auth.activeAccounts().filter((account) => !memberIds.has(account.participantId)).map((account) => `${account.displayName} (${account.username}; ${account.participantId})`),
+      recentMessages: await this.agentRecentMessages(target),
+      actions: target.thread === void 0 ? [...CHATROOM_AGENT_ACTIONS] : CHATROOM_AGENT_ACTIONS.filter((action) => action !== "start_branch")
+    };
+  }
+  /** Execute one Agent-requested room side effect against its owning Session. */
+  async agentAction(sessionId, input) {
+    const target = this.agentToolTarget(sessionId);
+    switch (input.action) {
+      case "send_message": {
+        const text = normalizeAgentToolText(input.text, "\u6D88\u606F", this.config.maxMessageTextChars);
+        await this.appendAgentMessage(target, text);
+        return { action: input.action, summary: "\u6D88\u606F\u5DF2\u53D1\u9001\u5230\u5F53\u524D\u4F1A\u8BDD\u3002" };
+      }
+      case "send_file": {
+        const file = await this.storeAgentFile(target.room, input.path);
+        const caption = input.caption === void 0 || input.caption.trim() === "" ? "" : `${normalizeAgentToolText(input.caption, "\u6587\u4EF6\u8BF4\u660E", this.config.maxMessageTextChars)}
+
+`;
+        await this.appendAgentMessage(
+          target,
+          `${caption}${identifyFileText(file)}`
+        );
+        return { action: input.action, summary: `\u6587\u4EF6 ${file.name} \u5DF2\u53D1\u9001\u3002` };
+      }
+      case "react": {
+        const messageId = normalizeMessageId(input.messageId ?? "");
+        if (input.emoji === void 0 || !CHATROOM_REACTION_EMOJIS.includes(input.emoji)) {
+          throw new ChatroomInputError("\u8BF7\u9009\u62E9\u652F\u6301\u7684\u8868\u60C5\u3002");
+        }
+        await this.agentMessage(target, messageId);
+        await this.toggleAgentReaction(target.room, messageId, input.emoji);
+        return { action: input.action, summary: `\u5DF2\u7528 ${input.emoji} \u56DE\u5E94\u6D88\u606F\u3002` };
+      }
+      case "reply": {
+        const message = await this.agentMessage(target, normalizeMessageId(input.messageId ?? ""));
+        const text = normalizeAgentToolText(input.text, "\u56DE\u590D", this.config.maxMessageTextChars);
+        await this.appendAgentMessage(target, identifyReplyText(text, {
+          messageId: message.messageId,
+          displayName: message.displayName,
+          text: message.text
+        }));
+        return { action: input.action, summary: `\u5DF2\u56DE\u590D ${message.displayName}\u3002` };
+      }
+      case "start_branch": {
+        if (target.thread !== void 0) throw new ChatroomInputError("\u5206\u652F\u5185\u4E0D\u80FD\u7EE7\u7EED\u521B\u5EFA\u5D4C\u5957\u5206\u652F\u3002");
+        const root = await this.agentMessage(target, normalizeMessageId(input.messageId ?? ""));
+        const response = await this.openThread(target.room.record.id, this.agentIdentity(target.room), root);
+        return { action: input.action, summary: `\u5DF2\u521B\u5EFA\u5206\u652F ${response.thread.id}\u3002` };
+      }
+      case "invite_members": {
+        const identifiers = input.participantIds?.map((value) => value.trim()).filter(Boolean) ?? [];
+        const count = await this.agentInviteMembers(target.room, identifiers);
+        return { action: input.action, summary: `\u5DF2\u9080\u8BF7 ${count} \u4F4D\u6210\u5458\u52A0\u5165\u7FA4\u804A\u3002` };
+      }
+      case "recall_message": {
+        const messageId = normalizeMessageId(input.messageId ?? "");
+        await this.recallAgentMessage(target, messageId);
+        return { action: input.action, summary: "\u6D88\u606F\u5DF2\u64A4\u56DE\u3002" };
+      }
+      default:
+        return assertNever(input.action);
+    }
+  }
   /** Open storage, seed the original room, and acquire its Session without blocking Harness startup. */
   async start() {
     const domain = await this.ctx.storageDomain.open(chatroomDomainSpec);
@@ -1661,6 +1833,7 @@ var ChatroomRuntime = class {
     this.threads = domain.table("threads");
     this.threadMessages = domain.table("thread_messages");
     this.reactions = domain.table("reactions");
+    this.recalls = domain.table("recalls");
     this.directConversations = domain.table("direct_conversations");
     this.directMessages = domain.table("direct_messages");
     this.authentication = new ChatroomAuth(
@@ -1723,6 +1896,7 @@ var ChatroomRuntime = class {
     this.threads = void 0;
     this.threadMessages = void 0;
     this.reactions = void 0;
+    this.recalls = void 0;
     this.directConversations = void 0;
     this.directMessages = void 0;
     this.authentication = void 0;
@@ -2007,16 +2181,49 @@ var ChatroomRuntime = class {
   async setRoomAutoTrigger(roomId, enabled, identity) {
     this.assertReady();
     const state = this.requireState(roomId);
-    this.assertRoomMember(roomId, identity.participantId);
-    const record = await this.requireRoomRecords().update(roomId, (current) => ({
-      ...current,
-      autoTriggerEnabled: enabled,
-      updatedAt: Date.now()
-    }));
-    state.record = record;
-    const room = this.projectRoom(state, identity.participantId);
-    this.broadcast(state, { type: "room-updated", room: this.projectRoom(state), members: this.roomMembers(state) });
-    return room;
+    const task = state.admission.then(async () => {
+      this.assertRoomMember(roomId, identity.participantId);
+      const record = await this.requireRoomRecords().update(roomId, (current) => ({
+        ...current,
+        autoTriggerEnabled: enabled,
+        updatedAt: Date.now()
+      }));
+      state.record = record;
+      const room = this.projectRoom(state, identity.participantId);
+      this.broadcast(state, { type: "room-updated", room: this.projectRoom(state), members: this.roomMembers(state) });
+      return room;
+    });
+    state.admission = task.then(() => void 0, () => void 0);
+    return await task;
+  }
+  /** Recall one caller-owned human message while retaining an auditable tombstone. */
+  async recallMessage(roomId, messageId, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    const normalizedMessageId = normalizeMessageId(messageId);
+    const task = state.admission.then(async () => {
+      this.assertRecallOwner(state, normalizedMessageId, identity.participantId);
+      const key = recallKey(roomId, normalizedMessageId);
+      const existing = this.requireRecalls().get(key);
+      if (existing !== void 0) return publicRecall(existing);
+      const record = {
+        roomId,
+        messageId: normalizedMessageId,
+        participantId: identity.participantId,
+        createdAt: Date.now()
+      };
+      await this.requireRecalls().put(key, record);
+      for (const [reactionKey2, reaction] of this.requireReactions().entries()) {
+        if (reaction.roomId === roomId && reaction.messageId === normalizedMessageId) {
+          await this.requireReactions().delete(reactionKey2);
+        }
+      }
+      const recall = publicRecall(record);
+      this.broadcast(state, { type: "message-recalled", recall });
+      return recall;
+    });
+    state.admission = task.then(() => void 0, () => void 0);
+    return await task;
   }
   /** Toggle one participant reaction and replace its room-wide summary. */
   async toggleReaction(roomId, messageId, emoji, identity) {
@@ -2159,6 +2366,7 @@ var ChatroomRuntime = class {
       online: onlineCount(state),
       members: this.roomMembers(state),
       reactions: this.reactionsForRoom(roomId),
+      recalls: this.recallsForRoom(roomId),
       threadPreviews: this.threadPreviewsForRoom(roomId)
     };
     writeSse(response, snapshot);
@@ -2263,7 +2471,7 @@ var ChatroomRuntime = class {
     const room = this.requireState(roomId);
     const normalized = normalizeThreadRoot(root);
     const task = room.admission.then(async () => {
-      await this.touchMember(roomId, identity);
+      if (identity.participantId !== "ai") await this.touchMember(roomId, identity);
       const existing = [...this.requireThreads().entries()].find(([, record]) => record.roomId === roomId && record.root.messageId === normalized.messageId && record.root.role === normalized.role)?.[1];
       let state;
       if (existing?.rootContentVersion === 1) {
@@ -2670,6 +2878,179 @@ var ChatroomRuntime = class {
       await records.put(configured.id, configured);
     }
   }
+  agentToolTarget(sessionId) {
+    const room = [...this.states.values()].find((state) => state.record.sessionId === sessionId);
+    if (room !== void 0) return { room };
+    const thread = [...this.threadStates.values()].find((state) => state.record.sessionId === sessionId);
+    if (thread === void 0) throw new ChatroomInputError("\u5F53\u524D Agent \u4E0D\u5C5E\u4E8E\u804A\u5929\u5BA4\u4F1A\u8BDD\u3002");
+    return { room: this.requireState(thread.record.roomId), thread };
+  }
+  agentIdentity(room) {
+    return {
+      participantId: "ai",
+      displayName: room.record.aiDisplayName,
+      avatarId: fallbackAvatarId("ai")
+    };
+  }
+  async appendAgentMessage(target, text) {
+    const binding = target.thread === void 0 ? await this.ensureRoom(target.room.record.id) : await this.ensureThread(target.thread.record.id);
+    const selection = binding.agent.options.provider !== void 0 && binding.agent.options.model !== void 0 ? { provider: binding.agent.options.provider, model: binding.agent.options.model } : this.ctx.agentDefaultModel.currentSelection();
+    const message = createAssistantMessage({ content: [{ type: "text", text }], source: selection });
+    binding.agent.session.append("assistant/message", { turn: 0, step: 0, message }, { surfaceOp: "append" });
+  }
+  async storeAgentFile(room, path) {
+    const requested = normalizeAgentToolText(path, "\u6587\u4EF6\u8DEF\u5F84", 4096);
+    const workspace = resolve(this.config.cwd);
+    const absolute = resolve(workspace, requested);
+    const outside = relative(workspace, absolute);
+    if (outside === ".." || outside.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
+      throw new ChatroomInputError("\u53EA\u80FD\u53D1\u9001\u5F53\u524D\u5DE5\u4F5C\u533A\u5185\u7684\u6587\u4EF6\u3002");
+    }
+    let data;
+    try {
+      data = new Uint8Array(await readFile(absolute));
+    } catch (error) {
+      throw new ChatroomInputError(`\u65E0\u6CD5\u8BFB\u53D6\u6587\u4EF6\uFF1A${error instanceof Error ? error.message : String(error)}`);
+    }
+    this.validateFiles([data]);
+    const identity = this.agentIdentity(room);
+    const record = this.fileRecord(room.record.id, identity, {
+      type: "file",
+      name: basename(absolute),
+      mediaType: "application/octet-stream",
+      data: Buffer.from(data).toString("base64")
+    }, data);
+    await this.requireFiles().put(record.id, record);
+    return publicFile(record);
+  }
+  async toggleAgentReaction(room, messageId, emoji) {
+    const key = reactionKey(room.record.id, messageId, emoji, "ai");
+    const table = this.requireReactions();
+    if (table.get(key) === void 0) {
+      await table.put(key, {
+        roomId: room.record.id,
+        messageId,
+        emoji,
+        participantId: "ai",
+        createdAt: Date.now()
+      });
+    } else {
+      await table.delete(key);
+    }
+    this.broadcast(room, { type: "reaction", reaction: this.reactionSummary(room.record.id, messageId, emoji) });
+  }
+  async agentInviteMembers(room, identifiers) {
+    if (identifiers.length === 0) throw new ChatroomInputError("\u8BF7\u81F3\u5C11\u63D0\u4F9B\u4E00\u4F4D\u7528\u6237\u3002");
+    if (identifiers.length > 100) throw new ChatroomInputError("\u4E00\u6B21\u6700\u591A\u6DFB\u52A0 100 \u4F4D\u7528\u6237\u3002");
+    const accounts = this.auth.activeAccounts();
+    const selected = [...new Set(identifiers)].map((identifier) => {
+      const account = accounts.find((candidate) => [candidate.participantId, candidate.username, candidate.displayName].some((value) => value.localeCompare(identifier, void 0, { sensitivity: "accent" }) === 0));
+      if (account === void 0) throw new ChatroomInputError(`\u627E\u4E0D\u5230\u7528\u6237 ${JSON.stringify(identifier)}\u3002`);
+      return account;
+    });
+    const table = this.requireMembers();
+    const now = Date.now();
+    let added = 0;
+    for (const account of selected) {
+      const key = `${room.record.id}:${account.participantId}`;
+      if (table.get(key) !== void 0) continue;
+      await table.put(key, {
+        roomId: room.record.id,
+        participantId: account.participantId,
+        displayName: account.displayName,
+        avatarId: account.avatarId,
+        ...account.avatarUrl === void 0 ? {} : { avatarUrl: account.avatarUrl },
+        joinedAt: now,
+        lastSeenAt: now
+      });
+      added += 1;
+    }
+    this.broadcast(room, { type: "room-updated", room: this.projectRoom(room), members: this.roomMembers(room) });
+    return added;
+  }
+  async agentMessage(target, messageId) {
+    if (target.thread !== void 0) {
+      const message = this.messagesForThread(target.thread.record.id).find((candidate) => candidate.id === messageId);
+      if (message !== void 0) {
+        return {
+          messageId: message.id,
+          displayName: message.displayName,
+          text: message.text,
+          role: message.role,
+          sourceSessionId: target.thread.record.sessionId,
+          sourceSeq: message.sequence
+        };
+      }
+      if (target.thread.record.root.messageId === messageId) return target.thread.record.root;
+      throw new ChatroomInputError("\u76EE\u6807\u6D88\u606F\u4E0D\u5B58\u5728\u3002");
+    }
+    const binding = await this.ensureRoom(target.room.record.id);
+    const event = binding.agent.session.events.find((candidate) => {
+      if (candidate.type === "user/message") {
+        return messageId === `user:${candidate.seq}` || messageId === `steering:${candidate.seq}`;
+      }
+      return candidate.type === "assistant/message" && messageId === String(candidate.data.message.id);
+    });
+    if (event === void 0 || event.type !== "user/message" && event.type !== "assistant/message") {
+      throw new ChatroomInputError("\u76EE\u6807\u6D88\u606F\u4E0D\u5B58\u5728\u3002");
+    }
+    const role = event.type === "assistant/message" ? "ai" : "human";
+    const content = event.type === "assistant/message" ? event.data.message.content : event.data.content;
+    const projected = projectForwardContent(content, role);
+    return {
+      messageId,
+      displayName: role === "ai" ? target.room.record.aiDisplayName : projected.displayName ?? "\u6210\u5458",
+      text: projected.text,
+      role,
+      sourceSessionId: target.room.record.sessionId,
+      sourceSeq: event.seq
+    };
+  }
+  async agentRecentMessages(target) {
+    if (target.thread !== void 0) {
+      return [
+        target.thread.record.root,
+        ...this.messagesForThread(target.thread.record.id).map((message) => ({
+          messageId: message.id,
+          role: message.role,
+          displayName: message.displayName,
+          text: message.text
+        }))
+      ].slice(-20);
+    }
+    const binding = await this.ensureRoom(target.room.record.id);
+    return binding.agent.session.events.flatMap((event) => {
+      if (event.type !== "user/message" && event.type !== "assistant/message") return [];
+      const role = event.type === "assistant/message" ? "ai" : "human";
+      const projected = projectForwardContent(
+        event.type === "assistant/message" ? event.data.message.content : event.data.content,
+        role
+      );
+      return [{
+        messageId: event.type === "assistant/message" ? String(event.data.message.id) : `user:${event.seq}`,
+        role,
+        displayName: role === "ai" ? target.room.record.aiDisplayName : projected.displayName ?? "\u6210\u5458",
+        text: projected.text
+      }];
+    }).slice(-20);
+  }
+  async recallAgentMessage(target, messageId) {
+    const message = await this.agentMessage(target, messageId);
+    if (message.role !== "ai") throw new ChatroomInputError("AI \u53EA\u80FD\u64A4\u56DE\u81EA\u5DF1\u53D1\u9001\u7684\u6D88\u606F\u3002");
+    const record = {
+      roomId: target.room.record.id,
+      messageId,
+      participantId: "ai",
+      createdAt: Date.now()
+    };
+    await this.requireRecalls().put(recallKey(target.room.record.id, messageId), record);
+    for (const [key, reaction] of this.requireReactions().entries()) {
+      if (reaction.roomId === target.room.record.id && reaction.messageId === messageId) {
+        await this.requireReactions().delete(key);
+      }
+    }
+    this.broadcast(target.room, { type: "message-recalled", recall: publicRecall(record) });
+  }
   async ensureRoom(roomId) {
     const state = this.requireState(roomId);
     if (state.binding !== void 0) return state.binding;
@@ -2714,7 +3095,7 @@ var ChatroomRuntime = class {
           resumeSessionId: id,
           agentOptions,
           setup: async (agentCtx) => {
-            await this.setupAgentContext(agentCtx, agentPreset);
+            await this.setupAgentContext(agentCtx, agentPreset, sessionId);
           }
         }));
       } catch (error) {
@@ -2733,7 +3114,7 @@ var ChatroomRuntime = class {
         },
         agentOptions,
         setup: async (agentCtx) => {
-          await this.setupAgentContext(agentCtx, this.config.agentPreset);
+          await this.setupAgentContext(agentCtx, this.config.agentPreset, sessionId);
         }
       }));
     } catch (error) {
@@ -2742,12 +3123,18 @@ var ChatroomRuntime = class {
       throw error;
     }
   }
-  async setupAgentContext(agentCtx, agentPreset) {
+  async setupAgentContext(agentCtx, agentPreset, sessionId) {
     await this.ctx.agentPresets.mount(agentCtx, agentPreset);
+    registerChatroomAgentTools(agentCtx, this, sessionId);
     agentCtx.systemPrompt.section({
       name: "chatroom:main-agent",
       order: 10,
       text: () => this.resolvedAutomationSettings().mainAgentPrompt
+    });
+    agentCtx.systemPrompt.section({
+      name: "chatroom:collaboration-tools",
+      order: 11,
+      text: () => "\u4F60\u53EF\u4F7F\u7528 chatroom_capabilities \u67E5\u770B\u5F53\u524D\u7FA4\u804A\u80FD\u529B\u548C\u53EF\u64CD\u4F5C\u7684\u8FD1\u671F\u6D88\u606F ID\uFF0C\u5E76\u4F7F\u7528 chatroom_action \u62C9\u4EBA\u3001\u4E3B\u52A8\u53D1\u6D88\u606F\u3001\u53D1\u9001\u5DE5\u4F5C\u533A\u6587\u4EF6\u3001\u56DE\u590D\u5F15\u7528\u3001\u8D34\u8868\u60C5\u3001\u521B\u5EFA\u5206\u652F\u6216\u64A4\u56DE\u81EA\u5DF1\u7684\u6D88\u606F\u3002\u6267\u884C\u7FA4\u804A\u526F\u4F5C\u7528\u524D\u5148\u8C03\u7528\u5DE5\u5177\uFF0C\u53EA\u6709\u5DE5\u5177\u6210\u529F\u540E\u624D\u80FD\u58F0\u79F0\u64CD\u4F5C\u5B8C\u6210\u3002"
     });
   }
   /** Ensure one shared Session uses native Workspace navigation. */
@@ -2920,6 +3307,7 @@ var ChatroomRuntime = class {
   }
   async shouldAutoTrigger(room, binding, content, thread) {
     if (room.record.autoTriggerEnabled !== true) return false;
+    if (addressesAi(content, room.record.aiDisplayName)) return true;
     const history = thread === void 0 ? recentRoomConversation(binding.agent.session.events) : recentThreadConversation(thread.record, this.messagesForThread(thread.record.id));
     const settings = this.resolvedAutomationSettings();
     const assembler = new BlockAssembler();
@@ -3013,6 +3401,30 @@ var ChatroomRuntime = class {
     if (this.reactions === void 0) throw new Error("chatroom reaction storage is unavailable");
     return this.reactions;
   }
+  requireRecalls() {
+    if (this.recalls === void 0) throw new Error("chatroom recall storage is unavailable");
+    return this.recalls;
+  }
+  assertRecallOwner(state, messageId, participantId) {
+    const threadMessage = this.requireThreadMessages().get(messageId);
+    if (threadMessage !== void 0) {
+      const thread = this.requireThreads().get(threadMessage.threadId);
+      if (thread?.roomId !== state.record.id || threadMessage.role !== "human" || threadMessage.participantId !== participantId) {
+        throw new ChatroomInputError("\u53EA\u80FD\u64A4\u56DE\u81EA\u5DF1\u53D1\u9001\u7684\u6D88\u606F\u3002");
+      }
+      return;
+    }
+    const match = /^(?:user|steering):(\d+)$/u.exec(messageId);
+    const sequence = match === null ? void 0 : Number(match[1]);
+    const event = sequence === void 0 ? void 0 : state.binding?.agent.session.events.find((candidate) => candidate.seq === sequence && candidate.type === "user/message");
+    const text = event?.type === "user/message" ? event.data.content.find((block) => block.type === "text")?.text : void 0;
+    if (text === void 0 || participantMarker(text)?.participantId !== participantId) {
+      throw new ChatroomInputError("\u53EA\u80FD\u64A4\u56DE\u81EA\u5DF1\u53D1\u9001\u7684\u6D88\u606F\u3002");
+    }
+  }
+  recallsForRoom(roomId) {
+    return [...this.requireRecalls().entries()].map(([, record]) => record).filter((record) => record.roomId === roomId).map(publicRecall);
+  }
   requireDirectConversations() {
     if (this.directConversations === void 0) throw new Error("chatroom direct conversation storage is unavailable");
     return this.directConversations;
@@ -3102,6 +3514,12 @@ function roomUpdatedAt(record) {
 function roomPreferenceKey(roomId, participantId) {
   return `${roomId}\0${participantId}`;
 }
+function recallKey(roomId, messageId) {
+  return `${roomId}\0${messageId}`;
+}
+function publicRecall(record) {
+  return { ...record };
+}
 function normalizeModelRoute(value, label) {
   const normalized = value.trim();
   if (normalized === "" || normalized.length > 240 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(normalized)) {
@@ -3115,6 +3533,16 @@ function normalizeSystemPrompt(value, label, maximumChars) {
     throw new ChatroomInputError(`${label}\u65E0\u6548\u6216\u8D85\u8FC7 ${maximumChars} \u4E2A\u5B57\u7B26\u3002`);
   }
   return normalized;
+}
+function normalizeAgentToolText(value, label, maximumChars) {
+  const normalized = value?.trim() ?? "";
+  if (normalized === "" || [...normalized].length > maximumChars || /[\u0000\u0008\u000B\u000C\u000E-\u001F\u007F]/u.test(normalized)) {
+    throw new ChatroomInputError(`${label}\u4E0D\u80FD\u4E3A\u7A7A\u6216\u8D85\u8FC7 ${maximumChars} \u4E2A\u5B57\u7B26\u3002`);
+  }
+  return normalized;
+}
+function assertNever(value) {
+  throw new ChatroomInputError(`\u4E0D\u652F\u6301\u7684\u7FA4\u804A\u64CD\u4F5C\uFF1A${String(value)}`);
 }
 function recentRoomConversation(events) {
   return events.flatMap((event) => {
@@ -3299,14 +3727,16 @@ function projectForwardContent(blocks, role) {
     }
     if (block.type !== "text") continue;
     let text2 = block.text;
-    if (firstText && role === "human") {
+    if (firstText) {
       firstText = false;
-      const marker = participantMarker(text2);
-      if (marker !== void 0) text2 = text2.slice(marker.length);
-      const prefix = /^([^：]{1,80})：/u.exec(text2);
-      if (prefix !== null) {
-        displayName = prefix[1];
-        text2 = text2.slice(prefix[0].length);
+      if (role === "human") {
+        const marker = participantMarker(text2);
+        if (marker !== void 0) text2 = text2.slice(marker.length);
+        const prefix = /^([^：]{1,80})：/u.exec(text2);
+        if (prefix !== null) {
+          displayName = prefix[1];
+          text2 = text2.slice(prefix[0].length);
+        }
       }
       const replyProjection = projectReplyText(text2);
       text2 = replyProjection.text;
@@ -3490,6 +3920,10 @@ var ChatroomHttpController = class {
       }
       if (route.endpoint === "/reactions/toggle") {
         await this.handleReactionToggle(request, response);
+        return;
+      }
+      if (route.endpoint === "/messages/recall") {
+        await this.handleMessageRecall(request, response);
         return;
       }
       if (route.endpoint === "/forward") {
@@ -4068,6 +4502,22 @@ var ChatroomHttpController = class {
     );
     json(response, 200, reaction);
   }
+  async handleMessageRecall(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = await this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const body = await readJson(request, smallRequestLimit(this.config));
+    const recall = await this.runtime.recallMessage(
+      fieldString(body, "roomId"),
+      fieldString(body, "messageId"),
+      identity
+    );
+    json(response, 200, recall);
+  }
   async handleForward(request, response) {
     if (request.method !== "POST") {
       methodNotAllowed(response, "POST");
@@ -4631,6 +5081,7 @@ var inject = [
   "sessions",
   "sessionTitle",
   "storageDomain",
+  "tools",
   "webServer",
   "workspaceRegistry"
 ];

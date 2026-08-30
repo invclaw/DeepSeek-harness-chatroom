@@ -36,6 +36,7 @@ interface ChatroomEntryInjected {
   enableSystemNotifications(): Promise<void>
   dismissToast(id: string): void
   toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>
+  recallMessage(roomId: string, messageId: string): Promise<boolean>
   openForward(roomId: string, message?: ChatroomForwardItem): void
   closeForward(): void
   forwardSelected(targetRoomId: string): Promise<boolean>

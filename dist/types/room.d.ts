@@ -2,9 +2,10 @@ import type { ServerResponse } from 'node:http';
 import type { Context } from '@deepseek-ai/cordis';
 import { type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
 import { ChatroomAuth } from './auth.js';
+import { type ChatroomAgentAction, type ChatroomAgentActionInput } from './agent-tools.js';
 import type { Config } from './config.js';
 import { type ChatroomReactionEmoji } from './reactions.js';
-import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
+import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
 /** Runtime validation failure safe to return to a browser. */
 export declare class ChatroomInputError extends Error {
 }
@@ -23,6 +24,7 @@ export declare class ChatroomRuntime {
     private threads;
     private threadMessages;
     private reactions;
+    private recalls;
     private directConversations;
     private directMessages;
     private authentication;
@@ -57,6 +59,25 @@ export declare class ChatroomRuntime {
     get auth(): ChatroomAuth;
     /** Whether one model request belongs to a room or branch Session owned by this runtime. */
     ownsSession(sessionId: string): boolean;
+    /** Describe the collaboration operations available to one room-scoped Agent. */
+    agentCapabilities(sessionId: string): Promise<{
+        readonly room: string;
+        readonly scope: 'room' | 'branch';
+        readonly members: string[];
+        readonly inviteCandidates: string[];
+        readonly recentMessages: Array<{
+            readonly messageId: string;
+            readonly role: 'human' | 'ai';
+            readonly displayName: string;
+            readonly text: string;
+        }>;
+        readonly actions: ChatroomAgentAction[];
+    }>;
+    /** Execute one Agent-requested room side effect against its owning Session. */
+    agentAction(sessionId: string, input: ChatroomAgentActionInput): Promise<{
+        readonly action: ChatroomAgentAction;
+        readonly summary: string;
+    }>;
     /** Open storage, seed the original room, and acquire its Session without blocking Harness startup. */
     start(): Promise<void>;
     /** Stop intake, close presence streams, and release every activated room. */
@@ -91,6 +112,8 @@ export declare class ChatroomRuntime {
     setRoomPinned(roomId: string, pinned: boolean, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Enable or disable model-controlled automatic AI responses as a room member. */
     setRoomAutoTrigger(roomId: string, enabled: boolean, identity: ChatroomIdentity): Promise<ChatroomInfo>;
+    /** Recall one caller-owned human message while retaining an auditable tombstone. */
+    recallMessage(roomId: string, messageId: string, identity: ChatroomIdentity): Promise<ChatroomRecall>;
     /** Toggle one participant reaction and replace its room-wide summary. */
     toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji, identity: ChatroomIdentity): Promise<ChatroomReaction>;
     /** Append selected messages as one merged-forward card in another room. */
@@ -147,6 +170,15 @@ export declare class ChatroomRuntime {
     private directMessageHistory;
     private storeDirectFiles;
     private seedConfiguredRoom;
+    private agentToolTarget;
+    private agentIdentity;
+    private appendAgentMessage;
+    private storeAgentFile;
+    private toggleAgentReaction;
+    private agentInviteMembers;
+    private agentMessage;
+    private agentRecentMessages;
+    private recallAgentMessage;
     private ensureRoom;
     private activateRoom;
     private activateSharedSession;
@@ -181,6 +213,9 @@ export declare class ChatroomRuntime {
     private requireThreads;
     private requireThreadMessages;
     private requireReactions;
+    private requireRecalls;
+    private assertRecallOwner;
+    private recallsForRoom;
     private requireDirectConversations;
     private requireDirectMessages;
     private requireThreadState;

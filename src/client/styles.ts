@@ -1394,6 +1394,7 @@ html[data-dsh-chatroom-active] [data-dsh-chatroom-native-actions] {
 .dsh-chatroom-forward-reply span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dsh-chatroom-forward-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 .dsh-chatroom-forward-reactions span { border: 1px solid var(--border-primary, #e5e7eb); border-radius: 999px; padding: 2px 7px; font-size: 11px; }
+.dsh-chatroom-recalled-message { color: var(--text-tertiary, #8b919c); font-size: 13px; font-style: italic; }
 
 .dsh-chatroom-selection-bar { position: fixed; z-index: 170; bottom: 92px; left: 50%; display: flex; align-items: center; gap: 10px; border: 1px solid var(--border-primary, #e5e7eb); border-radius: 14px; background: var(--bg-primary, #fff); padding: 9px 12px; box-shadow: 0 12px 34px rgb(15 23 42 / 18%); transform: translateX(-50%); }
 .dsh-chatroom-selection-bar strong { margin-right: 8px; font-size: 13px; }

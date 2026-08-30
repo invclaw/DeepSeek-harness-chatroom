@@ -195,6 +195,7 @@ export function apply(ctx: ClientContext): void {
       enableSystemNotifications: store.enableSystemNotifications,
       dismissToast: store.dismissToast,
       toggleReaction: store.toggleReaction,
+      recallMessage: store.recallMessage,
       openForward: store.openForward,
       closeForward: store.closeForward,
       forwardSelected: store.forwardSelected,
@@ -318,6 +319,7 @@ export function apply(ctx: ClientContext): void {
       setReply: store.setReply,
       openThread: store.openThread,
       toggleReaction: store.toggleReaction,
+      recallMessage: store.recallMessage,
       openForward: store.openForward,
       toggleMessageSelection: store.toggleMessageSelection,
     }),
@@ -445,6 +447,7 @@ function chatroomMessageInjection<T extends 'user' | 'steering'>(
     setReply: store.setReply,
     openThread: store.openThread,
     toggleReaction: store.toggleReaction,
+    recallMessage: store.recallMessage,
     openForward: store.openForward,
     toggleMessageSelection: store.toggleMessageSelection,
   }

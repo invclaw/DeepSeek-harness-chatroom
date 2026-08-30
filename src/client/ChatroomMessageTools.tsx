@@ -34,12 +34,15 @@ export interface ChatroomMessageToolsProps {
   readonly identity: ChatroomIdentity | undefined
   readonly selecting: boolean
   readonly selected: boolean
+  readonly recalled: boolean
+  readonly canRecall: boolean
   readonly copyText?: string
   readonly onReply?: (() => void) | undefined
   readonly onBranch?: (() => void) | undefined
   toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>
   openForward(roomId: string, message: ChatroomForwardItem): void
   toggleSelection(roomId: string, message: ChatroomForwardItem): void
+  recallMessage(roomId: string, messageId: string): Promise<boolean>
 }
 
 /** Capability-driven actions reused by main-room and branch message rows. */
@@ -51,10 +54,6 @@ export function ChatroomInlineMessageActions({
   const [copied, setCopied] = useState(false)
   const [overflowOpen, setOverflowOpen] = useState(false)
   const copyText = tools.copyText
-  const canAct = tools.identity !== undefined
-  const liked = tools.reactions.some(reaction => reaction.messageId === tools.message.messageId
-    && reaction.emoji === '👍'
-    && reaction.participantIds.includes(tools.identity?.participantId ?? ''))
   useEffect(() => {
     if (!overflowOpen) return
     const close = () => { setOverflowOpen(false) }
@@ -66,6 +65,11 @@ export function ChatroomInlineMessageActions({
       document.removeEventListener('keydown', escape)
     }
   }, [overflowOpen])
+  if (tools.recalled) return null
+  const canAct = tools.identity !== undefined
+  const liked = tools.reactions.some(reaction => reaction.messageId === tools.message.messageId
+    && reaction.emoji === '👍'
+    && reaction.participantIds.includes(tools.identity?.participantId ?? ''))
   if (copyText === undefined && !canAct) return null
   const copy = (): void => {
     if (copyText === undefined || copied) return
@@ -109,6 +113,7 @@ export function ChatroomInlineMessageActions({
               </span>}
               {copyText !== undefined && <button type="button" role="menuitem" onClick={() => { copy(); setOverflowOpen(false) }}>{copied ? '✓ 已复制' : '▣ 复制'}</button>}
               {canAct && <button type="button" role="menuitem" onClick={() => { tools.toggleSelection(tools.roomId, tools.message); setOverflowOpen(false) }}>{tools.selected ? '✓ 取消选择' : '☑ 多选'}</button>}
+              {tools.canRecall && <button type="button" role="menuitem" onClick={() => { void tools.recallMessage(tools.roomId, tools.message.messageId); setOverflowOpen(false) }}>↶ 撤回</button>}
             </span>
           )}
         </span>
@@ -119,7 +124,7 @@ export function ChatroomInlineMessageActions({
 
 /** Checkbox shown on every message while the room is in multi-select mode. */
 export function ChatroomSelectionCheckbox({ tools }: { tools: ChatroomMessageToolsProps }): JSX.Element | null {
-  if (!tools.selecting) return null
+  if (!tools.selecting || tools.recalled) return null
   return (
     <label className="dsh-chatroom-selection-checkbox" title={tools.selected ? '取消选择' : '选择消息'}>
       <input
@@ -167,6 +172,7 @@ export function useChatroomMessageMenu(): {
 
 /** Persisted reaction chips shown below one message. */
 export function ChatroomReactionBar(props: ChatroomMessageToolsProps): JSX.Element | null {
+  if (props.recalled) return null
   const reactions = props.reactions.filter(item => item.messageId === props.message.messageId && item.participantIds.length > 0)
   if (reactions.length === 0) return null
   return (
@@ -197,7 +203,7 @@ export function ChatroomMessageContextMenu({
   position: { x: number; y: number } | undefined
   close(): void
 }): JSX.Element | null {
-  if (position === undefined || tools.identity === undefined) return null
+  if (position === undefined || tools.identity === undefined || tools.recalled) return null
   const copyText = tools.copyText
   return (
     <div
@@ -235,6 +241,11 @@ export function ChatroomMessageContextMenu({
       {tools.onBranch !== undefined && (
         <button type="button" role="menuitem" onClick={() => { tools.onBranch?.(); close() }}>
           <span aria-hidden>⑂</span> 分支
+        </button>
+      )}
+      {tools.canRecall && (
+        <button type="button" role="menuitem" onClick={() => { void tools.recallMessage(tools.roomId, tools.message.messageId); close() }}>
+          <span aria-hidden>↶</span> 撤回
         </button>
       )}
     </div>

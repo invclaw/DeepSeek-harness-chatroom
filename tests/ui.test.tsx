@@ -122,6 +122,7 @@ describe('native chatroom integration', () => {
     renderEntry(accountView, { adminUpdateUser, adminCreateUser, adminSetAutoRedirectProvider, adminSaveProvider, sendDirect })
     renderSettings(accountView, { adminUpdateUser, adminCreateUser, adminSetAutoRedirectProvider, adminSaveProvider, sendDirect })
     expect(screen.getByTestId('chatroom-settings')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '打开私聊' })).toBeNull()
     expect(screen.getByText('@alice')).toBeTruthy()
     const entry = screen.getByLabelText('未登录用户入口') as HTMLSelectElement
     expect(entry.value).toBe('company')
@@ -456,6 +457,7 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     members: [],
     memberCandidates: [],
     reactions: [],
+    recalls: [],
     threadPreviews: [],
     membersOpen: false,
     error: undefined,
@@ -554,6 +556,7 @@ function entry(
     enableSystemNotifications={vi.fn(async () => undefined)}
     dismissToast={vi.fn()}
     toggleReaction={vi.fn(async () => undefined)}
+    recallMessage={vi.fn(async () => true)}
     openForward={vi.fn()}
     closeForward={vi.fn()}
     forwardSelected={vi.fn(async () => true)}

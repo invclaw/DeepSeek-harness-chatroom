@@ -1,5 +1,5 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomAutomationOverview, ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot } from '../types.js';
+import type { ChatroomAutomationOverview, ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 export type ChatroomPhase = 'loading' | 'auth-required' | 'identity-required' | 'ready' | 'error';
 export type ChatroomConnection = 'offline' | 'connecting' | 'online';
@@ -49,6 +49,7 @@ export interface ChatroomView {
     readonly members: readonly ChatroomMember[];
     readonly memberCandidates: readonly ChatroomRoomInviteCandidate[];
     readonly reactions: readonly ChatroomReaction[];
+    readonly recalls: readonly ChatroomRecall[];
     readonly threadPreviews: readonly ChatroomThreadPreview[];
     readonly membersOpen: boolean;
     readonly managementBusy?: boolean;
@@ -106,6 +107,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private originalTitle;
     private activeNativeSession;
     private roomEnsure;
+    private readonly pendingAutoTriggerWrites;
     constructor(openSession?: (sessionId: string) => boolean, branchFrame?: ChatroomBranchFrame);
     /** Current immutable room projection. */
     getSnapshot: () => ChatroomView;
@@ -209,6 +211,10 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     setRoomPinned: (roomId: string, pinned: boolean) => Promise<boolean>;
     /** Change the current room's model-controlled automatic-response policy. */
     setRoomAutoTrigger: (enabled: boolean) => Promise<boolean>;
+    /** Wait until the current room's automatic-response policy is durably applied. */
+    waitForRoomAutoTrigger(roomId: string): Promise<void>;
+    /** Recall one owned human message from the active room or branch. */
+    recallMessage: (roomId: string, messageId: string) => Promise<boolean>;
     /** Rename the active room through the server-enforced management endpoint. */
     renameRoom: (title: string) => Promise<boolean>;
     /** Promote or demote one member through the owner-only management endpoint. */
@@ -281,6 +287,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private closeNotifications;
     private receive;
     private replaceReaction;
+    private replaceRecall;
     private applyRoomManagement;
     private receiveNotification;
     private receiveDirectMessage;

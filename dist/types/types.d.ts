@@ -141,6 +141,13 @@ export interface ChatroomReaction {
     readonly emoji: ChatroomReactionEmoji;
     readonly participantIds: readonly string[];
 }
+/** Durable tombstone for a participant-recalled room or branch message. */
+export interface ChatroomRecall {
+    readonly roomId: string;
+    readonly messageId: string;
+    readonly participantId: string;
+    readonly createdAt: number;
+}
 /** One selected message included in a merged forward. */
 export interface ChatroomForwardItem {
     readonly messageId: string;
@@ -344,6 +351,7 @@ export interface ChatroomSnapshotEvent {
     readonly online: number;
     readonly members: readonly ChatroomMember[];
     readonly reactions: readonly ChatroomReaction[];
+    readonly recalls?: readonly ChatroomRecall[];
     readonly threadPreviews: readonly ChatroomThreadPreview[];
 }
 /** Online connection count event. */
@@ -363,6 +371,11 @@ export interface ChatroomReactionEvent {
     readonly type: 'reaction';
     readonly reaction: ChatroomReaction;
 }
+/** One message-recall tombstone delivered to every participant in a room. */
+export interface ChatroomRecallEvent {
+    readonly type: 'message-recalled';
+    readonly recall: ChatroomRecall;
+}
 /** Room title or role roster replacement after a management mutation. */
 export interface ChatroomRoomUpdatedEvent {
     readonly type: 'room-updated';
@@ -381,7 +394,7 @@ export interface ChatroomDirectMessageEvent {
     readonly message: ChatroomDirectMessage;
 }
 export type ChatroomGlobalEvent = ChatroomNotificationEvent | ChatroomDirectMessageEvent;
-export type ChatroomServerEvent = ChatroomSnapshotEvent | ChatroomPresenceEvent | ChatroomThreadMessageEvent | ChatroomReactionEvent | ChatroomRoomUpdatedEvent;
+export type ChatroomServerEvent = ChatroomSnapshotEvent | ChatroomPresenceEvent | ChatroomThreadMessageEvent | ChatroomReactionEvent | ChatroomRecallEvent | ChatroomRoomUpdatedEvent;
 /** Browser-visible error envelope. */
 export interface ChatroomErrorResponse {
     readonly error: string;

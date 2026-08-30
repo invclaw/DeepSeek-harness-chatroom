@@ -118,6 +118,18 @@ export function mentionsAi(content: readonly ChatroomPromptContentPart[], aiDisp
   return [aiDisplayName, 'AI'].some(name => mentionsName(content, name))
 }
 
+/** Whether enabled automatic-response mode sees a direct plain-text address to the AI. */
+export function addressesAi(content: readonly ChatroomPromptContentPart[], aiDisplayName: string): boolean {
+  const text = content.filter((part): part is Extract<ChatroomPromptContentPart, { type: 'text' }> =>
+    part.type === 'text').map(part => part.text).join('\n')
+  return [aiDisplayName, 'DeepSeek', 'AI'].some((name) => {
+    const normalized = name.trim()
+    if (normalized === '') return false
+    const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+    return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escaped}(?=\\s*(?:[，,:：]\\s*)?(?:你|请|帮|能|可以|说|回答|回复|看看|看下|总结|分析|处理))`, 'iu').test(text)
+  })
+}
+
 /** Whether visible room text explicitly mentions one participant or account name. */
 export function mentionsName(content: readonly ChatroomPromptContentPart[], name: string): boolean {
   const text = content.filter((part): part is Extract<ChatroomPromptContentPart, { type: 'text' }> =>

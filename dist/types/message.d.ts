@@ -39,6 +39,8 @@ export declare function projectForwardText(text: string): {
 };
 /** Whether visible room text explicitly mentions the generic or configured AI name. */
 export declare function mentionsAi(content: readonly ChatroomPromptContentPart[], aiDisplayName: string): boolean;
+/** Whether enabled automatic-response mode sees a direct plain-text address to the AI. */
+export declare function addressesAi(content: readonly ChatroomPromptContentPart[], aiDisplayName: string): boolean;
 /** Whether visible room text explicitly mentions one participant or account name. */
 export declare function mentionsName(content: readonly ChatroomPromptContentPart[], name: string): boolean;
 /** Whether the native command dispatcher must retain ownership of this submission. */
