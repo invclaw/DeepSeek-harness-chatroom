@@ -3,8 +3,8 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.1.15" src="https://img.shields.io/badge/version-1.1.15-4f6bff">
-    <img alt="Harness RC7 或更高" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
+    <img alt="版本 1.1.16" src="https://img.shields.io/badge/version-1.1.16-4f6bff">
+    <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
   </p>
@@ -89,6 +89,7 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.1.16** — 以 DeepSeek Harness 0.1.1-rc.2 为主要兼容基线，新增群聊、Solo、私聊分类导航，支持带文件和表情的原生私聊、新会话模式切换、群聊置顶、AI 自动唤起设置与 AI/成员分组提及，并保留 1.1.15 的 IOA 头像和原生 Session 绑定修复。
 - **1.1.15** — 增加分支主题与盒模型的 Chromium 回归门禁，并避免移动端全宽分支面板超出视口。
 - **1.1.14** — 让 Harness 消息操作行随 AI 分支摘要自动增高，避免摘要与吸底输入框重叠。
 - **1.1.13** — 分支面板和回复摘要跟随宿主明暗配色，并让 AI 分支摘要进入消息正常布局、稳定停留在输入框上方。
@@ -111,7 +112,7 @@
 
 - Node.js 22.19 或更高版本
 - pnpm 10.33.4
-- DeepSeek Harness 0.1.0-rc.7 或更高版本
+- 主要兼容目标为 DeepSeek Harness 0.1.1-rc.2；最低仍支持 0.1.0-rc.7。
 - Web profile 已配置可用的默认模型
 
 ### 回归门禁

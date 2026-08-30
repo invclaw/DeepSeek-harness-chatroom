@@ -109,7 +109,9 @@ describe('native sidebar room rows', () => {
       id: 'second', title: 'workspace', aiDisplayName: 'DeepSeek', sessionId: 'session-b',
       memberAvatars: [{ participantId: 'person', avatarId: 'dog', avatarUrl: 'https://images.example.com/person.png' }],
     } as const
-    const snapshot = { rooms: [first, second], room: second, members: [] } as unknown as ChatroomView
+    const snapshot = {
+      rooms: [first, second], room: second, members: [], directPeers: [], directConversations: [],
+    } as unknown as ChatroomView
     const rows = [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')]
     bindNativeSession(rows[0]!, 'session-a')
     bindNativeSession(rows[1]!, 'session-b')
@@ -134,7 +136,9 @@ describe('native sidebar room rows', () => {
       { id: 'second', title: 'workspace', sessionId: 'session-b' },
     ]
 
-    reconcileSidebarRoomRows(document, { rooms, members: [] } as unknown as ChatroomView)
+    reconcileSidebarRoomRows(document, {
+      rooms, members: [], directPeers: [], directConversations: [],
+    } as unknown as ChatroomView)
 
     expect(document.querySelector('[data-dsh-chatroom-room-row]')).toBeNull()
   })
