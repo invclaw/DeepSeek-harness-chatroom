@@ -42,6 +42,7 @@ interface ChatroomPanelsProps extends ChatroomAccountPanelProps {
   enableSystemNotifications(): Promise<void>
   dismissToast(id: string): void
   toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>
+  recallMessage(roomId: string, messageId: string): Promise<boolean>
   openForward(roomId: string, message?: ChatroomForwardItem): void
   closeForward(): void
   forwardSelected(targetRoomId: string): Promise<boolean>
@@ -544,11 +545,14 @@ function ThreadMessage({
     selecting: props.room.selectionRoomId === roomId,
     selected: props.room.selectionRoomId === roomId
       && props.room.selectedMessages.some(item => item.messageId === message.id),
+    recalled: props.room.recalls.some(item => item.messageId === message.id),
+    canRecall: own && message.role === 'human',
     copyText: message.text,
     onReply,
     toggleReaction: props.toggleReaction,
     openForward: props.openForward,
     toggleSelection: props.toggleMessageSelection,
+    recallMessage: props.recallMessage,
   }
   const menu = useChatroomMessageMenu()
   return <article
@@ -570,13 +574,15 @@ function ThreadMessage({
         />}
     <div className="dsh-chatroom-thread-message-column">
       <strong>{message.displayName}<time>{formatTime(message.createdAt)}</time></strong>
-      {message.reply !== undefined && <div className="dsh-chatroom-thread-reply-quote">
+      {!tools.recalled && message.reply !== undefined && <div className="dsh-chatroom-thread-reply-quote">
         <strong>回复 {message.reply.displayName}</strong><span>{message.reply.text}</span>
       </div>}
       <div className="dsh-chatroom-thread-message-body">
-        {message.role === 'ai'
-          ? <ChatroomMarkdown text={message.text} />
-          : <div className="dsh-chatroom-thread-literal-text">{message.text}</div>}
+        {tools.recalled
+          ? <div className="dsh-chatroom-recalled-message">消息已撤回</div>
+          : message.role === 'ai'
+            ? <ChatroomMarkdown text={message.text} />
+            : <div className="dsh-chatroom-thread-literal-text">{message.text}</div>}
       </div>
       <ChatroomReactionBar {...tools} />
       <ChatroomInlineMessageActions tools={tools} />

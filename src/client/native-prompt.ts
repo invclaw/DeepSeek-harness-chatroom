@@ -42,6 +42,9 @@ export function installNativePromptIdentity(
         throw new Error(store.getSnapshot().managementError ?? '无法把提及的成员加入新群聊。')
       }
     }
+    if (typeof store.waitForRoomAutoTrigger === 'function') {
+      await store.waitForRoomAutoTrigger(target.room.id)
+    }
     const composition = store.composition(target.room.id)
     const files = await serializePendingFiles(composition.files)
     const content = [...payload.content as readonly ChatroomPromptContentPart[], ...files]

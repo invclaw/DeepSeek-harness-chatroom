@@ -211,6 +211,32 @@ describe('ChatroomClientStore', () => {
     })
   })
 
+  it('exposes an in-flight automatic-response write until the server applies it', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    let resolveSetting: ((response: Response) => void) | undefined
+    const settingResponse = new Promise<Response>((resolve) => { resolveSetting = resolve })
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockReturnValueOnce(settingResponse))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    store.activateSession(room.sessionId)
+
+    const setting = store.setRoomAutoTrigger(true)
+    let waited = false
+    const waiting = store.waitForRoomAutoTrigger(room.id).then(() => { waited = true })
+    await Promise.resolve()
+    expect(waited).toBe(false)
+    resolveSetting?.(jsonResponse({ room: { ...room, autoTriggerEnabled: true }, members: [] }))
+
+    await expect(setting).resolves.toBe(true)
+    await waiting
+    expect(waited).toBe(true)
+    expect(store.getSnapshot().room).toMatchObject({ autoTriggerEnabled: true })
+  })
+
   it('preserves the active identity and room while identity editing is cancelled or submitted', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const updated = { ...identity, displayName: 'Alice 2', avatarId: 'panda' as const }
@@ -349,6 +375,17 @@ describe('ChatroomClientStore', () => {
     })
     expect(store.getSnapshot()).toMatchObject({
       selectionRoomId: undefined, selectedMessages: [], forwardOpen: false, forwardBusy: false,
+    })
+
+    store.toggleMessageSelection('lobby', item)
+    FakeEventSource.instances[1]?.emit({
+      type: 'message-recalled',
+      recall: { roomId: 'lobby', messageId: 'user:1', participantId: 'alice-id', createdAt: 4 },
+    })
+    expect(store.getSnapshot()).toMatchObject({
+      recalls: [expect.objectContaining({ messageId: 'user:1' })],
+      reactions: [],
+      selectedMessages: [],
     })
   })
 

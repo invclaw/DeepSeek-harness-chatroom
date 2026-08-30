@@ -68,7 +68,6 @@ export function ChatroomSettingsSection(props: ChatroomSettingsSectionProps): JS
   return <div className="dsh-chatroom-settings" data-testid="chatroom-settings">
     <header className="dsh-chatroom-settings-header">
       <div><h2>群聊与账号</h2><p>管理个人账号、平台成员和企业统一登录。</p></div>
-      <button type="button" onClick={() => { void panelProps.openDirect() }}>打开私聊</button>
     </header>
     <AutomationPanel {...panelProps} />
     <PromptPanel {...panelProps} />

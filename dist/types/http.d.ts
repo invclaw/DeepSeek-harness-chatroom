@@ -26,6 +26,7 @@ export declare class ChatroomHttpController {
     private handleThreadPrompt;
     private handlePrompt;
     private handleReactionToggle;
+    private handleMessageRecall;
     private handleForward;
     private handleFile;
     private handleImage;

@@ -8,12 +8,15 @@ export interface ChatroomMessageToolsProps {
     readonly identity: ChatroomIdentity | undefined;
     readonly selecting: boolean;
     readonly selected: boolean;
+    readonly recalled: boolean;
+    readonly canRecall: boolean;
     readonly copyText?: string;
     readonly onReply?: (() => void) | undefined;
     readonly onBranch?: (() => void) | undefined;
     toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>;
     openForward(roomId: string, message: ChatroomForwardItem): void;
     toggleSelection(roomId: string, message: ChatroomForwardItem): void;
+    recallMessage(roomId: string, messageId: string): Promise<boolean>;
 }
 /** Capability-driven actions reused by main-room and branch message rows. */
 export declare function ChatroomInlineMessageActions({ tools, }: {

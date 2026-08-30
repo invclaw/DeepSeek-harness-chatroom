@@ -12,6 +12,7 @@ import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-title'
 import type {} from '@deepseek-ai/dsh-storage-domain'
+import type {} from '@deepseek-ai/dsh-tools'
 import { Config, type Config as ChatroomConfig, validateConfig } from './config.js'
 import { ChatroomHttpController } from './http.js'
 import { textCompatibleStream } from './model-history.js'
@@ -30,6 +31,7 @@ export const inject = [
   'sessions',
   'sessionTitle',
   'storageDomain',
+  'tools',
   'webServer',
   'workspaceRegistry',
 ]

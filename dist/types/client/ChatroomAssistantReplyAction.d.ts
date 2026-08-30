@@ -11,6 +11,7 @@ interface AssistantReplyInjected {
     toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>;
     openForward(roomId: string, message: ChatroomForwardItem): void;
     toggleMessageSelection(roomId: string, message: ChatroomForwardItem): void;
+    recallMessage(roomId: string, messageId: string): Promise<boolean>;
 }
 type AssistantReplyProps = PropsRuntime<'conversation.chat.assistant-actions'> & AssistantReplyInjected;
 /** Reply action contributed to finalized AI messages in shared rooms. */

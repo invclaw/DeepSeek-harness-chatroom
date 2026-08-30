@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  addressesAi,
   identifyForwardText,
   identifyPrompt,
   isSlashCommand,
@@ -14,6 +15,13 @@ describe('human-first room messages', () => {
     expect(mentionsAi([{ type: 'text', text: '@AI 请总结' }], 'DeepSeek')).toBe(true)
     expect(mentionsAi([{ type: 'text', text: '请 @deepseek 看一下' }], 'DeepSeek')).toBe(true)
     expect(mentionsAi([{ type: 'text', text: '@Aileen 你好' }], 'DeepSeek')).toBe(false)
+  })
+
+  it('recognizes a direct plain-text address only for automatic-response rooms', () => {
+    expect(addressesAi([{ type: 'text', text: 'DeepSeek你说话啊' }], 'DeepSeek')).toBe(true)
+    expect(addressesAi([{ type: 'text', text: 'AI 请回答这个问题' }], 'DeepSeek')).toBe(true)
+    expect(addressesAi([{ type: 'text', text: '这是一份 DeepSeek 使用说明' }], 'DeepSeek')).toBe(false)
+    expect(addressesAi([{ type: 'text', text: '大家先继续讨论' }], 'DeepSeek')).toBe(false)
   })
 
   it('matches a complete participant mention without consuming longer names', () => {

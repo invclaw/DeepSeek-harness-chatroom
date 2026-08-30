@@ -14,6 +14,7 @@ interface ChatroomMessageNodeInjected<Kind extends 'user' | 'steering'> {
     setReply(roomId: string, reply: ChatroomReplyReference): void;
     openThread(roomId: string, root: ChatroomThreadRoot): Promise<void>;
     toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>;
+    recallMessage(roomId: string, messageId: string): Promise<boolean>;
     openForward(roomId: string, message: ChatroomForwardItem): void;
     toggleMessageSelection(roomId: string, message: ChatroomForwardItem): void;
 }

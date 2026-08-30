@@ -129,6 +129,13 @@ export interface ReactionRecord {
   readonly createdAt: number
 }
 
+export interface RecallRecord {
+  readonly roomId: string
+  readonly messageId: string
+  readonly participantId: string
+  readonly createdAt: number
+}
+
 export type ChatroomAccountRole = 'super-admin' | 'admin' | 'member'
 export type ChatroomAccountStatus = 'active' | 'disabled'
 
@@ -336,6 +343,13 @@ const reactionSchema = z.object({
   createdAt: nonNegativeSafeInteger,
 }) as z.ZodType<ReactionRecord>
 
+const recallSchema = z.object({
+  roomId: z.string().min(1),
+  messageId: z.string().min(1),
+  participantId: z.string().min(1),
+  createdAt: nonNegativeSafeInteger,
+}) as z.ZodType<RecallRecord>
+
 const accountSchema = z.object({
   id: z.uuid(),
   username: z.string().min(1),
@@ -430,6 +444,7 @@ export const chatroomDomainSpec = defineDomain({
     threads: domainTable<string, ThreadRecord>(threadSchema),
     thread_messages: domainTable<string, ThreadMessageRecord>(threadMessageSchema),
     reactions: domainTable<string, ReactionRecord>(reactionSchema),
+    recalls: domainTable<string, RecallRecord>(recallSchema),
     accounts: domainTable<string, AccountRecord>(accountSchema),
     auth_sessions: domainTable<string, AuthSessionRecord>(authSessionSchema),
     auth_settings: domainTable<string, AuthSettingsRecord>(authSettingsSchema),

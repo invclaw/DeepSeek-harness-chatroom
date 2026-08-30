@@ -93,6 +93,30 @@ describe('participant-specific native message projection', () => {
     expect(screen.getByTestId('native').textContent).toBe('别人的消息')
   })
 
+  it('offers recall only for the sender and replaces the message with a tombstone', () => {
+    const recallMessage = vi.fn(async () => true)
+    const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>
+    const ownNode = userNode(identifyChatroomText('需要撤回', alice))
+    const { rerender } = render(<ChatroomUserMessageNodeView {...{
+      ...messageProps(ownNode, alice, Native),
+      recallMessage,
+    }} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '更多消息操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '↶ 撤回' }))
+    expect(recallMessage).toHaveBeenCalledWith('lobby', 'user:1')
+
+    rerender(<ChatroomUserMessageNodeView {...{
+      ...messageProps(ownNode, alice, Native, {
+        recalls: [{ roomId: 'lobby', messageId: 'user:1', participantId: 'alice-id', createdAt: 2 }],
+      }),
+      recallMessage,
+    }} />)
+    expect(screen.getByText('消息已撤回')).toBeTruthy()
+    expect(screen.queryByTestId('native')).toBeNull()
+    expect(screen.queryByRole('button', { name: '更多消息操作' })).toBeNull()
+  })
+
   it('renders avatar, reply quote, file card, and a reply action around the native bubble', () => {
     const reply = { messageId: 'user:1', displayName: 'Alice', text: '上一条消息' }
     const file = { id: 'file-id', name: 'brief.pdf', mediaType: 'application/pdf', bytes: 2048 }
@@ -399,6 +423,7 @@ function messageProps(
       members: [],
       memberCandidates: [],
       reactions: [],
+      recalls: [],
       threadPreviews: [],
       membersOpen: false,
       error: undefined,

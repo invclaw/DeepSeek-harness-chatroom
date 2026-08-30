@@ -27,6 +27,7 @@ interface AssistantReplyInjected {
   toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>
   openForward(roomId: string, message: ChatroomForwardItem): void
   toggleMessageSelection(roomId: string, message: ChatroomForwardItem): void
+  recallMessage(roomId: string, messageId: string): Promise<boolean>
 }
 
 type AssistantReplyProps = PropsRuntime<'conversation.chat.assistant-actions'> & AssistantReplyInjected
@@ -101,12 +102,15 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
     identity: view.identity,
     selecting,
     selected,
+    recalled: false,
+    canRecall: false,
     copyText: text || 'AI 回复',
     onReply: () => { props.setReply(room.id, reply) },
     onBranch: target?.kind === 'thread' ? undefined : () => { void props.openThread(room.id, threadRoot) },
     toggleReaction: props.toggleReaction,
     openForward: props.openForward,
     toggleSelection: props.toggleMessageSelection,
+    recallMessage: props.recallMessage,
   }
   const threadPreview = view.threadPreviews.find(preview =>
     preview.thread.root.messageId === message.messageId && preview.thread.root.role === 'ai')
