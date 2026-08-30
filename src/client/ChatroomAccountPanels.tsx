@@ -1,8 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { CHATROOM_AVATARS, type ChatroomAvatarId } from '../avatars.js'
 import { ChatroomAvatar } from './ChatroomAvatar.js'
 import type { ChatroomView } from './store.js'
+import { ChatroomAvatarView } from './ChatroomAvatarView.js'
+import { CHATROOM_API_PREFIX } from '../routes.js'
+
+const DIRECT_MESSAGE_EMOJIS = ['😀', '😄', '😂', '🥰', '😍', '🤔', '😮', '😭', '👍', '👏', '🙏', '🎉', '❤️', '🔥', '✨', '✅', '👀', '🚀'] as const
 
 export interface ChatroomAccountPanelProps {
   readonly room: ChatroomView
@@ -16,9 +21,11 @@ export interface ChatroomAccountPanelProps {
   adminSetAutoRedirectProvider(providerId?: string): Promise<boolean>
   adminSaveProvider(input: { id: string; label: string; enabled: boolean; issuer: string; clientId: string; clientSecret?: string; scopes: string; usernameClaim: string; displayNameClaim: string; autoCreateUsers: boolean }): Promise<boolean>
   adminDeleteProvider(providerId: string): Promise<boolean>
+  loadAutomation?(): Promise<void>
+  saveAutomation?(provider: string, model: string, mainAgentPrompt: string, controllerPrompt: string): Promise<boolean>
   openDirect(peerId?: string): Promise<void>
   closeDirect(): void
-  sendDirect(text: string): Promise<boolean>
+  sendDirect(text: string, files?: readonly File[]): Promise<boolean>
 }
 
 interface OidcProviderForm {
@@ -55,14 +62,106 @@ export function ChatroomSettingsSection(props: ChatroomSettingsSectionProps): JS
   useEffect(() => {
     if (superAdmin) void props.openAdmin()
   }, [superAdmin])
+  useEffect(() => {
+    void props.loadAutomation?.()
+  }, [])
   return <div className="dsh-chatroom-settings" data-testid="chatroom-settings">
     <header className="dsh-chatroom-settings-header">
       <div><h2>群聊与账号</h2><p>管理个人账号、平台成员和企业统一登录。</p></div>
       <button type="button" onClick={() => { void panelProps.openDirect() }}>打开私聊</button>
     </header>
+    <AutomationPanel {...panelProps} />
+    <PromptPanel {...panelProps} />
     <AccountPanel {...panelProps} embedded />
     {superAdmin && <AdminPanel {...panelProps} embedded />}
   </div>
+}
+
+function AutomationPanel(props: ChatroomAccountPanelProps): JSX.Element {
+  const overview = props.room.automationOverview
+  const [selection, setSelection] = useState('')
+  useEffect(() => {
+    if (overview !== undefined) setSelection(modelKey(overview.provider, overview.model))
+  }, [overview?.provider, overview?.model])
+  if (props.room.automationBusy && overview === undefined) {
+    return <section className="dsh-chatroom-card dsh-chatroom-automation-card"><div className="dsh-chatroom-panel-status">正在加载 AI 自动响应设置…</div></section>
+  }
+  if (overview === undefined) {
+    return <section className="dsh-chatroom-card dsh-chatroom-automation-card">
+      <header><div><h2>AI 自动响应</h2><p>加载判断模型失败。</p></div></header>
+      {props.room.automationError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.automationError}</div>}
+    </section>
+  }
+  return <section className="dsh-chatroom-card dsh-chatroom-automation-card" aria-label="AI 自动响应设置">
+    <header><div><h2>AI 自动响应</h2><p>各群开启自动响应后，由这个模型判断普通消息是否需要唤起 AI。</p></div></header>
+    <div className="dsh-chatroom-automation-form">
+      <label>判断模型<select
+        value={selection}
+        disabled={!overview.canManage || props.room.automationBusy}
+        onChange={event => { setSelection(event.target.value) }}
+      >{overview.models.map(model => <option key={modelKey(model.provider, model.model)} value={modelKey(model.provider, model.model)}>{model.label}</option>)}</select></label>
+      {overview.canManage && <button
+        type="button"
+        disabled={props.room.automationBusy || selection === modelKey(overview.provider, overview.model)}
+        onClick={() => {
+          const model = overview.models.find(item => modelKey(item.provider, item.model) === selection)
+          if (model !== undefined) void props.saveAutomation?.(
+            model.provider,
+            model.model,
+            overview.mainAgentPrompt,
+            overview.controllerPrompt,
+          )
+        }}
+      >保存判断模型</button>}
+      {!overview.canManage && <small>只有超级管理员可以修改判断模型。</small>}
+    </div>
+    {props.room.automationError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.automationError}</div>}
+  </section>
+}
+
+function PromptPanel(props: ChatroomAccountPanelProps): JSX.Element | null {
+  const overview = props.room.automationOverview
+  const [mainAgentPrompt, setMainAgentPrompt] = useState('')
+  const [controllerPrompt, setControllerPrompt] = useState('')
+  useEffect(() => {
+    if (overview === undefined) return
+    setMainAgentPrompt(overview.mainAgentPrompt)
+    setControllerPrompt(overview.controllerPrompt)
+  }, [overview?.mainAgentPrompt, overview?.controllerPrompt])
+  if (overview === undefined) return null
+  const unchanged = mainAgentPrompt === overview.mainAgentPrompt && controllerPrompt === overview.controllerPrompt
+  return <section className="dsh-chatroom-card dsh-chatroom-prompt-card" aria-label="Agent 系统提示词设置">
+    <header><div><h2>Agent 系统提示词</h2><p>仅影响聊天室主会话、分支会话和未 @AI 消息的唤起判断。</p></div></header>
+    {overview.canManage
+      ? <div className="dsh-chatroom-prompt-form">
+          <label>群聊主 Agent<textarea
+            aria-label="群聊主 Agent 系统提示词"
+            value={mainAgentPrompt}
+            onChange={event => { setMainAgentPrompt(event.target.value) }}
+          /><small>作为真正的 system prompt 注入每个聊天室主会话和分支 Agent；下一轮对话生效。</small></label>
+          <label>自动回复判断 Agent<textarea
+            aria-label="自动回复判断 Agent 系统提示词"
+            value={controllerPrompt}
+            onChange={event => { setControllerPrompt(event.target.value) }}
+          /><small>用于判断未明确 @AI 的普通消息是否需要唤起；明确 @AI 始终跳过判断并直接唤起。</small></label>
+          <button
+            type="button"
+            disabled={props.room.automationBusy || unchanged}
+            onClick={() => { void props.saveAutomation?.(
+              overview.provider,
+              overview.model,
+              mainAgentPrompt,
+              controllerPrompt,
+            ) }}
+          >保存系统提示词</button>
+        </div>
+      : <small>只有超级管理员可以修改系统提示词。</small>}
+    {props.room.automationError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.automationError}</div>}
+  </section>
+}
+
+function modelKey(provider: string, model: string): string {
+  return `${provider}\u0000${model}`
 }
 
 function AccountPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): JSX.Element {
@@ -214,41 +313,152 @@ function AdminPanel(props: ChatroomAccountPanelProps & { embedded?: boolean }): 
 
 function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
   const [text, setText] = useState('')
+  const [files, setFiles] = useState<readonly File[]>([])
+  const [emojiOpen, setEmojiOpen] = useState(false)
+  const [host] = useState(() => nativeConversationHost())
+  const messagesRef = useRef<HTMLDivElement>(null)
+  const formRef = useRef<HTMLFormElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const emojiRootRef = useRef<HTMLDivElement>(null)
   const current = props.room.directConversation
-  return <aside className="dsh-chatroom-direct-panel" aria-label="私聊" data-testid="chatroom-direct">
-    <header><div><strong>私聊</strong><small>{current === undefined ? '选择一个联系人' : current.peer.displayName}</small></div><button aria-label="关闭私聊" type="button" onClick={props.closeDirect}>×</button></header>
-    <div className="dsh-chatroom-direct-body">
-      <nav>
-        <h3>最近私聊</h3>
-        {props.room.directConversations.map(conversation => <button key={conversation.id} data-active={conversation.id === current?.id} type="button" onClick={() => { void props.openDirect(conversation.peer.participantId) }}>
-          <ChatroomAvatar className="dsh-chatroom-member-avatar" avatarId={conversation.peer.avatarId} avatarUrl={conversation.peer.avatarUrl} seed={conversation.peer.participantId} /><span><strong>{conversation.peer.displayName}</strong><small>@{conversation.peer.username}</small></span>
-        </button>)}
-        <h3>所有用户</h3>
-        {props.room.directPeers.map(peer => <button key={peer.participantId} type="button" onClick={() => { void props.openDirect(peer.participantId) }}>
-          <ChatroomAvatar className="dsh-chatroom-member-avatar" avatarId={peer.avatarId} avatarUrl={peer.avatarUrl} seed={peer.participantId} /><span><strong>{peer.displayName}</strong><small>@{peer.username}</small></span>
-        </button>)}
-      </nav>
-      <section>
-        {current === undefined
-          ? <div className="dsh-chatroom-direct-empty">选择一位用户开始私聊</div>
-          : <>
-            <div className="dsh-chatroom-direct-messages">{props.room.directMessages.map(message => {
-              const own = message.senderId === props.room.identity?.participantId
-              const sender = own ? props.room.identity : current.peer
-              return <article key={message.id} data-own={own}>
-                <ChatroomAvatar className="dsh-chatroom-member-avatar" avatarId={sender?.avatarId} avatarUrl={sender?.avatarUrl} seed={sender?.participantId ?? message.senderId} />
-                <div><small>{own ? '我' : current.peer.displayName}</small><p>{message.text}</p><time>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>
-              </article>
-            })}</div>
-            <form onSubmit={async (event) => {
+  useLayoutEffect(() => {
+    if (host === undefined) return
+    host.setAttribute('data-dsh-chatroom-direct-host', '')
+    return () => { host.removeAttribute('data-dsh-chatroom-direct-host') }
+  }, [host])
+  useEffect(() => {
+    const viewport = messagesRef.current
+    if (viewport !== null) viewport.scrollTop = viewport.scrollHeight
+  }, [current?.id, props.room.directMessages.length])
+  useEffect(() => {
+    setText('')
+    setFiles([])
+    setEmojiOpen(false)
+  }, [current?.id])
+  useEffect(() => {
+    if (!emojiOpen) return
+    const close = (event: PointerEvent) => {
+      if (!emojiRootRef.current?.contains(event.target as Node)) setEmojiOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    return () => { document.removeEventListener('pointerdown', close) }
+  }, [emojiOpen])
+  const canSend = !props.room.directBusy && (text.trim() !== '' || files.length > 0)
+  const content = <main className="dsh-chatroom-direct-panel" aria-label="私聊" data-testid="chatroom-direct">
+    <header>
+      {current !== undefined && <ChatroomAvatarView className="dsh-chatroom-direct-header-avatar" {...current.peer} />}
+      <div><strong>{current?.peer.displayName ?? '私聊'}</strong><small>{current === undefined ? '从左侧通讯录选择联系人' : `@${current.peer.username}`}</small></div>
+      <button aria-label="关闭私聊" type="button" onClick={props.closeDirect}>×</button>
+    </header>
+    {current === undefined
+      ? <div className="dsh-chatroom-direct-empty">从左侧“私聊”通讯录选择一位联系人</div>
+      : <>
+        <div ref={messagesRef} className="dsh-chatroom-direct-messages">{props.room.directMessages.map(message => {
+          const own = message.senderId === props.room.identity?.participantId
+          const sender = own ? props.room.identity : current.peer
+          return <article key={message.id} data-own={own}>
+            {sender !== undefined && <ChatroomAvatarView className="dsh-chatroom-direct-message-avatar" {...sender} />}
+            <div>
+              <strong>{own ? '我' : current.peer.displayName}</strong>
+              {message.text !== '' && <p>{message.text}</p>}
+              {message.files !== undefined && message.files.length > 0 && <div className="dsh-chatroom-direct-media">
+                {message.files.map(file => {
+                  const url = `${CHATROOM_API_PREFIX}/files/${encodeURIComponent(file.id)}`
+                  return file.mediaType.startsWith('image/')
+                    ? <a key={file.id} href={url} target="_blank" rel="noreferrer"><img src={url} alt={file.name} /></a>
+                    : <a className="dsh-chatroom-direct-file" key={file.id} href={url} download={file.name}>
+                        <span aria-hidden>📎</span><span><strong>{file.name}</strong><small>{formatFileBytes(file.bytes)}</small></span><span aria-hidden>↓</span>
+                      </a>
+                })}
+              </div>}
+              <time>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
+            </div>
+          </article>
+        })}</div>
+        <form ref={formRef} className="dsh-chatroom-direct-composer" onSubmit={async (event) => {
+          event.preventDefault()
+          if (!canSend) return
+          if (await props.sendDirect(text, files)) {
+            setText('')
+            setFiles([])
+          }
+        }}>
+          <textarea
+            ref={textareaRef}
+            data-dsh-chatroom-direct-input
+            rows={2}
+            placeholder={`给 ${current.peer.displayName} 发消息`}
+            value={text}
+            onChange={event => { setText(event.target.value) }}
+            onKeyDown={event => {
+              if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
               event.preventDefault()
-              if (await props.sendDirect(text)) setText('')
-            }}><textarea placeholder={`给 ${current.peer.displayName} 发消息`} value={text} onChange={event => { setText(event.target.value) }} /><button type="submit" disabled={props.room.directBusy || text.trim() === ''}>发送</button></form>
-          </>}
-      </section>
-    </div>
+              if (canSend) formRef.current?.requestSubmit()
+            }}
+            onPaste={event => {
+              const pasted = [...event.clipboardData.files]
+              if (pasted.length > 0) setFiles(currentFiles => [...currentFiles, ...pasted])
+            }}
+            enterKeyHint="send"
+          />
+          {files.length > 0 && <div className="dsh-chatroom-direct-pending-files">
+            {files.map((file, index) => <span key={`${file.name}-${file.lastModified}-${index}`}>
+              <span aria-hidden>{file.type.startsWith('image/') ? '🖼️' : '📎'}</span>
+              <span title={file.name}>{file.name}</span>
+              <button type="button" aria-label={`移除 ${file.name}`} onClick={() => { setFiles(currentFiles => currentFiles.filter((_, fileIndex) => fileIndex !== index)) }}>×</button>
+            </span>)}
+          </div>}
+          <div className="dsh-chatroom-direct-composer-tools">
+            <div ref={emojiRootRef} className="dsh-chatroom-direct-emoji-root">
+              <button type="button" aria-label="选择私聊表情" aria-expanded={emojiOpen} onClick={() => { setEmojiOpen(open => !open) }}>☺ <span>表情</span></button>
+              {emojiOpen && <div className="dsh-chatroom-direct-emoji-picker" role="dialog" aria-label="选择私聊表情">
+                {DIRECT_MESSAGE_EMOJIS.map(emoji => <button type="button" key={emoji} aria-label={`插入 ${emoji}`} onClick={() => {
+                  setText(value => `${value}${emoji}`)
+                  setEmojiOpen(false)
+                  textareaRef.current?.focus()
+                }}>{emoji}</button>)}
+              </div>}
+            </div>
+            <button type="button" aria-label="选择私聊图片或文件" onClick={() => { fileInputRef.current?.click() }}>📎 <span>附件</span></button>
+            <input ref={fileInputRef} aria-label="选择私聊文件" type="file" multiple onChange={event => {
+              const selected = event.currentTarget.files
+              if (selected !== null) setFiles(currentFiles => [...currentFiles, ...selected])
+              event.currentTarget.value = ''
+            }} />
+            <small>Enter 发送 · Shift+Enter 换行</small>
+            <button className="dsh-chatroom-direct-send" aria-label="发送私聊消息" type="submit" disabled={!canSend}>↑</button>
+          </div>
+        </form>
+      </>}
     {props.room.directError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.directError}</div>}
-  </aside>
+  </main>
+  return host === undefined ? content : createPortal(content, host)
+}
+
+function formatFileBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function nativeConversationHost(): HTMLElement | undefined {
+  if (typeof document === 'undefined') return undefined
+  const overlay = document.querySelector<HTMLElement>('[data-shell-overlay]')
+  const frame = overlay?.parentElement
+  if (overlay === null || overlay === undefined || frame === null || frame === undefined) return undefined
+  const nativeInput = [...document.querySelectorAll<HTMLElement>('textarea')]
+    .find(element => !element.hasAttribute('data-dsh-chatroom-direct-input'))
+  let current = nativeInput
+  while (current !== undefined && current.parentElement !== null && current.parentElement !== frame) {
+    current = current.parentElement
+  }
+  if (current?.parentElement === frame) return current
+  return [...frame.children]
+    .filter((element): element is HTMLElement => element instanceof HTMLElement
+      && element !== overlay && !element.hasAttribute('data-side'))
+    .map(element => ({ element, area: element.clientWidth * element.clientHeight }))
+    .sort((left, right) => right.area - left.area)[0]?.element
 }
 
 function emptyProvider(): OidcProviderForm {

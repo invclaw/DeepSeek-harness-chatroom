@@ -17,18 +17,30 @@ export function installNativePromptIdentity(
 ): () => void {
   const original = api.sessions.prompt
   const wrapped: IApiClient['sessions']['prompt'] = async (payload, signal) => {
-    const target = typeof store.agentTargetForSession === 'function'
+    const sessionId = String(payload.sessionId)
+    if (isSlashCommand(payload.content as readonly ChatroomPromptContentPart[])) {
+      return await original(payload, signal)
+    }
+    let target = typeof store.agentTargetForSession === 'function'
       ? store.agentTargetForSession(String(payload.sessionId))
       : (() => {
         const room = store.roomForSession(String(payload.sessionId))
         return room === undefined ? undefined : { kind: 'room' as const, room }
       })()
-    if (target === undefined) return await original(payload, signal)
-    if (isSlashCommand(payload.content as readonly ChatroomPromptContentPart[])) {
-      return await original(payload, signal)
+    const newGroup = target === undefined && typeof store.newSessionMode === 'function'
+      && store.newSessionMode(sessionId) === 'group'
+    if (target === undefined && typeof store.ensurePromptTarget === 'function') {
+      target = await store.ensurePromptTarget(sessionId)
     }
+    if (target === undefined) return await original(payload, signal)
     if (store.getSnapshot().identity === undefined) {
       throw new Error('请先选择聊天室身份。')
+    }
+    if (newGroup) {
+      const invitees = store.newGroupInvitees(payload.content as readonly ChatroomPromptContentPart[])
+      if (invitees.length > 0 && !await store.addRoomMembers(invitees)) {
+        throw new Error(store.getSnapshot().managementError ?? '无法把提及的成员加入新群聊。')
+      }
     }
     const composition = store.composition(target.room.id)
     const files = await serializePendingFiles(composition.files)

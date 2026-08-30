@@ -138,7 +138,7 @@ describe('ChatroomClientStore', () => {
     expect(openSession).toHaveBeenCalledWith('chatroom-v1-second')
   })
 
-  it('adopts the selected native Harness Session as a shared room automatically', async () => {
+  it('defaults a new Session to Group but creates its room only on the first prompt', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const adopted = { id: 'session-native', title: '设计讨论', aiDisplayName: 'DeepSeek', sessionId: 'native-session' }
     const fetchMock = vi.fn<typeof fetch>()
@@ -149,8 +149,15 @@ describe('ChatroomClientStore', () => {
     const store = new ChatroomClientStore()
     await store.start()
 
+    store.registerNewSession('native-session')
     store.activateSession('native-session', '设计讨论')
-    await vi.waitFor(() => { expect(store.getSnapshot().room).toEqual(adopted) })
+    expect(store.getSnapshot().room).toBeUndefined()
+    expect(store.newSessionMode('native-session')).toBe('group')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await store.chooseNewSessionMode('native-session', 'group')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await expect(store.ensurePromptTarget('native-session')).resolves.toEqual({ kind: 'room', room: adopted })
 
     expect(fetchMock.mock.calls[1]?.[0]).toBe('/plugins/deepseek-harness-chatroom/api/rooms/ensure')
     expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
@@ -170,12 +177,15 @@ describe('ChatroomClientStore', () => {
     const store = new ChatroomClientStore()
     await store.start()
 
+    store.registerNewSession('native-session')
     store.activateSession('native-session', '新会话')
+    const selecting = store.ensurePromptTarget('native-session')
     expect(store.getSnapshot().roomEnsureSessionId).toBe('native-session')
     store.activateSession('native-session', '新会话')
     expect(store.getSnapshot().roomEnsureSessionId).toBe('native-session')
 
     resolveEnsure?.(jsonResponse({ room: adopted }))
+    await selecting
     await vi.waitFor(() => { expect(store.getSnapshot().room).toEqual(adopted) })
     expect(store.getSnapshot().roomEnsureSessionId).toBeUndefined()
   })
@@ -190,7 +200,9 @@ describe('ChatroomClientStore', () => {
     const store = new ChatroomClientStore()
     await store.start()
 
+    store.registerNewSession('chatroom-thread-v1-old')
     store.activateSession('chatroom-thread-v1-old', '新会话')
+    void store.ensurePromptTarget('chatroom-thread-v1-old')
     await vi.waitFor(() => {
       expect(store.getSnapshot()).toMatchObject({
         roomEnsureSessionId: undefined,
@@ -249,6 +261,32 @@ describe('ChatroomClientStore', () => {
     store.activateSession('ordinary-session')
     expect(store.getSnapshot()).toMatchObject({ connection: 'offline', room: undefined, online: 0 })
     expect(FakeEventSource.instances[1]?.closed).toBe(true)
+  })
+
+  it('keeps the directory avatar projection when the selected-room roster arrives', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = {
+      ...roomInfo(),
+      memberAvatarIds: ['whale' as const],
+      memberAvatars: [{ participantId: 'alice-id', avatarId: 'whale' as const }],
+    }
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(identity, [room]))))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    store.activateSession(room.sessionId)
+
+    FakeEventSource.instances[1]?.emit({
+      type: 'snapshot', room, identity, online: 1,
+      members: [{
+        participantId: 'legacy-alice', displayName: '旧账号', avatarId: 'dog',
+        avatarUrl: 'https://images.example.com/legacy-alice.png',
+        role: 'member', joinedAt: 1, lastSeenAt: 2, online: true,
+      }],
+      reactions: [], threadPreviews: [],
+    })
+
+    expect(store.getSnapshot().room?.memberAvatars).toEqual(room.memberAvatars)
   })
 
   it('sends selected files without placeholder composer text', async () => {

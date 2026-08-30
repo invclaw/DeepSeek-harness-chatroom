@@ -125,6 +125,10 @@ describe('native branch frame isolation', () => {
       'html[data-dsh-chatroom-branch-frame] [data-dsh-chatroom-branch-shell] > :nth-child(2)',
     )
     expect(CHATROOM_STYLES).toContain('grid-column: 2 !important;')
+    expect(CHATROOM_STYLES).toContain('[data-dsh-chatroom-process-row][hidden] { display: none !important; }')
+    expect(CHATROOM_STYLES).toContain('html[data-dsh-chatroom-active] [data-conversation-scroll]')
+    expect(CHATROOM_STYLES).toContain('--dsh-chat-content-width: 100%;')
+    expect(CHATROOM_STYLES).toContain('--dsh-composer-card-max-width: 100%;')
   })
 
   it('renders native mention chips with their literal sigil instead of the reference icon', () => {
@@ -133,5 +137,25 @@ describe('native branch frame isolation', () => {
     )
     expect(CHATROOM_STYLES).toContain('gap: 0 !important;')
     expect(CHATROOM_STYLES).toContain('content: "@";')
+  })
+
+  it('uses inherited color-scheme fallbacks for branch surfaces', () => {
+    expect(CHATROOM_STYLES).toContain(
+      'background: var(--bg-primary, light-dark(#fff, #151517));',
+    )
+    expect(CHATROOM_STYLES).toContain(
+      'color: var(--text-secondary, light-dark(#6b7280, #aeb0b4));',
+    )
+    expect(CHATROOM_STYLES).toContain(
+      'var(--bg-secondary, light-dark(#f3f4f6, #1b1b1c))',
+    )
+  })
+
+  it('lets injected AI branch activity expand the native action row', () => {
+    expect(CHATROOM_STYLES).toContain(
+      'html[data-dsh-chatroom-active] [data-dsh-chatroom-native-actions]',
+    )
+    expect(CHATROOM_STYLES).toContain('height: auto !important;')
+    expect(CHATROOM_STYLES).toContain('overflow: visible !important;')
   })
 })

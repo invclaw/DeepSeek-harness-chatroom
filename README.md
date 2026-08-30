@@ -3,14 +3,14 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.1.10" src="https://img.shields.io/badge/version-1.1.10-4f6bff">
-    <img alt="Harness RC7 or later" src="https://img.shields.io/badge/DeepSeek_Harness-RC7%2B-111827">
+    <img alt="Version 1.1.17" src="https://img.shields.io/badge/version-1.1.17-4f6bff">
+    <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
   </p>
 </div>
 
-Turn every native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Session into a persistent shared room—without replacing the sidebar, conversation stream, Agent runtime, model picker, permission controls, trajectory, or Session log.
+Add Group, Solo, and direct-message modes to the native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) workspace without replacing the conversation stream, Agent runtime, model picker, permission controls, trajectory, or Session log.
 
 <p align="center">
   <img src="docs/assets/group-chat.jpg" alt="A shared Harness room with avatars, mentions, reactions, images, message actions, and a branch preview" width="100%">
@@ -31,8 +31,8 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
   <tr>
     <td width="50%">
       <img src="docs/assets/new-group-setup.jpg" alt="Create a group from the native blank Session screen"><br>
-      <strong>Create the room before the first message</strong><br>
-      Name the room, search the platform user directory, select several members, and keep the native new-Session composer.
+      <strong>Choose Group or Solo in the native welcome screen</strong><br>
+      Group is selected by default and becomes a Room on the first regular message. Invite known accounts later from Group management.
     </td>
     <td width="50%">
       <img src="docs/assets/group-management.jpg" alt="Group management drawer with account directory and room members"><br>
@@ -55,22 +55,26 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 
 ### Shared rooms and human-first AI
 
-- Every ordinary Harness Session becomes a durable room on first use; **New session** always creates a distinct room.
-- Human messages synchronize in real time without waking the Agent. `@AI` or the configured AI display name explicitly requests an Agent reply.
+- The workspace sidebar groups activity into **Group / Solo / Direct**. Shared Rooms appear under Group, native one-person Agent Sessions under Solo, and every available platform account under Direct.
+- **New session** keeps the native welcome screen and composer, with Group selected by default in a Group/Solo switch. The first regular Group message creates its Room; Solo remains a native one-person Agent Session.
+- Human messages synchronize in real time. `@AI` or the configured AI display name always requests an Agent reply directly; rooms may also enable model-controlled replies for messages without an explicit mention.
+- **Settings → Chatroom & accounts** selects the global auto-reply decision model and edits separate system prompts for the main/branch Agent and the auto-reply decision Agent. Prompt changes apply to the next turn without restarting Harness.
 - The native `@` menu lists the Agent and current room members together. Participant identity is attached on the Host before Session admission, so browsers and the model see the same sender.
 - Shared Session rows retain the native sidebar while adding a roomier member-avatar collage. Native Session renames update the durable room title, so the name survives navigation and restarts.
+- Shared rooms use the full available conversation column for the transcript and composer instead of the native fixed-width cap.
 - The Session header shows the current identity, online count, and **Group management**. New-message toasts, title unread counts, and opt-in browser notifications work across rooms.
 
 ### Complete native Agent runtime
 
 - The native sidebar, Conversation/Trajectory tabs, composer, model and permission selectors, reasoning/tool flow, Session log, approvals, questions, slash commands, stop/queue/steer, failures, and retries remain intact.
+- While an Agent is running, Think and tool rows stay visible. Once the final answer arrives, the preceding process rows collapse into one expandable summary.
 - Persistent branches open in a right-side panel and own independent Harness Sessions. Branches support Markdown, `@` candidates, images/files, quotes, reactions, forwarding, selection, and the full Agent runtime without nested chatroom branches. Gateways that reject embedded documents switch immediately to an inline compatibility view instead of waiting for a timeout, with the complete Agent available in a new tab.
 - Historical images remain durable. For text-only models, only the model request receives deterministic text markers in place of image input; the UI keeps the original media.
 
 ### Messaging and media
 
-- Verified profile images from IOA, OIDC, and other enterprise providers appear in messages, member directories, invite lists, private chat, and room collages. Missing or failed profile images fall back to the account's stable cartoon avatar.
-- Timestamps, reply quotes, emoji insertion, message reactions, Markdown, image previews, and authenticated file upload/download.
+- Verified profile images from IOA, OIDC, and other enterprise providers appear in messages, member directories, the native `@` menu, invite lists, private chat, and room collages. Missing or failed profile images fall back to the account's stable cartoon avatar.
+- Timestamps, compact in-composer reply quotes, emoji insertion, message reactions, Markdown, image previews, and authenticated file upload/download.
 - Pure image and file messages render directly—no extra “sent an image/file” placeholder bubble. Oversized images are resized before entering Harness attachment storage.
 - Reply, like, branch, and forward are available from the message row; copy, reaction picker, and multi-select remain available from the overflow/context menu, with a mobile bottom sheet.
 - Merged forwarding is rebuilt from authoritative Session events and retains text/Markdown, media, quotes, nested forwards, and reaction counts.
@@ -80,11 +84,18 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 - Optional local password registration, super-administrator account provisioning, roles/status, password rotation, disabled-account revocation, and one identity reused across rooms.
 - Pluggable authentication through local accounts, [`dsh-auth`](https://github.com/hxy91819/dsh-auth), or enterprise OIDC Authorization Code with discovery, PKCE, state, and nonce.
 - The chosen external provider can automatically receive unauthenticated users; `local=1` keeps a local recovery entry.
-- Durable private text conversations are visible only to their two participants and reuse the same unread/toast/browser-notification channel.
+- Durable private conversations are visible only to their two participants, support Enter-to-send, Shift+Enter newlines, emoji, images, and files, and reuse the same unread/toast/browser-notification channel. The Direct folder is also the account directory: clicking any profile starts the conversation in the main Harness conversation area.
 
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.1.17** — keep compact reply quotes inside the native composer card and show verified IOA/OIDC profile images in native member mention candidates, with cartoon fallbacks.
+- **1.1.16** — target DeepSeek Harness 0.1.1-rc.2, add Group/Solo/Direct navigation, native private messaging with files and emoji, streamlined new-Session mode selection, room pinning, automatic AI wake-up controls, and distinct AI/member mention groups while retaining the 1.1.15 IOA profile and native Session fixes.
+- **1.1.15** — add a Chromium regression gate for branch theme and geometry, and keep the full-width mobile branch panel inside its viewport.
+- **1.1.14** — make the Harness action row expand around injected AI branch activity instead of letting the summary overlap the sticky composer.
+- **1.1.13** — match branch panels and reply summaries to the inherited light/dark color scheme, and keep AI branch activity in normal message flow above the composer.
+- **1.1.12** — bind every native sidebar collage to its authoritative Session ID, so duplicate titles, selection changes, and row reordering cannot swap room avatars.
+- **1.1.11** — keep room-collage identities and ordering stable while navigating, and include enterprise profile images in the initial room directory.
 - **1.1.10** — carry dsh-auth/IOA and OIDC profile images across every chat surface while retaining deterministic cartoon fallbacks.
 - **1.1.9** — persist native sidebar renames as room titles and add taller shared-Session rows with member-avatar collages.
 - **1.1.8** — replace blocked native branch frames with an immediate messaging fallback, retain direct access to the complete Agent, and collapse Markdown-heavy branch subjects into compact titles.
@@ -102,8 +113,12 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 
 - Node.js 22.19 or later
 - pnpm 10.33.4
-- DeepSeek Harness 0.1.0-rc.7 or later
+- DeepSeek Harness 0.1.1-rc.2 is the primary compatibility target; 0.1.0-rc.7 remains the minimum supported release.
 - A working default model selection in the Harness Web profile
+
+### Regression gates
+
+`pnpm check` runs type checks, observable-behavior tests, and production builds. CI additionally installs Chromium and runs `pnpm test:browser`, which verifies the branch panel's computed light/dark colors and proves that injected AI branch activity expands the native Harness actions row without overlapping the composer. These browser assertions deliberately use geometry and computed styles instead of screenshot snapshots.
 
 ## Install from GitHub
 
@@ -122,7 +137,7 @@ pnpm dsh plugin --profile web add /absolute/path/to/DeepSeek-harness-chatroom
 pnpm dsh --profile web
 ```
 
-The browser bundle is discovered through the plugin's `dsh.client` manifest. It idempotently binds ordinary Harness Sessions to shared rooms and contributes identity status, group management, input candidates, and file/reply controls. It does not replace the conversation, sidebar, details, or native text composer.
+The browser bundle is discovered through the plugin's `dsh.client` manifest. New Sessions default to Group and bind to a shared Room only when their first regular message is sent; Solo remains native. The plugin contributes identity status, categorized sidebar folders, the account directory, group management, input candidates, and file/reply controls without replacing the conversation, details, or native text composer.
 
 ## Configure
 

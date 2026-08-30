@@ -1,8 +1,11 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot } from '../types.js';
+import type { ChatroomAutomationOverview, ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 export type ChatroomPhase = 'loading' | 'auth-required' | 'identity-required' | 'ready' | 'error';
 export type ChatroomConnection = 'offline' | 'connecting' | 'online';
+export type ChatroomNewSessionMode = 'choose' | 'group' | 'solo';
+/** Pick an unambiguous visible @ token for one account in the new-Group directory. */
+export declare function newGroupMentionName(peer: ChatroomDirectPeer, peers: readonly ChatroomDirectPeer[]): string;
 /** Browser-owned file waiting to be merged into the next room submission. */
 export interface PendingChatroomFile {
     readonly id: string;
@@ -76,6 +79,9 @@ export interface ChatroomView {
     readonly adminBusy: boolean;
     readonly adminOverview: ChatroomAdminOverview | undefined;
     readonly adminError: string | undefined;
+    readonly automationBusy: boolean;
+    readonly automationOverview: ChatroomAutomationOverview | undefined;
+    readonly automationError: string | undefined;
     readonly directOpen: boolean;
     readonly directBusy: boolean;
     readonly directPeers: readonly ChatroomDirectPeer[];
@@ -83,6 +89,7 @@ export interface ChatroomView {
     readonly directConversation: ChatroomDirectConversation | undefined;
     readonly directMessages: readonly ChatroomDirectMessage[];
     readonly directError: string | undefined;
+    readonly newSessionModes: Readonly<Record<string, ChatroomNewSessionMode>>;
 }
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
 export declare class ChatroomClientStore implements HostObservable<ChatroomView> {
@@ -106,6 +113,16 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     roomForSession(sessionId: string): ChatroomInfo | undefined;
     /** Resolve whether one native Session submits to a room or one branch. */
     agentTargetForSession(sessionId: string): ChatroomAgentTarget | undefined;
+    /** Mark a newly created native Session as a Group by default. */
+    registerNewSession: (sessionId: string) => void;
+    /** Read the explicit creation mode for one newly created native Session. */
+    newSessionMode: (sessionId: string) => ChatroomNewSessionMode | undefined;
+    /** Choose whether a new Session becomes a shared room on first prompt or stays Solo. */
+    chooseNewSessionMode: (sessionId: string, mode: "group" | "solo") => Promise<boolean>;
+    /** Resolve a prompt target, creating the default Group only when its first prompt is sent. */
+    ensurePromptTarget: (sessionId: string) => Promise<ChatroomAgentTarget | undefined>;
+    /** Resolve accounts explicitly mentioned while composing the first message of a new Group. */
+    newGroupInvitees: (content: readonly ChatroomPromptContentPart[]) => readonly string[];
     /** Retarget one retained native branch runtime without carrying composer state across threads. */
     switchBranchFrame(frame: ChatroomBranchFrame): void;
     /** Subscribe to room projection changes. */
@@ -136,6 +153,10 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     /** Open and load the super-administrator console. */
     openAdmin: () => Promise<void>;
     closeAdmin: () => void;
+    /** Load the global automatic-response controller settings and model catalog. */
+    loadAutomation: () => Promise<void>;
+    /** Persist the global controller model and both chatroom prompt roles. */
+    saveAutomation: (provider: string, model: string, mainAgentPrompt: string, controllerPrompt: string) => Promise<boolean>;
     /** Create a local account from the super-administrator console. */
     adminCreateUser: (input: {
         username: string;
@@ -169,9 +190,11 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     adminDeleteProvider: (providerId: string) => Promise<boolean>;
     /** Open the private-message directory. */
     openDirect: (peerId?: string) => Promise<void>;
+    /** Refresh the private-message directory without opening its conversation panel. */
+    loadDirectDirectory: () => Promise<boolean>;
     closeDirect: () => void;
-    /** Send one message inside the selected private conversation. */
-    sendDirect: (text: string) => Promise<boolean>;
+    /** Send one text/media message inside the selected private conversation. */
+    sendDirect: (text: string, files?: readonly File[]) => Promise<boolean>;
     /** Open group management for the active room. */
     openMembers: () => void;
     /** Load active platform accounts available to the current room creation or management surface. */
@@ -182,6 +205,10 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     closeMembers: () => void;
     /** Add selected active platform accounts to the current room. */
     addRoomMembers: (participantIds: readonly string[]) => Promise<boolean>;
+    /** Pin or unpin one room for the current participant. */
+    setRoomPinned: (roomId: string, pinned: boolean) => Promise<boolean>;
+    /** Change the current room's model-controlled automatic-response policy. */
+    setRoomAutoTrigger: (enabled: boolean) => Promise<boolean>;
     /** Rename the active room through the server-enforced management endpoint. */
     renameRoom: (title: string) => Promise<boolean>;
     /** Promote or demote one member through the owner-only management endpoint. */
@@ -190,7 +217,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     closeRoom: () => void;
     /** Retry pending native navigation when the Host Session list changes. */
     resumeOpen: () => void;
-    /** Track native navigation and adopt ordinary Harness Sessions as shared rooms. */
+    /** Track native navigation without changing unbound native Sessions into shared rooms. */
     activateSession: (sessionId: string | undefined, title?: string, shareable?: boolean) => void;
     /** Create the persistent browser identity, then show the room directory. */
     join: (displayName: string, avatarId: string) => Promise<void>;
@@ -268,4 +295,6 @@ export declare function submitRoomPrompt(request: ChatroomPromptRequest, signal?
 export declare function submitThreadPrompt(request: ChatroomThreadPromptRequest, signal?: AbortSignal): Promise<ChatroomPromptResponse>;
 /** Serialize browser Files only at submission time, keeping bytes out of observable state. */
 export declare function serializePendingFiles(files: readonly PendingChatroomFile[]): Promise<ChatroomPromptContentPart[]>;
+/** Serialize browser Files for a message without retaining their bytes in client state. */
+export declare function serializeBrowserFiles(files: readonly File[]): Promise<ChatroomPromptContentPart[]>;
 //# sourceMappingURL=store.d.ts.map

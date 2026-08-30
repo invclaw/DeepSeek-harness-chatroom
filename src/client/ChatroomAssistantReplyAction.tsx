@@ -47,8 +47,12 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
   const selecting = view.selectionRoomId === room?.id
   useEffect(() => {
     const root = rootRef.current?.closest<HTMLElement>('[data-time-hover-root]')
-    const nativeActions = rootRef.current?.parentElement
     if (root === null || root === undefined || room === undefined) return
+    let nativeActions = rootRef.current?.parentElement
+    while (nativeActions !== null && nativeActions !== undefined
+      && nativeActions.parentElement !== null && nativeActions.parentElement !== root) {
+      nativeActions = nativeActions.parentElement
+    }
     nativeActions?.setAttribute('data-dsh-chatroom-native-actions', '')
     const onContextMenu = (event: MouseEvent) => { menu.open(event) }
     root.addEventListener('contextmenu', onContextMenu)

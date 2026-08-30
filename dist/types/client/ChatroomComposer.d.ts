@@ -1,3 +1,5 @@
+import type { ComponentType } from 'react';
+import type { ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots';
 import type { ChatroomAgentTarget, ChatroomClientStore, ChatroomView } from './store.js';
 interface ChatroomComposerInjected {
@@ -10,9 +12,15 @@ interface ChatroomComposerInjected {
 }
 type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomComposerInjected;
 type ComposerDockProps = PropsRuntime<'conversation.input.dock'> & ChatroomComposerInjected;
+type ComposerAttachmentsInjected = Pick<ChatroomComposerInjected, 'useChatroom' | 'clearReply' | 'resolveTarget'> & {
+    nativeAttachmentsView: ComponentType<ComposerAttachmentsProps>;
+};
+export type ChatroomComposerAttachmentsProps = ComposerAttachmentsProps & ComposerAttachmentsInjected;
 /** Small file chooser inside the native composer tool row. */
 export declare function ChatroomFileAction(props: FileActionProps): JSX.Element | null;
-/** Reply quote and pending file rail above the native composer. */
+/** Pending file rail above the native composer. */
 export declare function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | null;
+/** Native attachment renderer plus an in-card reply preview for shared sessions. */
+export declare function ChatroomComposerAttachments(props: ChatroomComposerAttachmentsProps): JSX.Element;
 export type { ChatroomClientStore };
 //# sourceMappingURL=ChatroomComposer.d.ts.map

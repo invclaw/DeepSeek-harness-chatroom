@@ -72,6 +72,23 @@ export interface ChatroomAdminOverview {
   readonly oidcCallbackBase: string
 }
 
+/** One selectable model route for deciding whether ordinary room chat should wake the AI. */
+export interface ChatroomAutomationModel {
+  readonly provider: string
+  readonly model: string
+  readonly label: string
+}
+
+/** Global automatic-response policy and the model routes available to its administrator. */
+export interface ChatroomAutomationOverview {
+  readonly canManage: boolean
+  readonly provider: string
+  readonly model: string
+  readonly mainAgentPrompt: string
+  readonly controllerPrompt: string
+  readonly models: readonly ChatroomAutomationModel[]
+}
+
 /** One room member projected with current presence. */
 export interface ChatroomMember extends ChatroomIdentity {
   readonly role?: ChatroomMemberRole | undefined
@@ -178,6 +195,9 @@ export interface ChatroomInfo {
   readonly title: string
   readonly aiDisplayName: string
   readonly sessionId: string
+  readonly updatedAt?: number
+  readonly pinned?: boolean
+  readonly autoTriggerEnabled?: boolean
   /** Up to nine member avatars used by compact room-directory surfaces. */
   readonly memberAvatarIds?: readonly ChatroomAvatarId[]
   readonly memberAvatars?: readonly ChatroomRoomAvatar[]
@@ -216,13 +236,14 @@ export interface ChatroomDirectConversation {
   readonly updatedAt: number
 }
 
-/** One durable private text message. */
+/** One durable private message with optional downloadable media. */
 export interface ChatroomDirectMessage {
   readonly id: string
   readonly conversationId: string
   readonly sequence: number
   readonly senderId: string
   readonly text: string
+  readonly files?: readonly ChatroomFileReference[]
   readonly createdAt: number
 }
 

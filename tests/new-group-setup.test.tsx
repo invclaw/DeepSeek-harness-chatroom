@@ -1,80 +1,93 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NewGroupSetupDock } from '../src/client/NewGroupSetupDock.js'
 import type { ChatroomView } from '../src/client/store.js'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  document.body.replaceChildren()
+})
 
-describe('blank Session group setup', () => {
-  it('searches system users and completes the group before the first message', async () => {
-    const loadRoomMemberCandidates = vi.fn(async () => undefined)
-    const completeGroupSetup = vi.fn(async () => true)
-    const snapshot = groupView()
-    render(<NewGroupSetupDock {...dockProps(snapshot, { loadRoomMemberCandidates, completeGroupSetup })} />)
+describe('blank Session mode switch', () => {
+  it('defaults to Group and changes modes without opening a group setup form', () => {
+    const chooseNewSessionMode = vi.fn(async () => true)
+    render(<NewGroupSetupDock {...dockProps('group', chooseNewSessionMode)} />)
 
-    expect(screen.getByText('直接创建群聊')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '选择成员' }))
-    await waitFor(() => { expect(loadRoomMemberCandidates).toHaveBeenCalledOnce() })
-    fireEvent.change(screen.getByLabelText('搜索新群聊成员'), { target: { value: 'bob' } })
-    expect(screen.getByText('@bob-user')).toBeTruthy()
-    expect(screen.queryByText('@carol-user')).toBeNull()
-    fireEvent.click(screen.getByRole('checkbox', { name: /Bob/ }))
-    fireEvent.change(screen.getByLabelText('新群聊名称'), { target: { value: '项目群' } })
-    fireEvent.click(screen.getByRole('button', { name: '创建群聊（2 人）' }))
+    const group = screen.getByRole('button', { name: '群聊' })
+    const solo = screen.getByRole('button', { name: 'Solo' })
+    expect(group.getAttribute('data-active')).toBe('true')
+    expect(solo.getAttribute('data-active')).toBe('false')
+    expect(screen.queryByText('群聊名称')).toBeNull()
+    expect(screen.queryByText('邀请成员')).toBeNull()
 
-    await waitFor(() => {
-      expect(completeGroupSetup).toHaveBeenCalledWith('项目群', ['bob-id'])
-      expect(screen.queryByRole('region', { name: '创建群聊' })).toBeNull()
-    })
+    fireEvent.click(solo)
+    expect(chooseNewSessionMode).toHaveBeenCalledWith('native-session', 'solo')
+    fireEvent.click(group)
+    expect(chooseNewSessionMode).toHaveBeenCalledWith('native-session', 'group')
   })
 
-  it('stays absent after the Session has messages or other members', () => {
-    const snapshot = groupView()
-    const { rerender } = render(<NewGroupSetupDock {...dockProps(snapshot, {}, false)} />)
-    expect(screen.queryByText('直接创建群聊')).toBeNull()
+  it('reuses the native Harness welcome hero', () => {
+    document.body.innerHTML = `
+      <div data-native-composer>
+        <div data-native-root>
+          <div data-native-stack>
+            <div data-native-headline><span>🐋</span><span>探索未至之境</span><span>预览版</span></div>
+            <div data-native-body></div>
+          </div>
+        </div>
+        <button aria-label="选择工作区"><span>deepseek-harness</span></button>
+      </div>
+    `
+    const { rerender, unmount } = render(<NewGroupSetupDock {...dockProps('group')} />)
 
-    rerender(<NewGroupSetupDock {...dockProps({
-      ...snapshot,
-      members: [
-        { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale', role: 'owner', joinedAt: 1, lastSeenAt: 1, online: true },
-        { participantId: 'bob-id', displayName: 'Bob', avatarId: 'panda', role: 'member', joinedAt: 1, lastSeenAt: 1, online: true },
-      ],
-    })} />)
-    expect(screen.queryByText('直接创建群聊')).toBeNull()
+    expect(screen.getByText('今天有什么工作要处理？')).toBeTruthy()
+    expect(document.querySelector('[data-native-body] [aria-label="新会话模式"]')).toBeTruthy()
+    expect(document.querySelector('[data-dsh-chatroom-new-session-hero]')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '选择工作区' }).textContent).toBe('群聊')
+    expect(screen.getByRole('button', { name: '选择工作区' }).getAttribute('title'))
+      .toBe('当前会话类型：群聊；工作区：deepseek-harness')
+
+    rerender(<NewGroupSetupDock {...dockProps('solo')} />)
+    expect(screen.getByRole('button', { name: '选择工作区' }).textContent).toBe('Solo')
+
+    unmount()
+    expect(screen.getByText('探索未至之境')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '选择工作区' }).textContent).toBe('deepseek-harness')
+  })
+
+  it('registers a blank native Session when the Session list has not reported it yet', () => {
+    const registerNewSession = vi.fn()
+    render(<NewGroupSetupDock {...dockProps(undefined, undefined, true, registerNewSession)} />)
+
+    expect(registerNewSession).toHaveBeenCalledWith('native-session')
+  })
+
+  it('stays absent after the Session has messages', () => {
+    render(<NewGroupSetupDock {...dockProps('group', undefined, false)} />)
+    expect(screen.queryByRole('group', { name: '新会话模式' })).toBeNull()
   })
 })
 
 function dockProps(
-  snapshot: ChatroomView,
-  overrides: Record<string, unknown> = {},
+  mode: 'group' | 'solo' | undefined,
+  chooseNewSessionMode = vi.fn(async () => true),
   blank = true,
+  registerNewSession = vi.fn(),
 ): Parameters<typeof NewGroupSetupDock>[0] {
-  const room = snapshot.room!
+  const snapshot = {
+    phase: 'ready',
+    room: undefined,
+    rooms: [],
+    identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' },
+  } as unknown as ChatroomView
   return {
-    sessionId: room.sessionId,
+    sessionId: 'native-session',
     session: { composerPhase: blank ? 'blank' : 'ready', nodes: blank ? [] : [{}] },
     useChatroom: (selector: (value: ChatroomView) => unknown) => selector(snapshot),
-    resolveTarget: () => ({ kind: 'room', room }),
-    loadRoomMemberCandidates: vi.fn(async () => undefined),
-    completeGroupSetup: vi.fn(async () => true),
-    ...overrides,
+    registerNewSession,
+    newSessionMode: () => mode,
+    chooseNewSessionMode,
   } as unknown as Parameters<typeof NewGroupSetupDock>[0]
-}
-
-function groupView(): ChatroomView {
-  const room = { id: 'room', title: '新会话', aiDisplayName: 'DeepSeek', sessionId: 'native-session' }
-  return {
-    phase: 'ready',
-    room,
-    rooms: [room],
-    identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' },
-    members: [],
-    memberCandidates: [
-      { participantId: 'bob-id', username: 'bob-user', displayName: 'Bob', avatarId: 'panda' },
-      { participantId: 'carol-id', username: 'carol-user', displayName: 'Carol', avatarId: 'fox' },
-    ],
-    managementBusy: false,
-  } as unknown as ChatroomView
 }

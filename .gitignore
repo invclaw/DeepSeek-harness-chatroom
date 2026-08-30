@@ -4,3 +4,5 @@ dist/
 coverage/
 *.log
 .playwright-mcp/
+.vitest-attachments/
+tests/browser/__screenshots__/

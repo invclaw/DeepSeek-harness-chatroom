@@ -21,6 +21,7 @@ export declare class ChatroomHttpController {
     private handleRoomEnsure;
     private handleRoomSelection;
     private handleRoomManagement;
+    private handleAutomation;
     private handleThreadOpen;
     private handleThreadPrompt;
     private handlePrompt;
