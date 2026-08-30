@@ -3,6 +3,7 @@ import z from '@deepseek-ai/schemastery'
 
 /** Deployment configuration for shared AI rooms. */
 export interface Config {
+  dataDirectory?: string
   roomId: string
   roomTitle: string
   aiDisplayName: string
@@ -40,6 +41,7 @@ export interface Config {
 }
 
 export const Config: z<Config> = z.object({
+  dataDirectory: z.string().default(''),
   roomId: z.string().min(1).max(64).pattern(/^[a-z0-9][a-z0-9_-]*$/u).default('lobby'),
   roomTitle: z.string().min(1).max(80).default('AI 聊天室'),
   aiDisplayName: z.string().min(1).max(40).default('DeepSeek'),
@@ -77,6 +79,10 @@ export const Config: z<Config> = z.object({
 
 /** Validate relationships Schemastery cannot express by individual fields. */
 export function validateConfig(config: Config): void {
+  if (config.dataDirectory !== undefined && config.dataDirectory !== ''
+    && config.dataDirectory !== ':memory:' && !isAbsolute(config.dataDirectory)) {
+    throw new Error(`chatroom: dataDirectory must be absolute or :memory:, got ${JSON.stringify(config.dataDirectory)}`)
+  }
   if (!isAbsolute(config.cwd)) {
     throw new Error(`chatroom: cwd must be absolute, got ${JSON.stringify(config.cwd)}`)
   }

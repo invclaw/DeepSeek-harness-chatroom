@@ -15,6 +15,7 @@ export declare class ChatroomRuntime {
     readonly config: Config;
     private readonly log;
     private domain;
+    private archive;
     private identities;
     private roomRecords;
     private roomPreferences;
@@ -60,6 +61,8 @@ export declare class ChatroomRuntime {
     get auth(): ChatroomAuth;
     /** Whether one model request belongs to a room or branch Session owned by this runtime. */
     ownsSession(sessionId: string): boolean;
+    /** Stable model message ids omitted from future requests after a chat recall. */
+    recalledMessageIds(sessionId: string): ReadonlySet<string>;
     /** Describe the collaboration operations available to one room-scoped Agent. */
     agentCapabilities(sessionId: string): Promise<{
         readonly room: string;
@@ -108,7 +111,7 @@ export declare class ChatroomRuntime {
     setMemberRole(roomId: string, participantId: string, role: 'admin' | 'member', identity: ChatroomIdentity): Promise<readonly ChatroomMember[]>;
     /** Add active platform accounts to a room as ordinary members. */
     addRoomMembers(roomId: string, participantIds: readonly string[], identity: ChatroomIdentity): Promise<readonly ChatroomMember[]>;
-    /** Append human chat and wake the Agent for an explicit mention or an enabled model decision. */
+    /** Append human chat immediately and evaluate optional automatic responses in a separate queue. */
     submit(roomId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
     /** Persist one participant's personal sidebar pin for a room. */
     setRoomPinned(roomId: string, pinned: boolean, identity: ChatroomIdentity): Promise<ChatroomInfo>;
@@ -147,7 +150,7 @@ export declare class ChatroomRuntime {
     }>;
     /** Create or reopen a branch rooted at one native room message. */
     openThread(roomId: string, identity: ChatroomIdentity, root: ChatroomThreadRoot): Promise<ChatroomThreadResponse>;
-    /** Append one branch message and apply the parent room's AI wake policy. */
+    /** Append one branch message immediately and evaluate optional automatic responses separately. */
     submitThread(threadId: string, identity: ChatroomIdentity, text: string, reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
     submitThread(threadId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
     /** Project committed AI output into its parent room or branch stream. */
@@ -202,14 +205,24 @@ export declare class ChatroomRuntime {
     private defaultAutomationSettings;
     private resolvedAutomationSettings;
     private touchRoom;
+    private syncArchive;
+    private archiveRoom;
+    private archiveThread;
+    private archiveDirectConversation;
+    private archiveDirectMessage;
+    private archiveThreadMessage;
+    private archiveRoomSession;
+    private archiveSessionEvent;
     private appendThreadRoot;
     private shouldAutoTrigger;
+    private scheduleAutomaticResponse;
     private acceptSessionTitle;
     private requireState;
     private requireIdentities;
     private requireRoomRecords;
     private requireRoomPreferences;
     private requireAutomationSettings;
+    private requireArchive;
     private requireFiles;
     private requireMembers;
     private requireThreads;
@@ -224,5 +237,7 @@ export declare class ChatroomRuntime {
     private assertRoomManager;
     private assertRoomInviter;
     private assertRoomMember;
+    private isRoomMember;
+    private roomMemberCount;
 }
 //# sourceMappingURL=room.d.ts.map

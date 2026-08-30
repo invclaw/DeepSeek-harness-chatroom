@@ -1,6 +1,7 @@
 import z from '@deepseek-ai/schemastery';
 /** Deployment configuration for shared AI rooms. */
 export interface Config {
+    dataDirectory?: string;
     roomId: string;
     roomTitle: string;
     aiDisplayName: string;

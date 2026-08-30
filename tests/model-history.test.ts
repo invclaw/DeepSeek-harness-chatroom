@@ -1,6 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import { messagesContainImages, textCompatibleMessages, textCompatibleStream } from '../src/model-history.js'
+import {
+  CallId,
+  createAssistantMessage,
+  createToolResultMessage,
+  createUserMessage,
+  type GenerateOptions,
+  type StreamChunk,
+} from '@deepseek-ai/dsh-llm'
+import {
+  messagesContainImages,
+  protocolCompatibleMessages,
+  textCompatibleMessages,
+  textCompatibleStream,
+  visibleMessages,
+} from '../src/model-history.js'
 
 function request(): GenerateOptions {
   return {
@@ -40,7 +53,7 @@ describe('chatroom model history compatibility', () => {
     const chunks: StreamChunk[] = []
 
     for await (const chunk of textCompatibleStream(
-      request(), next, id => id === 'chatroom-v1-lobby', resolve, downstream,
+      request(), next, id => id === 'chatroom-v1-lobby', () => new Set(), resolve, downstream,
     )) chunks.push(chunk)
 
     expect(next).not.toHaveBeenCalled()
@@ -55,10 +68,79 @@ describe('chatroom model history compatibility', () => {
     const stream = vi.fn(async function*(): AsyncGenerator<StreamChunk> { yield finish })
     const resolve = vi.fn(async () => ({ inputModalities: ['text', 'image'] }))
 
-    for await (const _chunk of textCompatibleStream(request(), next, () => true, resolve, stream)) { /* drain */ }
-    for await (const _chunk of textCompatibleStream(request(), next, () => false, resolve, stream)) { /* drain */ }
+    for await (const _chunk of textCompatibleStream(request(), next, () => true, () => new Set(), resolve, stream)) { /* drain */ }
+    for await (const _chunk of textCompatibleStream(request(), next, () => false, () => new Set(), resolve, stream)) { /* drain */ }
 
     expect(next).toHaveBeenCalledTimes(2)
     expect(stream).not.toHaveBeenCalled()
+  })
+
+  it('removes recalled model messages before dispatch', async () => {
+    const options = request()
+    const recalledId = String(options.messages[0]!.id)
+    expect(visibleMessages(options.messages, new Set([recalledId]))).toEqual([])
+    const next = vi.fn(async function*(): AsyncGenerator<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } })
+    const stream = vi.fn(async function*(_options: GenerateOptions): AsyncGenerator<StreamChunk> {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+
+    for await (const _chunk of textCompatibleStream(
+      options,
+      next,
+      () => true,
+      () => new Set([recalledId]),
+      async () => ({ inputModalities: ['text'] }),
+      stream,
+    )) { /* drain */ }
+
+    expect(next).not.toHaveBeenCalled()
+    expect(stream.mock.calls[0]![0].messages).toEqual([])
+  })
+
+  it('moves an older chatroom assistant insertion after its matching tool result', async () => {
+    const callId = CallId('call-chatroom-action')
+    const toolCall = createAssistantMessage({
+      content: [{ type: 'tool-call', id: callId, name: 'chatroom_action', arguments: '{}' }],
+      source: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+    })
+    const inserted = createAssistantMessage({
+      content: [{ type: 'text', text: 'Agent 群聊工具验收通过' }],
+      source: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+    })
+    const result = createToolResultMessage({
+      callId,
+      content: [{ type: 'text', text: '消息已发送到当前会话。' }],
+      isError: false,
+    })
+    const human = createUserMessage({ content: [{ type: 'text', text: '继续' }], source: { kind: 'user' } })
+
+    expect(protocolCompatibleMessages([toolCall, inserted, result, human])).toEqual([
+      toolCall, result, inserted, human,
+    ])
+
+    const options = { ...request(), messages: [toolCall, inserted, result, human] }
+    const next = vi.fn(async function*(): AsyncGenerator<StreamChunk> {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+    const stream = vi.fn(async function*(_options: GenerateOptions): AsyncGenerator<StreamChunk> {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+    for await (const _chunk of textCompatibleStream(
+      options, next, () => true, () => new Set(), async () => ({ inputModalities: ['text'] }), stream,
+    )) { /* drain */ }
+
+    expect(next).not.toHaveBeenCalled()
+    expect(stream.mock.calls[0]![0].messages).toEqual([toolCall, result, inserted, human])
+  })
+
+  it('removes unresolved historical tool calls at the next human exchange', () => {
+    const callId = CallId('call-without-result')
+    const toolCall = createAssistantMessage({
+      content: [{ type: 'tool-call', id: callId, name: 'chatroom_action', arguments: '{}' }],
+      source: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+    })
+    const human = createUserMessage({ content: [{ type: 'text', text: '重试' }], source: { kind: 'user' } })
+
+    expect(protocolCompatibleMessages([toolCall, human])).toEqual([human])
   })
 })

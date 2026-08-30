@@ -36,7 +36,10 @@ export interface FileRecord {
   readonly name: string
   readonly mediaType: string
   readonly bytes: number
-  readonly data: string
+  /** Legacy inline payload retained only until startup migration writes it to the blob store. */
+  readonly data?: string
+  readonly sha256?: string
+  readonly storageKey?: string
   readonly createdAt: number
 }
 
@@ -119,6 +122,8 @@ export interface ThreadMessageRecord {
   readonly hasImages?: boolean
   readonly reply?: ChatroomReplyReference
   readonly createdAt: number
+  readonly modelMessageId?: string
+  readonly sessionSeq?: number
 }
 
 export interface ReactionRecord {
@@ -244,8 +249,12 @@ const fileSchema = z.object({
   name: z.string().min(1),
   mediaType: z.string().min(1),
   bytes: nonNegativeSafeInteger,
-  data: z.string().min(1),
+  data: z.string().min(1).optional(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  storageKey: z.string().min(1).optional(),
   createdAt: nonNegativeSafeInteger,
+}).refine(record => record.data !== undefined || (record.sha256 !== undefined && record.storageKey !== undefined), {
+  message: 'file payload must be inline or reference the blob store',
 }) as z.ZodType<FileRecord>
 
 const roomSchema = z.object({
@@ -333,6 +342,8 @@ const threadMessageSchema = z.object({
   hasImages: z.boolean().optional(),
   reply: replySchema.optional(),
   createdAt: nonNegativeSafeInteger,
+  modelMessageId: z.string().min(1).optional(),
+  sessionSeq: nonNegativeSafeInteger.optional(),
 }) as z.ZodType<ThreadMessageRecord>
 
 const reactionSchema = z.object({

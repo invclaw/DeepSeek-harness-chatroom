@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.2.0" src="https://img.shields.io/badge/version-1.2.0-4f6bff">
+    <img alt="Version 1.2.5" src="https://img.shields.io/badge/version-1.2.5-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -87,9 +87,18 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 - The chosen external provider can automatically receive unauthenticated users; `local=1` keeps a local recovery entry.
 - Durable private conversations are visible only to their two participants, support Enter-to-send, Shift+Enter newlines, emoji, images, and files, and reuse the same unread/toast/browser-notification channel. The Direct folder is also the account directory: clicking any profile starts the conversation in the main Harness conversation area.
 
+### Storage and backup
+
+- The plugin owns a SQLite chat archive at `$DSH_HOME/chatroom/chatroom.sqlite` (or `~/.dsh/chatroom/chatroom.sqlite`). It projects rooms, branches, private conversations, membership, messages, attachment metadata, and recall tombstones into queryable tables. Harness Session logs remain the authoritative Agent execution and audit history; they are not used as the only chat database.
+- File bytes are stored outside SQLite in a SHA-256 content-addressed Blob tree under `blobs/v1/objects/`. Duplicate bytes share one object, while attachment rows retain the original name, media type, sender, room, and creation time. Legacy inline Base64 records migrate on startup without changing message references.
+- Recall is non-destructive: the archive retains the original row and records who recalled it and when. Every client receives the tombstone, and the recalled model message ID is removed from future main-room or branch model requests.
+- Back up or move the complete chat archive by stopping the plugin and copying the configured data directory. Set `dataDirectory` or `DSH_CHATROOM_DATA_DIR` to place SQLite and Blobs on a dedicated volume.
+
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.2.5** — append ordinary room and branch messages before the optional automatic-response model runs, and repair historical tool-call/result ordering from older chatroom builds before requests reach the model provider.
+- **1.2.4** — add the plugin-owned SQLite chat archive and content-addressed local Blob store, migrate legacy inline attachments, enforce membership visibility in authenticated deployments, and make recall remove the original model message from future Agent context.
 - **1.2.3** — attach the room capability and action tools when a shared Session is already running before the chatroom adopts it, so native Harness-restored Agents receive the same collaboration tools as plugin-created Agents.
 - **1.2.0** — serialize auto-reply settings with message admission, wake the Agent deterministically for direct AI addressing, add durable sender-only recall, remove the redundant private-chat Settings entry, and expose the complete room action set as model-callable Agent tools.
 - **1.1.17** — keep compact reply quotes inside the native composer card and show verified IOA/OIDC profile images in native member mention candidates, with cartoon fallbacks.
@@ -150,6 +159,7 @@ Installation adds this row to the Web profile:
 - id: chatroom
   name: deepseek-harness-chatroom
   config:
+    dataDirectory: !!js process.env.DSH_CHATROOM_DATA_DIR ?? ''
     roomId: lobby
     roomTitle: AI Chatroom
     aiDisplayName: DeepSeek

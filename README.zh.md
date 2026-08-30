@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.2.0" src="https://img.shields.io/badge/version-1.2.0-4f6bff">
+    <img alt="版本 1.2.5" src="https://img.shields.io/badge/version-1.2.5-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -87,9 +87,18 @@
 - 可让未登录用户自动跳转到指定外部认证；`local=1` 始终保留本地账号应急入口。
 - 账号之间支持持久私聊，只有双方可见，包含 Enter 发送、Shift+Enter 换行、表情、图片和文件，并复用未读数、页内提示和浏览器通知；私聊文件夹同时承担通讯录能力，首次点击任意用户头像即可在 Harness 主会话区开始聊天。
 
+### 存储与备份
+
+- 插件在 `$DSH_HOME/chatroom/chatroom.sqlite`（未设置 `DSH_HOME` 时为 `~/.dsh/chatroom/chatroom.sqlite`）维护独立 SQLite 聊天档案，将群聊、分支、私聊、成员关系、消息、附件元数据和撤回墓碑投影成可查询的数据表。Harness Session log 继续作为 Agent 执行与审计记录，但不再是唯一的聊天数据库。
+- 文件正文不写进 SQLite，也不再塞进 KV 的 Base64 字段，而是按 SHA-256 写入 `blobs/v1/objects/` 内容寻址目录。相同文件只保存一份，附件表仍保留原文件名、类型、发送者、群聊和时间；旧版内联附件会在启动时无损迁移。
+- 撤回采用非破坏式墓碑：原始记录继续用于审计，同时记录撤回人和撤回时间；所有在线端同步显示“消息已撤回”，后续主群或分支模型请求会排除对应的原始模型消息 ID。
+- 备份或迁移时先停止插件，再整体复制数据目录即可。可以通过 `dataDirectory` 或 `DSH_CHATROOM_DATA_DIR` 把 SQLite 和 Blob 放到独立数据盘。
+
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.2.5** — 普通群聊和分支消息先落库显示，再异步运行可选的自动回复判断模型；发送不再等待判断延迟。请求模型前同时修复旧版插件遗留的工具调用/结果乱序，避免坏历史持续阻断后续对话。
+- **1.2.4** — 加入插件自有的 SQLite 聊天档案与内容寻址本地 Blob，迁移旧版内联附件，在启用认证的部署中按群成员控制可见性，并让撤回后的原始消息不再进入后续 Agent 上下文。
 - **1.2.3** — 共享 Session 先由 Harness 恢复、后被聊天室接管时，也会补挂群聊能力查询与操作工具，使原生恢复的 Agent 和插件新建的 Agent 拥有相同的协作能力。
 - **1.2.0** — 把自动回复设置与消息接纳串行化，直接称呼 AI 时确定性唤起 Agent，加入仅发送者可用的持久撤回，移除设置页重复的私聊入口，并把完整群聊操作集开放为 Agent 可调用工具。
 - **1.1.17** — 把紧凑回复引用收进 Harness 原生输入框，并在原生成员提及候选中显示 IOA/OIDC 企业头像；图片缺失或加载失败时继续降级为卡通头像。
@@ -150,6 +159,7 @@ pnpm dsh --profile web
 - id: chatroom
   name: deepseek-harness-chatroom
   config:
+    dataDirectory: !!js process.env.DSH_CHATROOM_DATA_DIR ?? ''
     roomId: lobby
     roomTitle: AI 聊天室
     aiDisplayName: DeepSeek

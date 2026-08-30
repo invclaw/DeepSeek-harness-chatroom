@@ -54,6 +54,7 @@ describe('ChatroomRuntime', () => {
     })
 
     await runtime.submit('lobby', identity, [{ type: 'text', text: '请总结刚才的结论' }], 'queue')
+    await vi.waitFor(() => expect(harness.agents[0]?.followup).toHaveBeenCalledOnce())
 
     expect(harness.llmStream).toHaveBeenCalledOnce()
     expect(harness.llmStream.mock.calls[0]?.[0]).toMatchObject({
@@ -67,9 +68,35 @@ describe('ChatroomRuntime', () => {
     })
 
     await runtime.submit('lobby', identity, [{ type: 'text', text: '大家下午好' }], 'queue')
+    await vi.waitFor(() => expect(harness.llmStream).toHaveBeenCalledTimes(2))
 
     expect(harness.agents[0]?.followup).toHaveBeenCalledOnce()
+    expect(harness.agents[0]?.session.append).toHaveBeenCalledTimes(2)
+    await runtime.stop()
+  })
+
+  it('accepts and appends ordinary chat before the automatic-response controller finishes', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', identity)
+    await runtime.setRoomAutoTrigger('lobby', true, identity)
+    let releaseController!: () => void
+    const controller = new Promise<void>((resolve) => { releaseController = resolve })
+    harness.llmStream.mockImplementationOnce(async function* () {
+      await controller
+      yield { type: 'text-delta', index: 0, text: '{"wake":false}' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+
+    await expect(runtime.submit(
+      'lobby', identity, [{ type: 'text', text: '这条消息必须立即显示' }], 'queue',
+    )).resolves.toEqual({ accepted: true, aiTriggered: false })
     expect(harness.agents[0]?.session.append).toHaveBeenCalledOnce()
+    expect(harness.agents[0]?.followup).not.toHaveBeenCalled()
+
+    releaseController()
     await runtime.stop()
   })
 
@@ -406,6 +433,12 @@ describe('ChatroomRuntime', () => {
     expect(projected.files).toMatchObject([{ name: 'note.txt', mediaType: 'text/plain', bytes: 5 }])
     const stored = runtime.file(projected.files[0]!.id)
     expect(new TextDecoder().decode(stored.data)).toBe('hello')
+    const persisted = [...(harness.tables.get('files')?.entries() ?? [])][0]?.[1] as Record<string, unknown> | undefined
+    expect(persisted).toMatchObject({
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      storageKey: expect.stringMatching(/^objects\/[a-f0-9]{2}\/[a-f0-9]{64}$/u),
+    })
+    expect(persisted).not.toHaveProperty('data')
     await runtime.stop()
   })
 
@@ -602,6 +635,7 @@ describe('ChatroomRuntime', () => {
     }
     expect(snapshot.recalls).toEqual([expect.objectContaining({ messageId: 'user:7' })])
     expect(snapshot.reactions).toEqual([])
+    expect(runtime.recalledMessageIds(String(harness.agents[0]!.session.id)).has(String(payload.id))).toBe(true)
     await runtime.stop()
   })
 
@@ -1025,5 +1059,6 @@ function config(): Config {
     authDshAuthHeaders: false,
     authDshAuthVerifyUrl: '',
     authDshAuthLoginPath: '/auth/login',
+    dataDirectory: ':memory:',
   }
 }
