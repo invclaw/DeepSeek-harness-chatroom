@@ -36,7 +36,9 @@ export function installNativeMentionAvatarImages(store: ChatroomClientStore): ()
       icon.prepend(image)
     }
   }
-  const observer = new MutationObserver(reconcile)
+  const observer = new MutationObserver(records => {
+    if (records.some(mutationAddsMentionOption)) reconcile()
+  })
   observer.observe(document.body, { childList: true, subtree: true })
   const unsubscribe = store.subscribe(reconcile)
   reconcile()
@@ -50,6 +52,12 @@ export function installNativeMentionAvatarImages(store: ChatroomClientStore): ()
       if (icon !== null && icon !== undefined) delete icon.dataset.dshChatroomAvatarFailed
     }
   }
+}
+
+function mutationAddsMentionOption(record: MutationRecord): boolean {
+  return [...record.addedNodes].some(node =>
+    node instanceof Element
+    && (node.matches(MEMBER_OPTION_SELECTOR) || node.querySelector(MEMBER_OPTION_SELECTOR) !== null))
 }
 
 function mentionAvatarUrls(snapshot: ChatroomView): ReadonlyMap<string, string> {

@@ -1,14 +1,19 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { reconcileSidebarRoomRows } from '../src/client/sidebar-rooms.js'
-import type { ChatroomView } from '../src/client/store.js'
+import { installSidebarRoomRows, reconcileSidebarRoomRows } from '../src/client/sidebar-rooms.js'
+import type { ChatroomClientStore, ChatroomView } from '../src/client/store.js'
 
 afterEach(() => {
   document.body.replaceChildren()
 })
 
 describe('native sidebar room rows', () => {
+  const settleMutations = async (): Promise<void> => {
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+
   function bindNativeSession(row: HTMLElement, sessionId: string): void {
     row.draggable = true
     row.addEventListener('dragstart', event => {
@@ -272,5 +277,38 @@ describe('native sidebar room rows', () => {
     expect(document.querySelector('[data-dsh-chatroom-sidebar-category="solo"]')?.textContent).toContain('个人工作')
     document.querySelector<HTMLButtonElement>('[aria-label="与 Bob 私聊"]')!.click()
     expect(openDirect).toHaveBeenCalledWith('bob-id')
+  })
+
+  it('ignores conversation mutations outside the native sidebar', async () => {
+    document.body.innerHTML = `
+      <div role="tree"><div role="treeitem" aria-selected="true"><span>会话</span></div></div>
+      <main id="conversation"></main>
+    `
+    const store = {
+      getSnapshot: () => ({
+        phase: 'ready', rooms: [], members: [], directPeers: [], directConversations: [],
+      } as unknown as ChatroomView),
+      subscribe: () => () => undefined,
+      setRoomPinned: vi.fn(),
+      openDirect: vi.fn(),
+      closeDirect: vi.fn(),
+    } as unknown as ChatroomClientStore
+    const getSnapshot = vi.fn(() => ({ current: undefined }))
+    const sessions = {
+      list: { getSnapshot, subscribe: () => () => undefined },
+    } as never
+
+    const dispose = installSidebarRoomRows(store, sessions)
+    await settleMutations()
+    getSnapshot.mockClear()
+
+    document.querySelector('#conversation')!.append(document.createElement('p'))
+    await settleMutations()
+    expect(getSnapshot).not.toHaveBeenCalled()
+
+    document.querySelector('[role="tree"]')!.append(document.createElement('div'))
+    await settleMutations()
+    expect(getSnapshot).toHaveBeenCalled()
+    dispose()
   })
 })

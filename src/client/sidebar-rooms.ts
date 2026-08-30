@@ -19,6 +19,7 @@ const CATEGORY_WRAPPER_ATTRIBUTE = 'data-dsh-chatroom-category-wrapper'
 const BRANCH_ROW_ATTRIBUTE = 'data-dsh-chatroom-branch-row'
 const NATIVE_GROUP_SECTION_ATTRIBUTE = 'data-dsh-chatroom-native-group-section'
 const NATIVE_FOLDER_WRAPPER_ATTRIBUTE = 'data-dsh-chatroom-native-folder-wrapper'
+const SIDEBAR_MUTATION_SELECTOR = '[role="tree"], [role="treeitem"], [role="menu"]'
 let activeNativeMenuRoomId: string | undefined
 let activeNativeMenuItem: HTMLElement | undefined
 
@@ -55,7 +56,9 @@ export function installSidebarRoomRows(store: ChatroomClientStore, sessions: ISe
     scheduled = true
     queueMicrotask(reconcile)
   }
-  const observer = new MutationObserver(schedule)
+  const observer = new MutationObserver(records => {
+    if (records.some(mutationTouchesSidebar)) schedule()
+  })
   observer.observe(document.body, { childList: true, subtree: true, characterData: true })
   const unsubscribe = store.subscribe(schedule)
   const unsubscribeSessions = sessions.list.subscribe(schedule)
@@ -72,6 +75,14 @@ export function installSidebarRoomRows(store: ChatroomClientStore, sessions: ISe
     for (const row of document.querySelectorAll<HTMLElement>(`[${CATEGORY_ATTRIBUTE}]`)) clearCategorizedRow(row)
     for (const root of document.querySelectorAll<HTMLElement>(`[${CATEGORY_ROOT_ATTRIBUTE}]`)) clearCategoryRoot(root)
   }
+}
+
+function mutationTouchesSidebar(record: MutationRecord): boolean {
+  const target = record.target instanceof Element ? record.target : record.target.parentElement
+  if (target !== null && target.closest(SIDEBAR_MUTATION_SELECTOR) !== null) return true
+  return [...record.addedNodes, ...record.removedNodes].some(node =>
+    node instanceof Element
+    && (node.matches(SIDEBAR_MUTATION_SELECTOR) || node.querySelector(SIDEBAR_MUTATION_SELECTOR) !== null))
 }
 
 /** Reconcile one document pass; exported for deterministic browser tests. */
