@@ -277,6 +277,7 @@ describe('native chatroom integration', () => {
     const rendered = renderEntry(room, overrides)
     expect(screen.getByTestId('chatroom-members')).toBeTruthy()
     expect(screen.getByTestId('chatroom-thread-panel')).toBeTruthy()
+    expect(screen.getByText(/来自 AI 聊天室 · Bob：主题消息/)).toBeTruthy()
     expect(screen.getByText('新消息')).toBeTruthy()
     expect(screen.queryByRole('button', { name: '复制邀请链接' })).toBeNull()
     fireEvent.click(screen.getByRole('checkbox', { name: /Carol/ }))
@@ -332,7 +333,9 @@ describe('native chatroom integration', () => {
     rendered.rerender(entry({ ...room, thread: nextThread }, overrides))
     const retainedFrame = screen.getByTitle('分支回复：一条较长的 AI 回复') as HTMLIFrameElement
     expect(retainedFrame).toBe(frame)
-    expect(retainedFrame.src).toBe(frameUrl.href)
+    const nextFrameUrl = new URL(retainedFrame.src)
+    expect(nextFrameUrl.searchParams.get('dsh-chatroom-thread')).toBe('thread-2')
+    expect(nextFrameUrl.searchParams.get('dsh-chatroom-thread-session')).toBe('chatroom-thread-v1-thread-2')
   })
 
   it('lets every room member change the automatic-reply policy', () => {

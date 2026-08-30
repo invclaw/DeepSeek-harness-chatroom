@@ -5,7 +5,12 @@ import type {
   ChatroomInfo,
   ChatroomRoomAvatar,
 } from '../types.js'
-import type { ISessions, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type {
+  ISessions,
+  SessionId,
+  SessionListState,
+  SessionSummary,
+} from '@deepseek-ai/dsh-client-runtime/client'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
 
 const ROOM_ROW_SELECTOR = 'div[role="treeitem"][aria-selected]'
@@ -17,9 +22,51 @@ const CATEGORY_HEADER_ATTRIBUTE = 'data-dsh-chatroom-category-header'
 const DIRECT_ROW_ATTRIBUTE = 'data-dsh-chatroom-direct-row'
 const CATEGORY_WRAPPER_ATTRIBUTE = 'data-dsh-chatroom-category-wrapper'
 const BRANCH_ROW_ATTRIBUTE = 'data-dsh-chatroom-branch-row'
+const BRANCH_MARKER_ATTRIBUTE = 'data-dsh-chatroom-branch-marker'
+const BRANCH_SURFACE_ATTRIBUTE = 'data-dsh-chatroom-branch-surface'
+const BRANCH_HEADING_ATTRIBUTE = 'data-dsh-chatroom-branch-heading'
+const BRANCH_BADGE_ATTRIBUTE = 'data-dsh-chatroom-branch-badge'
+const BRANCH_TOPIC_ATTRIBUTE = 'data-dsh-chatroom-branch-topic'
+const BRANCH_PARENT_ATTRIBUTE = 'data-dsh-chatroom-branch-parent'
+const BRANCH_REPLIES_ATTRIBUTE = 'data-dsh-chatroom-branch-replies'
+const BRANCH_NATIVE_TITLE_ATTRIBUTE = 'data-dsh-chatroom-native-branch-title'
+const BRANCH_COUNT_ATTRIBUTE = 'data-dsh-chatroom-branch-count'
+const SESSION_ID_ATTRIBUTE = 'data-dsh-chatroom-session-id'
+const BRANCH_SESSION_PREFIX = 'chatroom-thread-v1-'
+const BRANCH_TITLE_PREFIX = '分支：'
 const NATIVE_GROUP_SECTION_ATTRIBUTE = 'data-dsh-chatroom-native-group-section'
 const NATIVE_FOLDER_WRAPPER_ATTRIBUTE = 'data-dsh-chatroom-native-folder-wrapper'
 const SIDEBAR_MUTATION_SELECTOR = '[role="tree"], [role="treeitem"], [role="menu"]'
+
+type SidebarSessionList = Pick<SessionListState, 'byId'>
+
+interface BranchRowFacts {
+  readonly sessionId: string | undefined
+  readonly displayTitle: string
+  readonly topic: string
+  readonly parentSessionId: string | undefined
+  readonly parentTitle: string | undefined
+  readonly replyCount: number | undefined
+}
+
+interface RowBinding {
+  readonly row: HTMLElement
+  readonly sessionId: string | undefined
+  readonly summary: SessionSummary | undefined
+  readonly branch: BranchRowFacts | undefined
+  readonly room: ChatroomInfo | undefined
+}
+
+interface OriginalRowAttributes {
+  readonly ariaLabel: string | null
+  readonly title: string | null
+  readonly appliedAriaLabel: string
+  readonly appliedTitle: string
+}
+
+// Native rows normally have no tooltip or explicit aria-label. Remembering the
+// original values lets a row be reused by React without leaving plugin text on it.
+const originalRowAttributes = new WeakMap<HTMLElement, OriginalRowAttributes>()
 let activeNativeMenuRoomId: string | undefined
 let activeNativeMenuItem: HTMLElement | undefined
 
@@ -31,14 +78,16 @@ export function installSidebarRoomRows(store: ChatroomClientStore, sessions: ISe
   let directoryRetry: ReturnType<typeof setTimeout> | undefined
   const reconcile = (): void => {
     scheduled = false
+    const list = sessions.list.getSnapshot()
     const snapshot = store.getSnapshot()
     reconcileSidebarRoomRows(
       document,
       snapshot,
-      sessions.list.getSnapshot().current,
+      list.current,
       store.setRoomPinned,
       store.openDirect,
       store.closeDirect,
+      list,
     )
     const identity = snapshot.phase === 'ready' ? snapshot.identity?.participantId : undefined
     if (identity === undefined) directoryIdentity = undefined
@@ -67,10 +116,10 @@ export function installSidebarRoomRows(store: ChatroomClientStore, sessions: ISe
     unsubscribe()
     unsubscribeSessions()
     observer.disconnect()
-    for (const row of document.querySelectorAll<HTMLElement>('[data-dsh-chatroom-room-row]')) clearRoomRow(row)
-    for (const row of document.querySelectorAll<HTMLElement>('[data-dsh-chatroom-session-id]')) {
-      delete row.dataset.dshChatroomSessionId
-    }
+    const decoratedRows = document.querySelectorAll<HTMLElement>(
+      `${ROOM_ROW_SELECTOR}, [${BRANCH_ROW_ATTRIBUTE}], [${SESSION_ID_ATTRIBUTE}]`,
+    )
+    for (const row of decoratedRows) clearRoomRow(row)
     if (directoryRetry !== undefined) clearTimeout(directoryRetry)
     for (const row of document.querySelectorAll<HTMLElement>(`[${CATEGORY_ATTRIBUTE}]`)) clearCategorizedRow(row)
     for (const root of document.querySelectorAll<HTMLElement>(`[${CATEGORY_ROOT_ATTRIBUTE}]`)) clearCategoryRoot(root)
@@ -93,11 +142,13 @@ export function reconcileSidebarRoomRows(
   setPinned?: (roomId: string, pinned: boolean) => Promise<boolean>,
   openDirect?: (peerId?: string) => Promise<void>,
   closeDirect?: () => void,
+  sessionList?: SidebarSessionList,
 ): void {
   const rows = [...documentRoot.querySelectorAll<HTMLElement>(ROOM_ROW_SELECTOR)]
     .filter(row => row.closest(`[${DIRECT_ROW_ATTRIBUTE}]`) === null)
   const categoryRoot = sidebarTreeRoot(documentRoot, rows)
   const remaining = [...snapshot.rooms]
+  const bindings: RowBinding[] = []
   const categorized: HTMLElement[] = []
   let groupOrder = 0
   let soloOrder = 0
@@ -105,39 +156,100 @@ export function reconcileSidebarRoomRows(
     decorateNativeConversationNavigation(row, closeDirect)
     const selected = row.getAttribute('aria-selected') === 'true'
     const sessionId = nativeSessionId(row) ?? (selected ? currentSessionId : undefined)
+    const summary = sessionSummary(sessionList, sessionId) ?? uniquelyTitledBranchSummary(sessionList, row)
     const bySession = sessionId === undefined
       ? undefined
       : takeRoom(remaining, candidate => candidate.sessionId === sessionId)
-    const active = bySession === undefined && selected && snapshot.room !== undefined
+    const rowTitle = findNativeTitleElement(row)?.textContent?.trim()
+    const looksLikeBranch = summary !== undefined && summaryLooksLikeBranch(summary)
+      || rowTitle?.startsWith(BRANCH_TITLE_PREFIX) === true
+      || row.dataset.dshChatroomBranchSessionId !== undefined
+    // Only a selected row without a session payload can be recovered from the
+    // active room. A branch row has its own session id while the store still
+    // points at the parent room; binding it here would turn the branch into a
+    // duplicate parent row.
+    const active = bySession === undefined && sessionId === undefined && !looksLikeBranch && selected && snapshot.room !== undefined
       ? takeRoom(remaining, room => room.id === snapshot.room?.id)
       : undefined
     const room = bySession ?? active ?? takeUniquelyTitledRoom(remaining, row)
+    const branch = resolveBranch(row, sessionId, summary, sessionList, snapshot, room)
+    bindings.push({ row, sessionId, summary, branch, room })
+  }
+
+  // Count from the complete session projection so virtualized or collapsed
+  // branch rows still expose an accurate parent count.
+  const branchCounts = new Map<string, number>()
+  const countedBranches = new Set<string>()
+  if (sessionList !== undefined) {
+    for (const summary of Object.values(sessionList.byId)) {
+      if (!summaryLooksLikeBranch(summary) || summary.parentId === undefined) continue
+      const id = String(summary.id)
+      const parent = String(summary.parentId)
+      countedBranches.add(id)
+      branchCounts.set(parent, (branchCounts.get(parent) ?? 0) + 1)
+    }
+  }
+  for (const binding of bindings) {
+    const branch = binding.branch
+    if (branch === undefined || branch.parentSessionId === undefined) continue
+    if (branch.sessionId !== undefined && countedBranches.has(branch.sessionId)) continue
+    if (branch.sessionId === undefined && sessionList !== undefined
+      && Object.values(sessionList.byId).some(summary =>
+        summaryLooksLikeBranch(summary)
+        && summary.displayTitle.trim() === branch.displayTitle
+        && String(summary.parentId ?? '') === branch.parentSessionId)) continue
+    branchCounts.set(branch.parentSessionId, (branchCounts.get(branch.parentSessionId) ?? 0) + 1)
+  }
+
+  for (const binding of bindings) {
+    const { row, sessionId, branch, room } = binding
     if (room !== undefined) {
-      row.removeAttribute(BRANCH_ROW_ATTRIBUTE)
+      clearBranchRow(row)
       decorateRoomRow(row, room, roomAvatars(room, snapshot), groupOrder++, setPinned)
+      decorateBranchParent(row, room.title, sessionId === undefined ? 0 : branchCounts.get(sessionId) ?? 0)
       setRowCategory(row, 'group')
       categorized.push(row)
       continue
     }
-    clearRoomRow(row)
+    clearRoomDecorations(row)
+    if (branch !== undefined) {
+      clearBranchRow(row)
+      decorateBranchRow(row, branch)
+      row.style.order = String(-10_000 + groupOrder++)
+      row.querySelector(`:scope > [${SOLO_AVATAR_ATTRIBUTE}]`)?.remove()
+      setRowCategory(row, 'group')
+      categorized.push(row)
+      continue
+    }
+    clearBranchRow(row)
     if (!isNativeSessionRow(row)) {
       clearCategorizedRow(row)
       continue
     }
-    const branch = rowTitle(row).startsWith('分支：')
-    const category = branch ? 'group' : 'solo'
-    if (category === 'group') {
-      row.setAttribute(BRANCH_ROW_ATTRIBUTE, '')
-      row.style.order = String(-10_000 + groupOrder++)
-    } else {
-      row.removeAttribute(BRANCH_ROW_ATTRIBUTE)
-      decorateSoloRow(row, soloOrder++)
-    }
-    setRowCategory(row, category)
+    row.removeAttribute(BRANCH_ROW_ATTRIBUTE)
+    decorateSoloRow(row, soloOrder++)
+    setRowCategory(row, 'solo')
     categorized.push(row)
   }
   reconcileWorkspaceCategories(documentRoot, categoryRoot, categorized, snapshot, openDirect)
   reconcileNativeRoomMenu(documentRoot, snapshot, setPinned)
+}
+
+function sessionSummary(list: SidebarSessionList | undefined, id: string | undefined): SessionSummary | undefined {
+  if (list === undefined || id === undefined) return undefined
+  return list.byId[id as SessionId]
+}
+
+function uniquelyTitledBranchSummary(
+  list: SidebarSessionList | undefined,
+  row: HTMLElement,
+): SessionSummary | undefined {
+  if (list === undefined) return undefined
+  const title = findNativeTitleElement(row)?.textContent?.trim()
+  if (title === undefined || !title.startsWith(BRANCH_TITLE_PREFIX)) return undefined
+  const matches = Object.values(list.byId).filter(summary =>
+    summaryLooksLikeBranch(summary) && summary.displayTitle.trim() === title)
+  return matches.length === 1 ? matches[0] : undefined
 }
 
 function decorateNativeConversationNavigation(row: HTMLElement, closeDirect?: () => void): void {
@@ -175,14 +287,29 @@ function nativeSessionId(row: HTMLElement): string | undefined {
     getData: (format: string) => values.get(format) ?? '',
     clearData: (format?: string) => format === undefined ? values.clear() : values.delete(format),
   }
-  // Native rows expose their authoritative Session ID only through the drag payload.
-  const start = new EventConstructor('dragstart', { bubbles: true, cancelable: true })
-  Object.defineProperty(start, 'dataTransfer', { value: dataTransfer })
-  row.dispatchEvent(start)
-  const sessionId = values.get('text/plain')
-  const end = new EventConstructor('dragend', { bubbles: true })
-  Object.defineProperty(end, 'dataTransfer', { value: dataTransfer })
-  row.dispatchEvent(end)
+  let sessionId: string | undefined
+  try {
+    // Native rows expose their authoritative Session ID only through the drag payload.
+    const start = new EventConstructor('dragstart', { bubbles: true, cancelable: true })
+    Object.defineProperty(start, 'dataTransfer', { value: dataTransfer })
+    row.dispatchEvent(start)
+    sessionId = values.get('text/plain')
+  } catch {
+    // The synthetic probe is best-effort; an incompatible host row can still
+    // be matched through the selected-session fallback.
+    sessionId = undefined
+  } finally {
+    // A third-party row listener should not prevent the remaining sidebar rows
+    // from reconciling just because it rejects our non-user drag probe.
+    try {
+      const end = new EventConstructor('dragend', { bubbles: true })
+      Object.defineProperty(end, 'dataTransfer', { value: dataTransfer })
+      row.dispatchEvent(end)
+    } catch {
+      // The synthetic probe is best-effort; the selected-session fallback can
+      // still bind the active row when a host listener refuses dragend.
+    }
+  }
   if (sessionId === undefined || sessionId.length === 0) return undefined
   row.dataset.dshChatroomSessionId = sessionId
   return sessionId
@@ -190,7 +317,14 @@ function nativeSessionId(row: HTMLElement): string | undefined {
 
 function rowContainsTitle(row: HTMLElement, title: string): boolean {
   return [...row.querySelectorAll('span')].some(candidate =>
-    candidate.childElementCount === 0 && candidate.textContent?.trim() === title)
+    !candidate.closest(`[${BRANCH_SURFACE_ATTRIBUTE}]`)
+    && candidate.childElementCount === 0
+    && candidate.textContent?.trim() === title)
+}
+
+function uniquelyTitledRoom(rooms: readonly ChatroomInfo[], row: HTMLElement): ChatroomInfo | undefined {
+  const matches = rooms.filter(room => rowContainsTitle(row, room.title))
+  return matches.length === 1 ? matches[0] : undefined
 }
 
 function takeRoom(rooms: ChatroomInfo[], predicate: (room: ChatroomInfo) => boolean): ChatroomInfo | undefined {
@@ -218,6 +352,72 @@ function roomAvatars(room: ChatroomInfo, snapshot: ChatroomView): readonly Chatr
     }))
   }
   return []
+}
+
+function resolveBranch(
+  row: HTMLElement,
+  sessionId: string | undefined,
+  summary: SessionSummary | undefined,
+  sessionList: SidebarSessionList | undefined,
+  snapshot: ChatroomView,
+  room: ChatroomInfo | undefined,
+): BranchRowFacts | undefined {
+  // A real room whose title happens to start with “分支：” must remain a room;
+  // an authoritative room/session match wins over the title heuristic.
+  if (room !== undefined || (sessionId !== undefined && snapshot.rooms.some(candidate => candidate.sessionId === sessionId))) {
+    return undefined
+  }
+  const rowTitle = findNativeTitleElement(row)?.textContent?.trim()
+  const summaryTitle = summary?.displayTitle.trim()
+  const idLooksLikeBranch = sessionId?.startsWith(BRANCH_SESSION_PREFIX) === true
+  const titleLooksLikeBranch = summaryTitle?.startsWith(BRANCH_TITLE_PREFIX) === true
+    || rowTitle?.startsWith(BRANCH_TITLE_PREFIX) === true
+  // Once the host has a summary, a user-renamed ordinary Session may also
+  // start with “分支：”. Require the durable branch id/parent signal in that
+  // case; the title-only fallback is reserved for the loading gap.
+  if (summary !== undefined && !summaryLooksLikeBranch(summary) && !idLooksLikeBranch) return undefined
+  // A keyed native row can briefly be reused while its Session summary is
+  // loading. Do not let a stale cached branch id repaint an ordinary title.
+  const summaryIsBranch = summary !== undefined && summaryLooksLikeBranch(summary)
+  if (idLooksLikeBranch && rowTitle !== undefined && !rowTitle.startsWith(BRANCH_TITLE_PREFIX)
+    && !summaryIsBranch) {
+    if (row.dataset.dshChatroomSessionId === sessionId) delete row.dataset.dshChatroomSessionId
+    return undefined
+  }
+  if (!idLooksLikeBranch && !titleLooksLikeBranch) return undefined
+  const displayTitle = summaryTitle ?? rowTitle ?? BRANCH_TITLE_PREFIX
+  const topic = branchTopic(displayTitle)
+  const preview = sessionId === undefined
+    ? undefined
+    : (snapshot.threadPreviews ?? []).find(candidate => candidate.thread.sessionId === sessionId)
+  const previewRoom = preview === undefined
+    ? undefined
+    : snapshot.rooms.find(room => room.id === preview.thread.roomId)
+  const parentSessionId = summary?.parentId === undefined
+    ? (preview?.thread.root.sourceSessionId ?? previewRoom?.sessionId)
+    : String(summary.parentId)
+  const parentSummary = sessionSummary(sessionList, parentSessionId)
+  const parentRoom = parentSessionId === undefined
+    ? undefined
+    : snapshot.rooms.find(room => room.sessionId === parentSessionId)
+  const parentTitle = parentRoom?.title ?? parentSummary?.displayTitle ?? previewRoom?.title
+  const replyCount = preview !== undefined && preview.totalMessages > 0
+    ? preview.totalMessages
+    : undefined
+  return { sessionId, displayTitle, topic, parentSessionId, parentTitle, replyCount }
+}
+
+function summaryLooksLikeBranch(summary: SessionSummary): boolean {
+  return String(summary.id).startsWith(BRANCH_SESSION_PREFIX)
+    || (summary.parentId !== undefined && summary.displayTitle.trim().startsWith(BRANCH_TITLE_PREFIX))
+}
+
+function branchTopic(title: string): string {
+  const normalized = title.trim()
+  const topic = normalized.startsWith(BRANCH_TITLE_PREFIX)
+    ? normalized.slice(BRANCH_TITLE_PREFIX.length).trim()
+    : normalized
+  return topic === '' ? '未命名主题' : topic
 }
 
 function decorateRoomRow(
@@ -269,6 +469,202 @@ function decorateRoomRow(
   row.prepend(avatar)
 }
 
+function decorateBranchRow(row: HTMLElement, facts: BranchRowFacts): void {
+  row.dataset.dshChatroomBranchRow = ''
+  if (facts.sessionId !== undefined) row.dataset.dshChatroomBranchSessionId = facts.sessionId
+  else delete row.dataset.dshChatroomBranchSessionId
+  if (facts.parentSessionId !== undefined) row.dataset.dshChatroomBranchParentSessionId = facts.parentSessionId
+  else delete row.dataset.dshChatroomBranchParentSessionId
+  row.dataset.dshChatroomBranchTopic = facts.topic
+  if (facts.parentTitle === undefined) delete row.dataset.dshChatroomBranchParentTitle
+  else row.dataset.dshChatroomBranchParentTitle = facts.parentTitle
+  if (facts.replyCount === undefined) row.removeAttribute(BRANCH_REPLIES_ATTRIBUTE)
+  else row.setAttribute(BRANCH_REPLIES_ATTRIBUTE, String(facts.replyCount))
+
+  const parentLabel = facts.parentTitle === undefined ? '来自群聊' : `来自 ${facts.parentTitle}`
+  const replyLabel = facts.replyCount === undefined ? '' : ` · ${facts.replyCount} 条回复`
+  const label = facts.parentTitle === undefined && facts.replyCount === undefined
+    ? `分支会话：${facts.topic}`
+    : `分支会话：${facts.topic}，${parentLabel}${replyLabel}`
+  rememberOriginalAttributes(row, label)
+  row.setAttribute('aria-label', label)
+  row.setAttribute('title', label)
+
+  const titleElement = findNativeTitleElement(row, facts.displayTitle)
+  titleElement?.setAttribute(BRANCH_NATIVE_TITLE_ATTRIBUTE, '')
+  let marker = row.querySelector<HTMLElement>(`:scope > [${BRANCH_MARKER_ATTRIBUTE}]`)
+  if (marker === null) {
+    marker = row.ownerDocument.createElement('span')
+    marker.setAttribute(BRANCH_MARKER_ATTRIBUTE, '')
+    marker.setAttribute('aria-hidden', 'true')
+    marker.textContent = '↳'
+  }
+  let surface = row.querySelector<HTMLElement>(`:scope > [${BRANCH_SURFACE_ATTRIBUTE}]`)
+  if (surface === null) {
+    surface = row.ownerDocument.createElement('span')
+    surface.setAttribute(BRANCH_SURFACE_ATTRIBUTE, '')
+    surface.setAttribute('aria-hidden', 'true')
+  }
+  const signature = `${facts.topic}|${facts.parentTitle ?? ''}|${facts.replyCount ?? ''}`
+  if (surface.dataset.signature !== signature) {
+    surface.replaceChildren()
+    const heading = row.ownerDocument.createElement('span')
+    heading.setAttribute(BRANCH_HEADING_ATTRIBUTE, '')
+    const badge = row.ownerDocument.createElement('span')
+    badge.setAttribute(BRANCH_BADGE_ATTRIBUTE, '')
+    badge.textContent = '分支'
+    const topic = row.ownerDocument.createElement('span')
+    topic.setAttribute(BRANCH_TOPIC_ATTRIBUTE, '')
+    topic.textContent = facts.topic
+    heading.append(badge, topic)
+    const parent = row.ownerDocument.createElement('span')
+    parent.setAttribute(BRANCH_PARENT_ATTRIBUTE, '')
+    parent.textContent = `${parentLabel}${replyLabel}`
+    surface.append(heading, parent)
+    surface.dataset.signature = signature
+  }
+  if (titleElement !== undefined) {
+    const alreadyPositioned = titleElement.previousElementSibling === surface
+      && surface.previousElementSibling === marker
+    if (!alreadyPositioned) titleElement.before(marker, surface)
+  } else if (marker.parentElement !== row || surface.parentElement !== row) {
+    row.append(marker, surface)
+  }
+}
+
+function decorateBranchParent(row: HTMLElement, roomTitle: string, count: number): void {
+  if (count === 0) {
+    clearBranchParent(row)
+    return
+  }
+  row.dataset.dshChatroomHasBranches = ''
+  row.dataset.dshChatroomBranchCount = String(count)
+  let indicator = row.querySelector<HTMLElement>(`:scope > [${BRANCH_COUNT_ATTRIBUTE}]`)
+  if (indicator === null) {
+    indicator = row.ownerDocument.createElement('span')
+    indicator.setAttribute(BRANCH_COUNT_ATTRIBUTE, '')
+    const titleElement = findNativeTitleElement(row, roomTitle)
+    if (titleElement === undefined) row.append(indicator)
+    else titleElement.after(indicator)
+  }
+  const label = `分支 ${count}`
+  // Avoid replacing the text node on every observer pass; the sidebar observer
+  // watches child-list mutations and would otherwise schedule itself forever.
+  if (indicator.textContent !== label) indicator.textContent = label
+  indicator.setAttribute('title', `${count} 个分支`)
+  indicator.setAttribute('aria-label', `${count} 个分支`)
+}
+
+function clearBranchParent(row: HTMLElement): void {
+  delete row.dataset.dshChatroomHasBranches
+  delete row.dataset.dshChatroomBranchCount
+  row.querySelector(`:scope > [${BRANCH_COUNT_ATTRIBUTE}]`)?.remove()
+}
+
+function findNativeTitleElement(row: HTMLElement, expectedTitle?: string): HTMLElement | undefined {
+  const candidates = [...row.querySelectorAll<HTMLElement>('span')].filter(candidate =>
+    !candidate.closest(`[${BRANCH_SURFACE_ATTRIBUTE}]`)
+    && !candidate.hasAttribute(BRANCH_MARKER_ATTRIBUTE)
+    && !candidate.hasAttribute(BRANCH_COUNT_ATTRIBUTE)
+    && candidate.childElementCount === 0)
+  if (expectedTitle !== undefined) {
+    const exact = candidates.find(candidate => candidate.textContent?.trim() === expectedTitle)
+    if (exact !== undefined) return exact
+  }
+  return candidates.find(candidate => candidate.textContent?.trim().startsWith(BRANCH_TITLE_PREFIX))
+    ?? candidates.find(candidate => candidate.dataset.dshChatroomNativeBranchTitle !== undefined)
+    ?? candidates
+      .filter(candidate => {
+        const text = candidate.textContent?.trim() ?? ''
+        return text !== '' && !looksLikeTimeLabel(text) && text !== '●'
+      })
+      .sort((left, right) => (right.textContent?.trim().length ?? 0) - (left.textContent?.trim().length ?? 0))[0]
+}
+
+function looksLikeTimeLabel(value: string): boolean {
+  return /^(?:刚刚|现在|now|\d+\s*(?:秒|分钟|小时|天|周|月|年|s|min|h|d|w))$/iu.test(value)
+}
+
+function rememberOriginalAttributes(row: HTMLElement, appliedLabel: string): void {
+  const original = originalRowAttributes.get(row)
+  if (original === undefined) {
+    originalRowAttributes.set(row, {
+      ariaLabel: row.getAttribute('aria-label'),
+      title: row.getAttribute('title'),
+      appliedAriaLabel: appliedLabel,
+      appliedTitle: appliedLabel,
+    })
+    return
+  }
+  // React may update native accessibility attributes while the plugin owns the
+  // branch presentation. Treat a value that no longer matches our last write
+  // as the new host value, so cleanup never restores stale metadata.
+  const ariaLabel = row.getAttribute('aria-label') === original.appliedAriaLabel
+    ? original.ariaLabel
+    : row.getAttribute('aria-label')
+  const title = row.getAttribute('title') === original.appliedTitle
+    ? original.title
+    : row.getAttribute('title')
+  originalRowAttributes.set(row, {
+    ariaLabel,
+    title,
+    appliedAriaLabel: appliedLabel,
+    appliedTitle: appliedLabel,
+  })
+}
+
+function clearBranchRow(row: HTMLElement): void {
+  delete row.dataset.dshChatroomBranchRow
+  delete row.dataset.dshChatroomBranchSessionId
+  delete row.dataset.dshChatroomBranchParentSessionId
+  delete row.dataset.dshChatroomBranchTopic
+  delete row.dataset.dshChatroomBranchParentTitle
+  row.removeAttribute(BRANCH_REPLIES_ATTRIBUTE)
+  row.querySelector(`:scope > [${BRANCH_MARKER_ATTRIBUTE}]`)?.remove()
+  row.querySelector(`:scope > [${BRANCH_SURFACE_ATTRIBUTE}]`)?.remove()
+  for (const title of row.querySelectorAll(`[${BRANCH_NATIVE_TITLE_ATTRIBUTE}]`)) {
+    title.removeAttribute(BRANCH_NATIVE_TITLE_ATTRIBUTE)
+  }
+  const original = originalRowAttributes.get(row)
+  if (original !== undefined) {
+    if (row.getAttribute('aria-label') === original.appliedAriaLabel) {
+      if (original.ariaLabel === null) row.removeAttribute('aria-label')
+      else row.setAttribute('aria-label', original.ariaLabel)
+    }
+    if (row.getAttribute('title') === original.appliedTitle) {
+      if (original.title === null) row.removeAttribute('title')
+      else row.setAttribute('title', original.title)
+    }
+    originalRowAttributes.delete(row)
+  }
+}
+
+function clearRoomDecorations(row: HTMLElement): void {
+  delete row.dataset.dshChatroomRoomRow
+  delete row.dataset.dshChatroomRoomId
+  delete row.dataset.pinned
+  clearBranchParent(row)
+  row.querySelector(`:scope > [${GROUP_AVATAR_ATTRIBUTE}]`)?.remove()
+}
+
+function clearRoomRow(row: HTMLElement): void {
+  clearBranchRow(row)
+  clearRoomDecorations(row)
+  delete row.dataset.dshChatroomSessionId
+  delete row.dataset.dshChatroomBranchSessionId
+  row.style.removeProperty('order')
+}
+
+function clearCategorizedRow(row: HTMLElement): void {
+  clearRoomRow(row)
+  row.removeAttribute(CATEGORY_ATTRIBUTE)
+  row.removeAttribute(BRANCH_ROW_ATTRIBUTE)
+  row.querySelector(`:scope > [${SOLO_AVATAR_ATTRIBUTE}]`)?.remove()
+  const wrapper = row.parentElement
+  wrapper?.removeAttribute(CATEGORY_WRAPPER_ATTRIBUTE)
+  wrapper?.style.removeProperty('order')
+}
+
 function setRowCategory(row: HTMLElement, category: 'group' | 'solo'): void {
   row.setAttribute(CATEGORY_ATTRIBUTE, category)
   const root = row.closest<HTMLElement>('[role="tree"]')
@@ -287,24 +683,6 @@ function decorateSoloRow(row: HTMLElement, order: number): void {
   avatar.setAttribute('aria-hidden', 'true')
   avatar.textContent = '✦'
   row.prepend(avatar)
-}
-
-function clearRoomRow(row: HTMLElement): void {
-  delete row.dataset.dshChatroomRoomRow
-  delete row.dataset.dshChatroomRoomId
-  delete row.dataset.pinned
-  row.style.removeProperty('order')
-  row.querySelector(`:scope > [${GROUP_AVATAR_ATTRIBUTE}]`)?.remove()
-}
-
-function clearCategorizedRow(row: HTMLElement): void {
-  clearRoomRow(row)
-  row.removeAttribute(CATEGORY_ATTRIBUTE)
-  row.removeAttribute(BRANCH_ROW_ATTRIBUTE)
-  row.querySelector(`:scope > [${SOLO_AVATAR_ATTRIBUTE}]`)?.remove()
-  const wrapper = row.parentElement
-  wrapper?.removeAttribute(CATEGORY_WRAPPER_ATTRIBUTE)
-  wrapper?.style.removeProperty('order')
 }
 
 function sidebarTreeRoot(documentRoot: Document, rows: readonly HTMLElement[]): HTMLElement | undefined {
@@ -332,7 +710,7 @@ function reconcileWorkspaceCategories(
   const soloCount = rows.filter(row => row.getAttribute(CATEGORY_ATTRIBUTE) === 'solo').length
   reconcileCategoryHeader(primary, 'group', '群聊', groupCount, -11_000)
   reconcileCategoryHeader(primary, 'solo', 'Solo', soloCount, -7_000)
-  const peers = directDirectoryPeers(snapshot.directPeers, snapshot.directConversations)
+  const peers = directDirectoryPeers(snapshot.directPeers ?? [], snapshot.directConversations ?? [])
   reconcileCategoryHeader(primary, 'direct', '私聊', peers.length, -3_000)
   reconcileDirectRows(primary, peers, snapshot, openDirect)
 }
