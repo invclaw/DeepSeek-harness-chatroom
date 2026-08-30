@@ -265,10 +265,6 @@ function ThreadPanel(props: ChatroomPanelsProps & {
   const [preparedAttempt, setPreparedAttempt] = useState(-1)
   const [ready, setReady] = useState(false)
   const [compatibilityMode, setCompatibilityMode] = useState(branchFrameCompatibilityPreferred)
-  const frameSeed = useMemo(
-    () => parentSessionId === undefined ? undefined : { thread, parentSessionId },
-    [parentSessionId, thread.id, thread.sessionId, thread.roomId],
-  )
   useLayoutEffect(() => {
     if (parentSessionId === undefined) return
     if (compatibilityMode) {
@@ -336,11 +332,10 @@ function ThreadPanel(props: ChatroomPanelsProps & {
       globalThis.clearTimeout(timer)
     }
   }, [attempt, compatibilityMode, parentSessionId, thread.id, thread.root.text, thread.sessionId])
-  const seed = frameSeed
   const summary = branchSummary(thread.root.text)
   const frameUrl = parentSessionId === undefined
     ? undefined
-    : branchFrameUrl(seed?.thread ?? thread, seed?.parentSessionId ?? parentSessionId, `${frameInstance}:${attempt}`)
+    : branchFrameUrl(thread, parentSessionId, `${frameInstance}:${attempt}`)
   return (
     <aside
       className="dsh-chatroom-thread-panel"
