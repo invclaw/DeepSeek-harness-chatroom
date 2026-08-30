@@ -12,6 +12,21 @@ export const CHATROOM_STYLES = `
 }
 [role="option"][id^="dsh-slash-option-AI 助手-"] > span:nth-child(2) { color: var(--brand-primary, #4f7cff); font-weight: 600; }
 [role="listbox"] [data-source="群聊成员"] { margin-top: 2px; border-top: 1px solid var(--border-primary, #e5e7eb); }
+[role="option"][id^="dsh-slash-option-群聊成员-"] > .dsh-chatroom-native-mention-avatar {
+  position: relative;
+  overflow: hidden;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 8px;
+}
+[role="option"][id^="dsh-slash-option-群聊成员-"] > .dsh-chatroom-native-mention-avatar > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 .dsh-chatroom-dialog-layer {
   pointer-events: auto;
   position: fixed;
@@ -1125,7 +1140,6 @@ html[data-dsh-chatroom-active] [data-dsh-chatroom-native-actions] {
   box-shadow: 0 5px 18px rgb(15 23 42 / 6%);
 }
 
-.dsh-chatroom-reply-preview,
 .dsh-chatroom-pending-files {
   display: flex;
   align-items: center;
@@ -1133,9 +1147,21 @@ html[data-dsh-chatroom-active] [data-dsh-chatroom-native-actions] {
   gap: 7px;
 }
 
-.dsh-chatroom-reply-preview > span { display: flex; flex: 1; flex-direction: column; min-width: 0; }
-.dsh-chatroom-reply-preview strong { font-size: 12px; }
-.dsh-chatroom-reply-preview small { overflow: hidden; color: var(--text-secondary, #6b7280); text-overflow: ellipsis; white-space: nowrap; }
+.dsh-chatroom-reply-preview {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin: 8px 12px 0;
+  border-radius: 8px;
+  background: var(--bg-secondary, #f3f4f6);
+  color: var(--text-secondary, #6b7280);
+  padding: 6px 9px;
+}
+
+.dsh-chatroom-reply-preview > span { display: flex; flex: 1; align-items: baseline; min-width: 0; white-space: nowrap; }
+.dsh-chatroom-reply-preview strong { flex: none; font-size: 12px; }
+.dsh-chatroom-reply-preview small { overflow: hidden; color: inherit; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .dsh-chatroom-reply-preview button,
 .dsh-chatroom-pending-file button { border: 0; background: transparent; color: var(--text-secondary, #6b7280); font: inherit; cursor: pointer; }
 

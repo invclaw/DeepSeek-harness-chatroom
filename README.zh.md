@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.1.16" src="https://img.shields.io/badge/version-1.1.16-4f6bff">
+    <img alt="版本 1.1.17" src="https://img.shields.io/badge/version-1.1.17-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -73,8 +73,8 @@
 
 ### 消息与富媒体
 
-- IOA、OIDC 等企业身份提供方返回的真实头像会用于消息、成员目录、邀请列表、私聊和群头像；没有企业头像或图片加载失败时，稳定降级为账号对应的卡通头像。
-- 常驻时间戳、回复引用、表情输入、消息贴表情、Markdown、图片预览以及经过认证的文件上传下载。
+- IOA、OIDC 等企业身份提供方返回的真实头像会用于消息、成员目录、原生 `@` 候选、邀请列表、私聊和群头像；没有企业头像或图片加载失败时，稳定降级为账号对应的卡通头像。
+- 常驻时间戳、输入框内的紧凑回复引用、表情输入、消息贴表情、Markdown、图片预览以及经过认证的文件上传下载。
 - 纯图片和纯文件直接作为消息显示，不额外生成“发送了图片/文件”的占位气泡；超大图片写入 Harness 附件存储前会自动缩放。
 - 回复、点赞、分支和转发可直接点击；复制、完整表情面板、多选保留在 `…`/右键菜单，移动端使用底部操作面板。
 - 合并转发由服务端从权威 Session 事件重建，保留文本/Markdown、图片、文件、引用、嵌套转发和表情计数。
@@ -89,6 +89,7 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.1.17** — 把紧凑回复引用收进 Harness 原生输入框，并在原生成员提及候选中显示 IOA/OIDC 企业头像；图片缺失或加载失败时继续降级为卡通头像。
 - **1.1.16** — 以 DeepSeek Harness 0.1.1-rc.2 为主要兼容基线，新增群聊、Solo、私聊分类导航，支持带文件和表情的原生私聊、新会话模式切换、群聊置顶、AI 自动唤起设置与 AI/成员分组提及，并保留 1.1.15 的 IOA 头像和原生 Session 绑定修复。
 - **1.1.15** — 增加分支主题与盒模型的 Chromium 回归门禁，并避免移动端全宽分支面板超出视口。
 - **1.1.14** — 让 Harness 消息操作行随 AI 分支摘要自动增高，避免摘要与吸底输入框重叠。

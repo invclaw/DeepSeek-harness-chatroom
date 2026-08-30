@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ComponentType } from 'react'
+import type { ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatroomReplyReference } from '../types.js'
 import type { ChatroomAgentTarget, ChatroomClientStore, ChatroomView } from './store.js'
@@ -14,6 +16,10 @@ interface ChatroomComposerInjected {
 
 type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomComposerInjected
 type ComposerDockProps = PropsRuntime<'conversation.input.dock'> & ChatroomComposerInjected
+type ComposerAttachmentsInjected = Pick<ChatroomComposerInjected, 'useChatroom' | 'clearReply' | 'resolveTarget'> & {
+  nativeAttachmentsView: ComponentType<ComposerAttachmentsProps>
+}
+export type ChatroomComposerAttachmentsProps = ComposerAttachmentsProps & ComposerAttachmentsInjected
 
 const MESSAGE_EMOJIS = ['😀', '😄', '😂', '🥰', '😍', '🤔', '😮', '😭', '😡', '👍', '👏', '🙏', '🎉', '❤️', '🔥', '✨', '✅', '👀'] as const
 
@@ -88,18 +94,17 @@ export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
   )
 }
 
-/** Reply quote and pending file rail above the native composer. */
+/** Pending file rail above the native composer. */
 export function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | null {
   const room = props.useChatroom(snapshot => snapshot)
   const target = props.resolveTarget(String(props.sessionId))
   const active = target?.room
   if (active === undefined || room.composerRoomId !== active.id) return null
   const hasFiles = room.pendingFiles.length > 0
-  if (!hasFiles && room.reply === undefined && room.composerError === undefined) return null
+  if (!hasFiles && room.composerError === undefined) return null
   const canSendFilesOnly = hasFiles && props.input.draft.trim() === '' && props.input.imageIds.length === 0
   return (
     <div className="dsh-chatroom-composer-dock" data-testid="chatroom-composer-dock">
-      {room.reply !== undefined && <ReplyPreview reply={room.reply} clear={() => { props.clearReply(active.id) }} />}
       {hasFiles && (
         <div className="dsh-chatroom-pending-files">
           {room.pendingFiles.map(item => (
@@ -128,14 +133,32 @@ export function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | nu
   )
 }
 
+/** Native attachment renderer plus an in-card reply preview for shared sessions. */
+export function ChatroomComposerAttachments(props: ChatroomComposerAttachmentsProps): JSX.Element {
+  const room = props.useChatroom(snapshot => snapshot)
+  const target = props.resolveTarget(String(props.sessionId))
+  const active = target?.room
+  const activeRoomId = active?.id
+  const NativeAttachmentsView = props.nativeAttachmentsView
+  const reply = activeRoomId !== undefined && room.composerRoomId === activeRoomId ? room.reply : undefined
+  return (
+    <>
+      {reply !== undefined && activeRoomId !== undefined && (
+        <ReplyPreview reply={reply} clear={() => { props.clearReply(activeRoomId) }} />
+      )}
+      <NativeAttachmentsView {...props} />
+    </>
+  )
+}
+
 function ReplyPreview({ reply, clear }: { reply: ChatroomReplyReference; clear(): void }): JSX.Element {
   return (
     <div className="dsh-chatroom-reply-preview">
+      <button type="button" aria-label="取消回复" onClick={clear}>×</button>
       <span>
-        <strong>回复 {reply.displayName}</strong>
+        <strong>回复 {reply.displayName}：</strong>
         <small>{reply.text}</small>
       </span>
-      <button type="button" aria-label="取消回复" onClick={clear}>×</button>
     </div>
   )
 }

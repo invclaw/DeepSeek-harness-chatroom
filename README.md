@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.1.16" src="https://img.shields.io/badge/version-1.1.16-4f6bff">
+    <img alt="Version 1.1.17" src="https://img.shields.io/badge/version-1.1.17-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -73,8 +73,8 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 
 ### Messaging and media
 
-- Verified profile images from IOA, OIDC, and other enterprise providers appear in messages, member directories, invite lists, private chat, and room collages. Missing or failed profile images fall back to the account's stable cartoon avatar.
-- Timestamps, reply quotes, emoji insertion, message reactions, Markdown, image previews, and authenticated file upload/download.
+- Verified profile images from IOA, OIDC, and other enterprise providers appear in messages, member directories, the native `@` menu, invite lists, private chat, and room collages. Missing or failed profile images fall back to the account's stable cartoon avatar.
+- Timestamps, compact in-composer reply quotes, emoji insertion, message reactions, Markdown, image previews, and authenticated file upload/download.
 - Pure image and file messages render directly—no extra “sent an image/file” placeholder bubble. Oversized images are resized before entering Harness attachment storage.
 - Reply, like, branch, and forward are available from the message row; copy, reaction picker, and multi-select remain available from the overflow/context menu, with a mobile bottom sheet.
 - Merged forwarding is rebuilt from authoritative Session events and retains text/Markdown, media, quotes, nested forwards, and reaction counts.
@@ -89,6 +89,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.1.17** — keep compact reply quotes inside the native composer card and show verified IOA/OIDC profile images in native member mention candidates, with cartoon fallbacks.
 - **1.1.16** — target DeepSeek Harness 0.1.1-rc.2, add Group/Solo/Direct navigation, native private messaging with files and emoji, streamlined new-Session mode selection, room pinning, automatic AI wake-up controls, and distinct AI/member mention groups while retaining the 1.1.15 IOA profile and native Session fixes.
 - **1.1.15** — add a Chromium regression gate for branch theme and geometry, and keep the full-width mobile branch panel inside its viewport.
 - **1.1.14** — make the Harness action row expand around injected AI branch activity instead of letting the summary overlap the sticky composer.

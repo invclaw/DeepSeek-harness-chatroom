@@ -3,7 +3,7 @@
 import type { ComponentType } from 'react'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { ClientContext, ISessions, IWorkspaces, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
-import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ChatNodeViewProps, ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -12,12 +12,13 @@ import { ChatroomEntry } from './ChatroomEntry.js'
 import { ChatroomSettingsSection } from './ChatroomAccountPanels.js'
 import { ChatroomAssistantReplyAction } from './ChatroomAssistantReplyAction.js'
 import { ChatroomAssistantNodeView } from './ChatroomAssistantNodeView.js'
-import { ChatroomComposerDock, ChatroomFileAction } from './ChatroomComposer.js'
+import { ChatroomComposerAttachments, ChatroomComposerDock, ChatroomFileAction } from './ChatroomComposer.js'
 import {
   ChatroomSteeringMessageNodeView,
   ChatroomUserMessageNodeView,
 } from './ChatroomMessageNodeView.js'
 import { installNativePromptIdentity } from './native-prompt.js'
+import { installNativeMentionAvatarImages } from './mention-avatars.js'
 import { installFreshSessionStart } from './fresh-session.js'
 import { NewGroupSetupDock } from './NewGroupSetupDock.js'
 import { installRemoteConfigurationApi } from './remote-configuration.js'
@@ -83,6 +84,7 @@ export function apply(ctx: ClientContext): void {
     const restoreSettingsMirror = activateRemoteSettingsMirror(ctx.get('settingsScope'))
     const restorePrompt = installNativePromptIdentity(connection.api, store)
     const restoreSidebarRoomRows = installSidebarRoomRows(store, sessions)
+    const restoreMentionAvatars = installNativeMentionAvatarImages(store)
     let activeBranchFrame = branchFrame
     let branchStaged = false
     const stageBranch = () => {
@@ -143,6 +145,7 @@ export function apply(ctx: ClientContext): void {
       unsubscribeSessions()
       globalThis.removeEventListener('message', receiveBranchSwitch)
       restorePrompt()
+      restoreMentionAvatars()
       restoreSidebarRoomRows()
       restoreSettingsMirror()
       restoreConfiguration()
@@ -287,6 +290,23 @@ export function apply(ctx: ClientContext): void {
       resolveTarget: store.agentTargetForSession.bind(store),
     }),
   }, ChatroomComposerDock))
+
+  ctx.slots.inject('conversation.input.attachments', () => mountAfterNativeMessageView(
+    () => ctx.slots.entries('conversation.input.attachments').find(entry =>
+      (entry.options.priority ?? 0) === 0)?.component as ComponentType<ComposerAttachmentsProps> | undefined,
+    listener => ctx.slots.subscribe('conversation.input.attachments', listener),
+    nativeAttachmentsView => ctx.slots.register({
+      name: 'conversation.input.attachments',
+      priority: -10,
+      locale: 'conversation',
+      inject: () => ({
+        hooks: { chatroom: store },
+        nativeAttachmentsView,
+        clearReply: store.clearReply,
+        resolveTarget: store.agentTargetForSession.bind(store),
+      }),
+    }, ChatroomComposerAttachments),
+  ))
 
   ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({
     name: 'conversation.chat.assistant-actions',
