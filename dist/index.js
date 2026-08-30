@@ -1676,6 +1676,7 @@ var ChatroomRuntime = class {
   threadStates = /* @__PURE__ */ new Map();
   notificationClients = /* @__PURE__ */ new Set();
   ignoredAssistantMessageIds = /* @__PURE__ */ new Set();
+  chatroomAgentContexts = /* @__PURE__ */ new WeakSet();
   ready = false;
   stopping = false;
   /** Public metadata for the configured legacy room. */
@@ -3095,7 +3096,10 @@ var ChatroomRuntime = class {
   async acquireAgent(sessionId, parentSessionId) {
     const id = SessionId(sessionId);
     const live = this.ctx.agents.get(id);
-    if (live !== void 0) return borrowAgent(live);
+    if (live !== void 0) {
+      this.augmentChatroomAgentContext(live.ctx, sessionId);
+      return borrowAgent(live);
+    }
     const persisted = (await this.ctx.sessionPersistence.list()).some((header) => header.id === id);
     const model = this.ctx.agentDefaultModel.currentSelection();
     const agentOptions = { provider: model.provider, model: model.model };
@@ -3112,7 +3116,10 @@ var ChatroomRuntime = class {
         }));
       } catch (error) {
         const raced = this.ctx.agents.get(id);
-        if (raced !== void 0) return borrowAgent(raced);
+        if (raced !== void 0) {
+          this.augmentChatroomAgentContext(raced.ctx, sessionId);
+          return borrowAgent(raced);
+        }
         throw error;
       }
     }
@@ -3131,12 +3138,20 @@ var ChatroomRuntime = class {
       }));
     } catch (error) {
       const raced = this.ctx.agents.get(id);
-      if (raced !== void 0) return borrowAgent(raced);
+      if (raced !== void 0) {
+        this.augmentChatroomAgentContext(raced.ctx, sessionId);
+        return borrowAgent(raced);
+      }
       throw error;
     }
   }
   async setupAgentContext(agentCtx, agentPreset, sessionId) {
     await this.ctx.agentPresets.mount(agentCtx, agentPreset);
+    this.augmentChatroomAgentContext(agentCtx, sessionId);
+  }
+  augmentChatroomAgentContext(agentCtx, sessionId) {
+    if (this.chatroomAgentContexts.has(agentCtx)) return;
+    this.chatroomAgentContexts.add(agentCtx);
     registerChatroomAgentTools(agentCtx, this, sessionId);
     agentCtx.systemPrompt.section({
       name: "chatroom:main-agent",

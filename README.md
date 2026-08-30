@@ -90,6 +90,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.2.3** — attach the room capability and action tools when a shared Session is already running before the chatroom adopts it, so native Harness-restored Agents receive the same collaboration tools as plugin-created Agents.
 - **1.2.0** — serialize auto-reply settings with message admission, wake the Agent deterministically for direct AI addressing, add durable sender-only recall, remove the redundant private-chat Settings entry, and expose the complete room action set as model-callable Agent tools.
 - **1.1.17** — keep compact reply quotes inside the native composer card and show verified IOA/OIDC profile images in native member mention candidates, with cartoon fallbacks.
 - **1.1.16** — target DeepSeek Harness 0.1.1-rc.2, add Group/Solo/Direct navigation, native private messaging with files and emoji, streamlined new-Session mode selection, room pinning, automatic AI wake-up controls, and distinct AI/member mention groups while retaining the 1.1.15 IOA profile and native Session fixes.

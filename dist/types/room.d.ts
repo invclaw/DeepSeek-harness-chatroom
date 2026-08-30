@@ -34,6 +34,7 @@ export declare class ChatroomRuntime {
     private readonly threadStates;
     private readonly notificationClients;
     private readonly ignoredAssistantMessageIds;
+    private readonly chatroomAgentContexts;
     private ready;
     private stopping;
     constructor(ctx: Context, config: Config);
@@ -185,6 +186,7 @@ export declare class ChatroomRuntime {
     private ensureRoomTitle;
     private acquireAgent;
     private setupAgentContext;
+    private augmentChatroomAgentContext;
     /** Ensure one shared Session uses native Workspace navigation. */
     private attachWorkspace;
     private durableContent;

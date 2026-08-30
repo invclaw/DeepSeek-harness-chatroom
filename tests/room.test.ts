@@ -137,6 +137,7 @@ describe('ChatroomRuntime', () => {
       id: 'native-session-1',
       options: { provider: 'deepseek', model: 'chat' },
       session: { events: [], append: vi.fn() },
+      ctx: harness.makeAgentContext(),
       followup: vi.fn(),
       steer: vi.fn(),
     } as never)
@@ -171,6 +172,39 @@ describe('ChatroomRuntime', () => {
     )
     expect(harness.agents).toHaveLength(2)
     expect(harness.agents[1]?.session.append).not.toHaveBeenCalled()
+    await runtime.stop()
+  })
+
+  it('adds chatroom tools to a live Agent restored by Harness before room adoption', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    harness.registeredTools.length = 0
+    harness.promptSections.length = 0
+    const presetMounts = vi.mocked(harness.ctx.agentPresets.mount).mock.calls.length
+    const agentCtx = harness.makeAgentContext()
+    harness.agents.push({
+      id: 'native-live-session',
+      options: { provider: 'deepseek', model: 'chat' },
+      session: { id: 'native-live-session', events: [], append: vi.fn() },
+      ctx: agentCtx,
+      followup: vi.fn(),
+      steer: vi.fn(),
+    } as never)
+    vi.mocked(harness.ctx.agents.get).mockImplementation(id =>
+      harness.agents.find(agent => String(agent.id) === String(id)))
+
+    await runtime.ensureSessionRoom('native-live-session', '原生会话', {
+      participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale',
+    })
+
+    expect(harness.registeredTools.map(tool => tool.name)).toEqual([
+      'chatroom_capabilities', 'chatroom_action',
+    ])
+    expect(harness.promptSections.map(section => section.name)).toEqual([
+      'chatroom:main-agent', 'chatroom:collaboration-tools',
+    ])
+    expect(harness.ctx.agentPresets.mount).toHaveBeenCalledTimes(presetMounts)
     await runtime.stop()
   })
 
@@ -832,6 +866,7 @@ function fakeHarness(): {
   llmStream: ReturnType<typeof vi.fn>
   promptSections: Array<{ name: string; order: number; text: string | (() => string) }>
   registeredTools: ToolDefinition[]
+  makeAgentContext(): Context
 } {
   const tables = new Map<string, MemoryTable<string, unknown>>()
   const agents: Array<Agent & {
@@ -842,6 +877,20 @@ function fakeHarness(): {
   const attached: string[] = []
   const promptSections: Array<{ name: string; order: number; text: string | (() => string) }> = []
   const registeredTools: ToolDefinition[] = []
+  const makeAgentContext = (): Context => ({
+    tools: {
+      register: vi.fn((definition: ToolDefinition) => {
+        registeredTools.push(definition)
+        return () => undefined
+      }),
+    },
+    systemPrompt: {
+      section: vi.fn((section: { name: string; order: number; text: string | (() => string) }) => {
+        promptSections.push(section)
+        return () => undefined
+      }),
+    },
+  }) as unknown as Context
   const savedImages = vi.fn(async (inputs: Array<{ data: Uint8Array; mediaType: string; name?: string }>) =>
     inputs.map((input, index) => ({
       attachmentId: `attachment-${index}`,
@@ -873,20 +922,7 @@ function fakeHarness(): {
     agents: {
       get: vi.fn(() => undefined),
       create: vi.fn(async ({ sessionId, setup }: { sessionId: string; setup?: (ctx: Context) => Promise<void> }) => {
-        const agentCtx = {
-          tools: {
-            register: vi.fn((definition: ToolDefinition) => {
-              registeredTools.push(definition)
-              return () => undefined
-            }),
-          },
-          systemPrompt: {
-            section: vi.fn((section: { name: string; order: number; text: string | (() => string) }) => {
-              promptSections.push(section)
-              return () => undefined
-            }),
-          },
-        } as unknown as Context
+        const agentCtx = makeAgentContext()
         await setup?.(agentCtx)
         const agent = {
           id: sessionId,
@@ -934,7 +970,7 @@ function fakeHarness(): {
       listModels: vi.fn(async () => [{ id: 'chat', name: 'Chat' }]),
     },
   } as unknown as Context
-  return { ctx, agents, attached, savedImages, tables, llmStream, promptSections, registeredTools }
+  return { ctx, agents, attached, savedImages, tables, llmStream, promptSections, registeredTools, makeAgentContext }
 }
 
 function promptSectionText(section: { text: string | (() => string) }): string {

@@ -152,6 +152,7 @@ export class ChatroomRuntime {
   private readonly threadStates = new Map<string, ThreadState>()
   private readonly notificationClients = new Set<NotificationClient>()
   private readonly ignoredAssistantMessageIds = new Set<string>()
+  private readonly chatroomAgentContexts = new WeakSet<Context>()
   private ready = false
   private stopping = false
 
@@ -1839,7 +1840,10 @@ export class ChatroomRuntime {
   private async acquireAgent(sessionId: string, parentSessionId?: string): Promise<AgentBinding> {
     const id = SessionId(sessionId)
     const live = this.ctx.agents.get(id)
-    if (live !== undefined) return borrowAgent(live)
+    if (live !== undefined) {
+      this.augmentChatroomAgentContext(live.ctx, sessionId)
+      return borrowAgent(live)
+    }
     const persisted = (await this.ctx.sessionPersistence.list()).some(header => header.id === id)
     const model = this.ctx.agentDefaultModel.currentSelection()
     const agentOptions = { provider: model.provider, model: model.model }
@@ -1855,7 +1859,10 @@ export class ChatroomRuntime {
         }))
       } catch (error) {
         const raced = this.ctx.agents.get(id)
-        if (raced !== undefined) return borrowAgent(raced)
+        if (raced !== undefined) {
+          this.augmentChatroomAgentContext(raced.ctx, sessionId)
+          return borrowAgent(raced)
+        }
         throw error
       }
     }
@@ -1872,13 +1879,22 @@ export class ChatroomRuntime {
       }))
     } catch (error) {
       const raced = this.ctx.agents.get(id)
-      if (raced !== undefined) return borrowAgent(raced)
+      if (raced !== undefined) {
+        this.augmentChatroomAgentContext(raced.ctx, sessionId)
+        return borrowAgent(raced)
+      }
       throw error
     }
   }
 
   private async setupAgentContext(agentCtx: Context, agentPreset: string, sessionId: string): Promise<void> {
     await this.ctx.agentPresets.mount(agentCtx, agentPreset)
+    this.augmentChatroomAgentContext(agentCtx, sessionId)
+  }
+
+  private augmentChatroomAgentContext(agentCtx: Context, sessionId: string): void {
+    if (this.chatroomAgentContexts.has(agentCtx)) return
+    this.chatroomAgentContexts.add(agentCtx)
     registerChatroomAgentTools(agentCtx, this, sessionId)
     agentCtx.systemPrompt.section({
       name: 'chatroom:main-agent',
