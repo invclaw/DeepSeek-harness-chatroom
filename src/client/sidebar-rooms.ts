@@ -623,6 +623,7 @@ function clearBranchRow(row: HTMLElement): void {
 function clearRoomDecorations(row: HTMLElement): void {
   delete row.dataset.dshChatroomRoomRow
   delete row.dataset.dshChatroomRoomId
+  delete row.dataset.pinned
   clearBranchParent(row)
   row.querySelector(`:scope > [${GROUP_AVATAR_ATTRIBUTE}]`)?.remove()
 }
