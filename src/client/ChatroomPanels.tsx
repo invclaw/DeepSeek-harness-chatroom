@@ -260,21 +260,15 @@ function ThreadPanel(props: ChatroomPanelsProps & {
   const { thread } = props
   const parentSessionId = props.room.room?.sessionId
   const frameRef = useRef<HTMLIFrameElement>(null)
-  const frameSeed = useRef<{ thread: ChatroomThread; parentSessionId: string }>()
   const [frameInstance] = useState(() => ++branchFrameInstance)
   const [attempt, setAttempt] = useState(0)
   const [preparedAttempt, setPreparedAttempt] = useState(-1)
   const [ready, setReady] = useState(false)
   const [compatibilityMode, setCompatibilityMode] = useState(branchFrameCompatibilityPreferred)
-  if (parentSessionId !== undefined && (frameSeed.current === undefined
-    || frameSeed.current.parentSessionId !== parentSessionId
-    || frameSeed.current.thread.id !== thread.id
-    || frameSeed.current.thread.sessionId !== thread.sessionId
-    || frameSeed.current.thread.roomId !== thread.roomId)) {
-    // Keep the retained iframe optimization for updates within one branch, but
-    // never carry a previous branch URL into a newly selected thread.
-    frameSeed.current = { thread, parentSessionId }
-  }
+  const frameSeed = useMemo(
+    () => parentSessionId === undefined ? undefined : { thread, parentSessionId },
+    [parentSessionId, thread.id, thread.sessionId, thread.roomId],
+  )
   useLayoutEffect(() => {
     if (parentSessionId === undefined) return
     if (compatibilityMode) {
@@ -342,7 +336,7 @@ function ThreadPanel(props: ChatroomPanelsProps & {
       globalThis.clearTimeout(timer)
     }
   }, [attempt, compatibilityMode, parentSessionId, thread.id, thread.root.text, thread.sessionId])
-  const seed = frameSeed.current
+  const seed = frameSeed
   const summary = branchSummary(thread.root.text)
   const frameUrl = parentSessionId === undefined
     ? undefined
@@ -367,7 +361,6 @@ function ThreadPanel(props: ChatroomPanelsProps & {
             thread={thread}
             frameUrl={frameUrl!}
             retry={() => {
-              frameSeed.current = { thread, parentSessionId }
               forgetBlockedBranchFrame()
               setCompatibilityMode(false)
               setAttempt(value => value + 1)
