@@ -36,6 +36,7 @@ const BRANCH_SESSION_PREFIX = 'chatroom-thread-v1-'
 const BRANCH_TITLE_PREFIX = '分支：'
 const NATIVE_GROUP_SECTION_ATTRIBUTE = 'data-dsh-chatroom-native-group-section'
 const NATIVE_FOLDER_WRAPPER_ATTRIBUTE = 'data-dsh-chatroom-native-folder-wrapper'
+const NATIVE_FOLDER_EXPAND_ATTEMPTED_ATTRIBUTE = 'data-dsh-chatroom-native-folder-expand-attempted'
 const SIDEBAR_MUTATION_SELECTOR = '[role="tree"], [role="treeitem"], [role="menu"]'
 
 type SidebarSessionList = Pick<SessionListState, 'byId'>
@@ -213,7 +214,10 @@ export function reconcileSidebarRoomRows(
     }
     clearRoomDecorations(row)
     if (branch !== undefined) {
-      clearBranchRow(row)
+      if (row.dataset.dshChatroomBranchRow !== undefined
+        && row.dataset.dshChatroomBranchSessionId !== branch.sessionId) {
+        clearBranchRow(row)
+      }
       decorateBranchRow(row, branch)
       row.style.order = String(-10_000 + groupOrder++)
       row.querySelector(`:scope > [${SOLO_AVATAR_ATTRIBUTE}]`)?.remove()
@@ -733,10 +737,12 @@ function reconcileNativeTreeSections(root: HTMLElement): void {
     const wrapper = parent.querySelectorAll('div[role="treeitem"]').length > 1 ? row : parent
     wrapper.setAttribute(NATIVE_FOLDER_WRAPPER_ATTRIBUTE, '')
     wrapper.dataset.hidden = 'true'
-    if (row.getAttribute('aria-expanded') === 'false' && row.dataset.dshChatroomExpanding !== 'true') {
-      row.dataset.dshChatroomExpanding = 'true'
+    if (row.getAttribute('aria-expanded') === 'true') {
+      row.removeAttribute(NATIVE_FOLDER_EXPAND_ATTEMPTED_ATTRIBUTE)
+    } else if (row.getAttribute('aria-expanded') === 'false'
+      && !row.hasAttribute(NATIVE_FOLDER_EXPAND_ATTEMPTED_ATTRIBUTE)) {
+      row.setAttribute(NATIVE_FOLDER_EXPAND_ATTEMPTED_ATTRIBUTE, '')
       row.click()
-      queueMicrotask(() => { delete row.dataset.dshChatroomExpanding })
     }
   }
 }
@@ -878,6 +884,9 @@ function clearCategoryRoot(root: HTMLElement): void {
     wrapper.removeAttribute(CATEGORY_WRAPPER_ATTRIBUTE)
     wrapper.removeAttribute('data-hidden')
     wrapper.style.removeProperty('order')
+  }
+  for (const row of root.querySelectorAll<HTMLElement>(`[${NATIVE_FOLDER_EXPAND_ATTEMPTED_ATTRIBUTE}]`)) {
+    row.removeAttribute(NATIVE_FOLDER_EXPAND_ATTEMPTED_ATTRIBUTE)
   }
 }
 
