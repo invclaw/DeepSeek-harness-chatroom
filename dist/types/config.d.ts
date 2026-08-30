@@ -36,6 +36,13 @@ export interface Config {
     authDshAuthAvatarUrlTemplate?: string;
     authDshAuthAvatarAllowedOrigins?: string[];
     authDshAuthRevalidateSeconds?: number;
+    wecomEnabled: boolean;
+    wecomCliPath: string;
+    wecomCliConfigDirectory: string;
+    wecomCliTimeoutMs: number;
+    wecomQuickMeetingDurationMinutes: number;
+    wecomQuickMeetingSubject: string;
+    wecomTimeZone: string;
 }
 export declare const Config: z<Config>;
 /** Validate relationships Schemastery cannot express by individual fields. */

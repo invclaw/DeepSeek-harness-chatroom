@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentType } from 'react'
 import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatroomAgentTarget } from './store.js'
+import { projectExternalCardText } from '../message.js'
+import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
 
 const COLLAPSIBLE_PROCESS_KINDS = new Set(['assistant-step', 'context', 'retry', 'tool-call'])
 
@@ -44,6 +46,25 @@ export function ChatroomAssistantNodeView(props: ChatroomAssistantNodeViewProps)
     ? props.node.data.blocks.filter(block => block.kind === 'reasoning' && block.text.trim() !== '').length
     : 0
   const processItemCount = processKeys.length + inlineReasoningCount
+  const cards = props.node.data.blocks.flatMap(block => block.kind === 'text'
+    ? projectExternalCardText(block.text).cards
+    : [])
+  const projectedBlocks: Array<(typeof props.node.data.blocks)[number]> = []
+  for (const block of props.node.data.blocks) {
+    if (block.kind !== 'text') {
+      projectedBlocks.push(block)
+      continue
+    }
+    const projection = projectExternalCardText(block.text)
+    if (projection.text.trim() !== '') projectedBlocks.push({ ...block, text: projection.text })
+  }
+  const projectedNode: typeof props.node = cards.length === 0 ? props.node : {
+    ...props.node,
+    data: {
+      ...props.node.data,
+      blocks: projectedBlocks,
+    },
+  }
 
   useEffect(() => {
     const root = rootRef.current
@@ -81,7 +102,8 @@ export function ChatroomAssistantNodeView(props: ChatroomAssistantNodeViewProps)
           <span>{expanded ? '收起执行过程' : '执行过程'} · {processItemCount} 项</span>
         </button>
       )}
-      <NativeMessageView {...props} />
+      <NativeMessageView {...props} node={projectedNode} />
+      {cards.map((card, index) => <ChatroomExternalCardView card={card} key={`${card.kind}:${card.title}:${index}`} />)}
     </div>
   )
 }

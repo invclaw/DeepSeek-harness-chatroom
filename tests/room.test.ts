@@ -36,11 +36,62 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
+  it('stops the current turn and coalesces concurrent Session rotations', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', identity)
+
+    await runtime.stopRoomSession('lobby', identity)
+    expect(harness.agents[0]?.cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: true })
+    expect(harness.agents[0]?.whenIdle).toHaveBeenCalledOnce()
+
+    const [first, second] = await Promise.all([
+      runtime.renewRoomSession('lobby', identity),
+      runtime.renewRoomSession('lobby', identity),
+    ])
+    expect(first.sessionId).toBe(second.sessionId)
+    expect(first.sessionId).not.toBe('chatroom-v1-lobby')
+    expect(harness.agents).toHaveLength(2)
+    expect(harness.agents[0]?.cancel).toHaveBeenLastCalledWith({ kind: 'user' })
+    await runtime.stop()
+  })
+
+  it('creates a quick Enterprise WeChat meeting and appends its durable card', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', identity)
+    const wecom = (runtime as unknown as {
+      wecom: { invoke: ReturnType<typeof vi.fn> }
+    }).wecom
+    wecom.invoke = vi.fn()
+      .mockResolvedValueOnce({ userid: 'alice-wecom' })
+      .mockResolvedValueOnce({
+        subject: '快速会议', begin_time: '2026-09-01 10:00:00', end_time: '2026-09-01 11:00:00',
+        meeting_url: 'https://meeting.example.com/join',
+      })
+
+    await expect(runtime.createQuickMeeting('lobby', identity)).resolves.toMatchObject({
+      kind: 'meeting', title: '快速会议', url: 'https://meeting.example.com/join',
+    })
+    expect(wecom.invoke).toHaveBeenNthCalledWith(1, 'identity', [], 'whoami', {})
+    expect(wecom.invoke).toHaveBeenNthCalledWith(2, 'meeting', [], 'create', expect.objectContaining({
+      subject: '快速会议', attendees: [{ userid: 'alice-wecom' }],
+    }))
+    const message = harness.agents[0]?.session.append.mock.calls.at(-1)?.[1]
+    expect(JSON.stringify(message)).toContain('dsh-chatroom-card:')
+    expect(harness.agents[0]?.followup).not.toHaveBeenCalled()
+    await runtime.stop()
+  })
+
   it('uses the configured controller model only when automatic responses are enabled', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
     await runtime.start()
-    expect(harness.promptSections).toHaveLength(2)
+    expect(harness.promptSections).toHaveLength(3)
     expect(promptSectionText(harness.promptSections[0]!)).toContain('多人群聊')
     await runtime.updateAutomationSettings('deepseek', 'chat', '主 Agent 自定义提示词', '判断 Agent 自定义提示词')
     expect(promptSectionText(harness.promptSections[0]!)).toBe('主 Agent 自定义提示词')
@@ -226,10 +277,10 @@ describe('ChatroomRuntime', () => {
     })
 
     expect(harness.registeredTools.map(tool => tool.name)).toEqual([
-      'chatroom_capabilities', 'chatroom_action',
+      'chatroom_capabilities', 'chatroom_action', 'wecom_schema', 'wecom_action',
     ])
     expect(harness.promptSections.map(section => section.name)).toEqual([
-      'chatroom:main-agent', 'chatroom:collaboration-tools',
+      'chatroom:main-agent', 'chatroom:collaboration-tools', 'chatroom:wecom-tools',
     ])
     expect(harness.ctx.agentPresets.mount).toHaveBeenCalledTimes(presetMounts)
     await runtime.stop()
@@ -965,6 +1016,8 @@ function fakeHarness(): {
           ctx: agentCtx,
           followup: vi.fn(),
           steer: vi.fn(),
+          cancel: vi.fn(),
+          whenIdle: vi.fn(async () => undefined),
         } as unknown as (typeof agents)[number]
         agents.push(agent)
         return { agent, dispose: vi.fn(async () => undefined) }
@@ -1059,6 +1112,13 @@ function config(): Config {
     authDshAuthHeaders: false,
     authDshAuthVerifyUrl: '',
     authDshAuthLoginPath: '/auth/login',
+    wecomEnabled: true,
+    wecomCliPath: '',
+    wecomCliConfigDirectory: '',
+    wecomCliTimeoutMs: 30_000,
+    wecomQuickMeetingDurationMinutes: 60,
+    wecomQuickMeetingSubject: '快速会议',
+    wecomTimeZone: 'Asia/Shanghai',
     dataDirectory: ':memory:',
   }
 }

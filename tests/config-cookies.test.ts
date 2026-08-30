@@ -101,5 +101,12 @@ function validConfig(): Config {
     authDshAuthHeaders: false,
     authDshAuthVerifyUrl: '',
     authDshAuthLoginPath: '/auth/login',
+    wecomEnabled: true,
+    wecomCliPath: '',
+    wecomCliConfigDirectory: '',
+    wecomCliTimeoutMs: 30_000,
+    wecomQuickMeetingDurationMinutes: 60,
+    wecomQuickMeetingSubject: '快速会议',
+    wecomTimeZone: 'Asia/Shanghai',
   }
 }

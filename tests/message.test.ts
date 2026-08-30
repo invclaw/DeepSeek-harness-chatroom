@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   addressesAi,
   identifyForwardText,
+  identifyExternalCardText,
   identifyPrompt,
   isSlashCommand,
   mentionsAi,
   mentionsName,
   projectForwardText,
+  projectExternalCardText,
 } from '../src/message.js'
 
 describe('human-first room messages', () => {
@@ -56,5 +58,18 @@ describe('human-first room messages', () => {
     const identified = identifyForwardText(bundle)
     expect(identified).toContain('合并转发（1 条）\nAlice：你好')
     expect(projectForwardText(identified)).toEqual({ text: '', forward: bundle })
+  })
+
+  it('round-trips meeting cards while retaining a readable model transcript', () => {
+    const card = {
+      kind: 'meeting' as const,
+      title: '周会',
+      beginTime: '2026-09-01 10:00:00',
+      endTime: '2026-09-01 11:00:00',
+      url: 'https://meeting.example.com/join',
+    }
+    const identified = identifyExternalCardText(card)
+    expect(identified).toContain('企微会议：周会')
+    expect(projectExternalCardText(identified)).toEqual({ text: '', cards: [card] })
   })
 })

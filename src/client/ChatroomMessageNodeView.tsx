@@ -3,6 +3,7 @@ import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-con
 import { fallbackAvatarId, type ChatroomAvatarId } from '../avatars.js'
 import type {
   ChatroomFileReference,
+  ChatroomExternalCard,
   ChatroomForwardBundle,
   ChatroomForwardItem,
   ChatroomIdentity,
@@ -12,7 +13,7 @@ import type {
   ChatroomThreadPreview,
   ChatroomThreadRoot,
 } from '../types.js'
-import { participantMarker, projectFileText, projectForwardText, projectReplyText } from '../message.js'
+import { participantMarker, projectExternalCardText, projectFileText, projectForwardText, projectReplyText } from '../message.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
 import {
@@ -28,6 +29,7 @@ import { ChatroomMarkdown } from './ChatroomMarkdown.js'
 import type { ChatroomView } from './store.js'
 import type { ChatroomAgentTarget } from './store.js'
 import { ChatroomAvatar } from './ChatroomAvatar.js'
+import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
 
 type ParticipantNode = ChatNode<'user' | 'steering'>
 
@@ -68,6 +70,7 @@ export function projectChatroomMessage(
   readonly participantId?: string
   readonly reply?: ChatroomReplyReference
   readonly files: readonly ChatroomFileReference[]
+  readonly cards: readonly ChatroomExternalCard[]
   readonly forward?: ChatroomForwardBundle
   readonly text: string
   readonly avatarUrl?: string | undefined
@@ -81,6 +84,7 @@ export function projectChatroomMessage(
   let reply: ChatroomReplyReference | undefined
   let forward: ChatroomForwardBundle | undefined
   const files: ChatroomFileReference[] = []
+  const cards: ChatroomExternalCard[] = []
   const texts: string[] = []
   const content: Array<(typeof node.data.content)[number]> = []
   for (const block of node.data.content) {
@@ -111,6 +115,9 @@ export function projectChatroomMessage(
       visibleText = forwardProjection.text
       forward = forwardProjection.forward
     }
+    const cardProjection = projectExternalCardText(visibleText)
+    visibleText = cardProjection.text
+    cards.push(...cardProjection.cards)
     const fileProjection = projectFileText(visibleText)
     visibleText = fileProjection.text
     files.push(...fileProjection.files)
@@ -133,6 +140,7 @@ export function projectChatroomMessage(
     avatarId: avatarId ?? fallbackAvatarId(identity?.participantId ?? 'participant'),
     ...(participantId === undefined ? {} : { participantId }),
     files,
+    cards,
     text: texts.join('\n'),
     ...(displayName === undefined ? {} : { displayName }),
     ...(avatarUrl !== undefined ? { avatarUrl } : identity !== undefined && own && identity.avatarUrl !== undefined ? { avatarUrl: identity.avatarUrl } : {}),
@@ -265,6 +273,7 @@ function ParticipantMessage({
           : <>
               {projection.node.data.content.length > 0 && <div className="dsh-chatroom-native-message">{native}</div>}
               {projection.files.map(file => <FileCard file={file} key={file.id} />)}
+              {projection.cards.map((card, index) => <ChatroomExternalCardView card={card} key={`${card.kind}:${card.title}:${index}`} />)}
               {projection.forward !== undefined && <ForwardCard forward={projection.forward} />}
             </>}
         <ChatroomReactionBar {...tools} />

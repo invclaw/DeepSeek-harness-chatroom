@@ -12,7 +12,7 @@ import { ChatroomEntry } from './ChatroomEntry.js'
 import { ChatroomSettingsSection } from './ChatroomAccountPanels.js'
 import { ChatroomAssistantReplyAction } from './ChatroomAssistantReplyAction.js'
 import { ChatroomAssistantNodeView } from './ChatroomAssistantNodeView.js'
-import { ChatroomComposerAttachments, ChatroomComposerDock, ChatroomFileAction } from './ChatroomComposer.js'
+import { ChatroomComposerAttachments, ChatroomComposerDock, ChatroomFileAction, ChatroomSessionControls } from './ChatroomComposer.js'
 import {
   ChatroomSteeringMessageNodeView,
   ChatroomUserMessageNodeView,
@@ -265,6 +265,19 @@ export function apply(ctx: ClientContext): void {
       resolveTarget: store.agentTargetForSession.bind(store),
     }),
   }, ChatroomFileAction))
+
+  ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
+    name: 'conversation.input.right',
+    id: 'chatroom-session-controls',
+    order: -30,
+    inject: () => ({
+      hooks: { chatroom: store },
+      resolveTarget: store.agentTargetForSession.bind(store),
+      stopRoomSession: store.stopRoomSession,
+      newRoomSession: store.newRoomSession,
+      quickMeeting: store.quickMeeting,
+    }),
+  }, ChatroomSessionControls))
 
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
     name: 'conversation.input.dock',

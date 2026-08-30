@@ -42,6 +42,7 @@ import {
 } from './domain.js'
 import {
   identifyFileText,
+  identifyExternalCardText,
   identifyForwardText,
   identifyPrompt,
   identifyReplyText,
@@ -53,6 +54,8 @@ import {
   projectReplyText,
 } from './message.js'
 import { CHATROOM_REACTION_EMOJIS, type ChatroomReactionEmoji } from './reactions.js'
+import { WecomCliClient, inferWecomCard } from './wecom.js'
+import { registerWecomAgentTools } from './wecom-tools.js'
 import type {
   ChatroomAutomationOverview,
   ChatroomDirectConversation,
@@ -67,6 +70,7 @@ import type {
   ChatroomIdentity,
   ChatroomImageReference,
   ChatroomInfo,
+  ChatroomMeetingCard,
   ChatroomMember,
   ChatroomMemberRole,
   ChatroomNotification,
@@ -108,6 +112,7 @@ interface RoomState {
   activation: Promise<AgentBinding> | undefined
   admission: Promise<void>
   automation: Promise<void>
+  rotation: Promise<void> | undefined
 }
 
 interface ThreadState {
@@ -157,6 +162,7 @@ export class ChatroomRuntime {
   private readonly notificationClients = new Set<NotificationClient>()
   private readonly ignoredAssistantMessageIds = new Set<string>()
   private readonly chatroomAgentContexts = new WeakSet<Context>()
+  private readonly wecom: WecomCliClient
   private ready = false
   private stopping = false
 
@@ -165,6 +171,7 @@ export class ChatroomRuntime {
     readonly config: Config,
   ) {
     this.log = ctx.logger('deepseek-harness-chatroom')
+    this.wecom = new WecomCliClient(config)
   }
 
   /** Public metadata for the configured legacy room. */
@@ -642,6 +649,91 @@ export class ChatroomRuntime {
     const binding = await this.ensureRoom(roomId)
     if (identity !== undefined) this.ensureRoomTitle(binding, this.requireState(roomId).record.title)
     return this.projectRoom(this.requireState(roomId), identity?.participantId)
+  }
+
+  /** Stop the active Agent turn while retaining the room and queued user intake. */
+  async stopRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo> {
+    this.assertReady()
+    const state = this.requireState(roomId)
+    this.assertRoomMember(roomId, identity.participantId)
+    const binding = await this.ensureRoom(roomId)
+    binding.agent.cancel({ kind: 'user' }, { keepInbox: true })
+    await binding.agent.whenIdle()
+    return this.projectRoom(state, identity.participantId)
+  }
+
+  /** Replace one room's Harness Session while retaining the room identity and roster. */
+  async renewRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo> {
+    this.assertReady()
+    const state = this.requireState(roomId)
+    this.assertRoomMember(roomId, identity.participantId)
+    if (state.rotation !== undefined) {
+      await state.rotation
+      return this.projectRoom(state, identity.participantId)
+    }
+    let resolveRotation!: () => void
+    const predecessor = state.admission
+    state.admission = new Promise<void>((resolve) => { resolveRotation = resolve })
+    const rotation = (async (): Promise<void> => {
+      await predecessor
+      const previous = await this.ensureRoom(roomId)
+      previous.agent.cancel({ kind: 'user' })
+      await previous.agent.whenIdle()
+      this.archiveRoomSession(state, previous.agent.session)
+      await previous.release()
+      state.binding = undefined
+      state.activation = undefined
+      const sessionId = `chatroom-v1-${roomId}-${randomUUID()}`
+      const record = await this.requireRoomRecords().update(roomId, current => ({
+        ...current,
+        sessionId,
+        updatedAt: Date.now(),
+      }))
+      state.record = record
+      this.archiveRoom(record)
+      const binding = await this.ensureRoom(roomId)
+      this.ensureRoomTitle(binding, record.title)
+      this.broadcast(state, { type: 'room-updated', room: this.projectRoom(state), members: this.roomMembers(state) })
+    })()
+    state.rotation = rotation
+    try {
+      await rotation
+      return this.projectRoom(state, identity.participantId)
+    } finally {
+      if (state.rotation === rotation) state.rotation = undefined
+      resolveRotation()
+    }
+  }
+
+  /** Create an Enterprise WeChat online meeting and post it to the room as a durable card. */
+  async createQuickMeeting(roomId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard> {
+    this.assertReady()
+    const state = this.requireState(roomId)
+    this.assertRoomMember(roomId, identity.participantId)
+    const task = state.admission.then(async () => {
+      const whoami = await this.wecom.invoke('identity', [], 'whoami', {})
+      const userid = findStringField(whoami, ['userid', 'user_id', 'open_userid', 'open_vid'])
+      if (userid === undefined) throw new ChatroomInputError('企业微信身份信息中缺少可用的用户标识。')
+      const begin = new Date(Date.now() + 5 * 60_000)
+      const end = new Date(begin.getTime() + this.config.wecomQuickMeetingDurationMinutes * 60_000)
+      const parameters = {
+        subject: this.config.wecomQuickMeetingSubject,
+        begin_time: formatWecomTime(begin, this.config.wecomTimeZone),
+        end_time: formatWecomTime(end, this.config.wecomTimeZone),
+        attendees: [{ userid }],
+        timezone: {
+          timezone_id: this.config.wecomTimeZone,
+          timezone_offset: timezoneOffsetSeconds(begin, this.config.wecomTimeZone),
+        },
+      }
+      const result = await this.wecom.invoke('meeting', [], 'create', parameters)
+      const inferred = inferWecomCard('meeting', 'create', parameters, result)
+      if (inferred?.kind !== 'meeting') throw new ChatroomInputError('企微已创建会议，但返回信息缺少会议标题。')
+      await this.appendRoomCard(state, identity, inferred)
+      return inferred
+    })
+    state.admission = task.then(() => undefined, () => undefined)
+    return await task
   }
 
   /** Rename one room as its owner or an administrator. */
@@ -1976,6 +2068,7 @@ export class ChatroomRuntime {
     if (this.chatroomAgentContexts.has(agentCtx)) return
     this.chatroomAgentContexts.add(agentCtx)
     registerChatroomAgentTools(agentCtx, this, sessionId)
+    registerWecomAgentTools(agentCtx, this.wecom)
     agentCtx.systemPrompt.section({
       name: 'chatroom:main-agent',
       order: 10,
@@ -1985,6 +2078,40 @@ export class ChatroomRuntime {
       name: 'chatroom:collaboration-tools',
       order: 11,
       text: () => '你可使用 chatroom_capabilities 查看当前群聊能力和可操作的近期消息 ID，并使用 chatroom_action 拉人、主动发消息、发送工作区文件、回复引用、贴表情、创建分支或撤回自己的消息。执行群聊副作用前先调用工具，只有工具成功后才能声称操作完成。',
+    })
+    agentCtx.systemPrompt.section({
+      name: 'chatroom:wecom-tools',
+      order: 12,
+      text: () => '你可使用 wecom_schema 与 wecom_action 操作企业微信日程、会议、会议纪要、文档、在线表格、智能表格和智能文档。写操作前先读取对应 schema；涉及人员时先用 contact 解析真实账号；不要猜测或向用户展示 userid、docid、meeting_id 等内部标识。用户未指定文档类型时默认创建智能文档。',
+    })
+  }
+
+  private async appendRoomCard(
+    state: RoomState,
+    identity: ChatroomIdentity,
+    card: ChatroomMeetingCard,
+  ): Promise<void> {
+    const binding = await this.ensureRoom(state.record.id)
+    const durable = await this.durableContent(
+      state.record.id,
+      identity,
+      identifyPrompt([{ type: 'text', text: identifyExternalCardText(card) }], identity),
+    )
+    binding.agent.session.append('user/message', createUserMessage({
+      content: durable,
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    await this.touchMember(state.record.id, identity)
+    await this.touchRoom(state.record.id)
+    this.notify({
+      id: randomUUID(),
+      roomId: state.record.id,
+      roomTitle: state.record.title,
+      participantId: identity.participantId,
+      displayName: identity.displayName,
+      role: 'human',
+      text: `创建了企微会议「${card.title}」`,
+      createdAt: Date.now(),
     })
   }
 
@@ -2577,6 +2704,7 @@ function newRoomState(record: RoomRecord): RoomState {
     activation: undefined,
     admission: Promise.resolve(),
     automation: Promise.resolve(),
+    rotation: undefined,
   }
 }
 
@@ -2940,6 +3068,67 @@ function promptPreview(content: readonly ChatroomPromptContentPart[]): string {
   if (text !== '') return [...text.replace(/\s+/gu, ' ')].slice(0, 160).join('')
   if (content.some(part => part.type === 'file')) return '发送了文件'
   return '发送了图片'
+}
+
+function formatWecomTime(value: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(value)
+  const field = (type: Intl.DateTimeFormatPartTypes): string => parts.find(part => part.type === type)?.value ?? ''
+  return `${field('year')}-${field('month')}-${field('day')} ${field('hour')}:${field('minute')}:${field('second')}`
+}
+
+function timezoneOffsetSeconds(value: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(value)
+  const numbers = Object.fromEntries(parts.flatMap(part => part.type === 'literal' ? [] : [[part.type, Number(part.value)]]))
+  return Math.round((Date.UTC(
+    numbers.year!,
+    numbers.month! - 1,
+    numbers.day!,
+    numbers.hour!,
+    numbers.minute!,
+    numbers.second!,
+  ) - value.getTime()) / 1_000)
+}
+
+function findStringField(value: unknown, keys: readonly string[]): string | undefined {
+  const visit = (candidate: unknown, depth: number): string | undefined => {
+    if (depth > 4 || candidate === null || typeof candidate !== 'object') return undefined
+    if (Array.isArray(candidate)) {
+      for (const item of candidate.slice(0, 10)) {
+        const found = visit(item, depth + 1)
+        if (found !== undefined) return found
+      }
+      return undefined
+    }
+    const record = candidate as Record<string, unknown>
+    for (const key of keys) {
+      const field = record[key]
+      if (typeof field === 'string' && field.trim() !== '') return field
+    }
+    for (const nested of Object.values(record).slice(0, 30)) {
+      const found = visit(nested, depth + 1)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  return visit(value, 0)
 }
 
 function assistantText(content: readonly ContentBlock[]): string {

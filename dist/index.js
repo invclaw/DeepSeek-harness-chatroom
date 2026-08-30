@@ -35,7 +35,14 @@ var Config = z.object({
   authDshAuthSuperAdminSubjects: z.array(z.string().min(1).max(512)).default([]),
   authDshAuthAvatarUrlTemplate: z.string().default(""),
   authDshAuthAvatarAllowedOrigins: z.array(z.string().min(1)).default([]),
-  authDshAuthRevalidateSeconds: z.number().step(1).min(5).max(3600).default(60)
+  authDshAuthRevalidateSeconds: z.number().step(1).min(5).max(3600).default(60),
+  wecomEnabled: z.boolean().default(true),
+  wecomCliPath: z.string().default(""),
+  wecomCliConfigDirectory: z.string().default(""),
+  wecomCliTimeoutMs: z.number().step(1).min(1e3).max(12e4).default(3e4),
+  wecomQuickMeetingDurationMinutes: z.number().step(1).min(15).max(240).default(60),
+  wecomQuickMeetingSubject: z.string().min(1).max(100).default("\u5FEB\u901F\u4F1A\u8BAE"),
+  wecomTimeZone: z.string().min(1).max(80).default("Asia/Shanghai")
 });
 function validateConfig(config) {
   if (config.dataDirectory !== void 0 && config.dataDirectory !== "" && config.dataDirectory !== ":memory:" && !isAbsolute(config.dataDirectory)) {
@@ -43,6 +50,12 @@ function validateConfig(config) {
   }
   if (!isAbsolute(config.cwd)) {
     throw new Error(`chatroom: cwd must be absolute, got ${JSON.stringify(config.cwd)}`);
+  }
+  if (config.wecomCliPath !== "" && !isAbsolute(config.wecomCliPath)) {
+    throw new Error("chatroom: wecomCliPath must be absolute when configured");
+  }
+  if (config.wecomCliConfigDirectory !== "" && !isAbsolute(config.wecomCliConfigDirectory)) {
+    throw new Error("chatroom: wecomCliConfigDirectory must be absolute when configured");
   }
   if (config.maxMessageFileBytes < config.maxFileBytes) {
     throw new Error("chatroom: maxMessageFileBytes must be greater than or equal to maxFileBytes");
@@ -1146,7 +1159,7 @@ import { readFile } from "fs/promises";
 import { basename, relative, resolve as resolve2 } from "path";
 import { resolveSessionPreset } from "@deepseek-ai/dsh-agent-presets";
 import { AttachmentError } from "@deepseek-ai/dsh-attachment";
-import { BlockAssembler, createAssistantMessage, createUserMessage as createUserMessage2 } from "@deepseek-ai/dsh-llm";
+import { BlockAssembler, createAssistantMessage, createUserMessage as createUserMessage3 } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
 
 // src/archive.ts
@@ -1755,6 +1768,7 @@ var PARTICIPANT_MARKER_END = "\u2063";
 var REPLY_MARKER_START = "\u2063dsh-chatroom-reply:";
 var FILE_MARKER_START = "\u2063dsh-chatroom-file:";
 var FORWARD_MARKER_START = "\u2063dsh-chatroom-forward:";
+var EXTERNAL_CARD_MARKER_START = "\u2063dsh-chatroom-card:";
 function identifyChatroomText(text, identity) {
   return `${PARTICIPANT_MARKER_START}${identity.participantId}|${identity.avatarId}${PARTICIPANT_MARKER_END}${identity.displayName}\uFF1A${text}`;
 }
@@ -1833,6 +1847,9 @@ function projectForwardText(text) {
   if (visible.startsWith(prefix)) visible = visible.slice(prefix.length);
   return { text: visible, forward };
 }
+function identifyExternalCardText(card) {
+  return `${EXTERNAL_CARD_MARKER_START}${encodePayload(card)}${PARTICIPANT_MARKER_END}${externalCardPrefix(card)}`;
+}
 function mentionsAi(content, aiDisplayName) {
   return [aiDisplayName, "AI"].some((name2) => mentionsName(content, name2));
 }
@@ -1864,6 +1881,13 @@ function forwardPrefix(bundle) {
   const lines = bundle.items.map((item) => `${item.displayName}\uFF1A${item.text}`);
   return `\u5408\u5E76\u8F6C\u53D1\uFF08${bundle.items.length} \u6761\uFF09
 ${lines.join("\n")}`;
+}
+function externalCardPrefix(card) {
+  if (card.kind === "meeting") {
+    const time = [card.beginTime, card.endTime].filter((value) => value !== void 0).join(" - ");
+    return `\u4F01\u5FAE\u4F1A\u8BAE\uFF1A${card.title}${time === "" ? "" : `\uFF08${time}\uFF09`}`;
+  }
+  return `\u4F01\u5FAE${card.documentType ?? "\u6587\u6863"}\uFF1A${card.title}`;
 }
 function encodePayload(value) {
   return encodeURIComponent(JSON.stringify(value));
@@ -1905,6 +1929,306 @@ function validForwardContentPart(value) {
   return typeof image.attachmentId === "string" && typeof image.mediaType === "string" && typeof image.bytes === "number" && typeof image.width === "number" && typeof image.height === "number";
 }
 
+// src/wecom.ts
+import { spawn } from "child_process";
+import { createRequire } from "module";
+var require2 = createRequire(import.meta.url);
+var MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+var WECOM_SERVICES = [
+  "calendar",
+  "meeting",
+  "doc",
+  "sheet",
+  "smartsheet",
+  "smartpage",
+  "contact",
+  "identity"
+];
+var WecomCliError = class extends Error {
+  constructor(message, code) {
+    super(message);
+    this.code = code;
+    this.name = "WecomCliError";
+  }
+  code;
+};
+var WecomCliClient = class {
+  constructor(config) {
+    this.config = config;
+  }
+  config;
+  /** Query one official CLI method schema without requiring plugin restart. */
+  schema(service, resource, method) {
+    return this.run(["schema", "get", joinCommand(service, resource, method)]);
+  }
+  /** Execute one official Enterprise WeChat method with JSON parameters. */
+  invoke(service, resource, method, parameters) {
+    return this.run([service, ...resource, method, "--json", JSON.stringify(parameters)]);
+  }
+  /** Read the current Enterprise WeChat authorization state. */
+  authStatus() {
+    return this.run(["auth", "show", "--status"]);
+  }
+  run(args) {
+    if (!this.config.wecomEnabled) {
+      return Promise.reject(new WecomCliError("\u4F01\u4E1A\u5FAE\u4FE1\u80FD\u529B\u5DF2\u5728\u63D2\u4EF6\u914D\u7F6E\u4E2D\u5173\u95ED\u3002", "disabled"));
+    }
+    const cli = this.config.wecomCliPath || require2.resolve("@wecom/cli/bin/wecom.js");
+    const environment = {
+      ...process.env,
+      ...this.config.wecomCliConfigDirectory === "" ? {} : { WECOM_CLI_CONFIG_DIR: this.config.wecomCliConfigDirectory }
+    };
+    return new Promise((resolve3, reject) => {
+      const child = spawn(process.execPath, [cli, ...args], {
+        env: environment,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true
+      });
+      let stdout = "";
+      let stderr = "";
+      let outputBytes = 0;
+      let settled = false;
+      const finish = (operation) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        operation();
+      };
+      const collect = (current, chunk) => {
+        outputBytes += chunk.byteLength;
+        if (outputBytes > MAX_OUTPUT_BYTES) {
+          child.kill("SIGKILL");
+          finish(() => reject(new WecomCliError("\u4F01\u4E1A\u5FAE\u4FE1 CLI \u8FD4\u56DE\u6570\u636E\u8D85\u8FC7 8 MB \u9650\u5236\u3002", "failed")));
+          return current;
+        }
+        return current + chunk.toString("utf8");
+      };
+      child.stdout.on("data", (chunk) => {
+        stdout = collect(stdout, chunk);
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr = collect(stderr, chunk);
+      });
+      child.once("error", (error) => finish(() => reject(new WecomCliError(`\u65E0\u6CD5\u542F\u52A8\u4F01\u4E1A\u5FAE\u4FE1 CLI\uFF1A${error.message}`, "failed"))));
+      child.once("close", (code) => finish(() => {
+        const output = stdout.trim();
+        const diagnostic = stderr.trim();
+        if (code !== 0) {
+          const unauthorized = /unauthorized|未授权|auth init|登录|扫码/iu.test(`${output}
+${diagnostic}`);
+          reject(new WecomCliError(
+            unauthorized ? "\u4F01\u4E1A\u5FAE\u4FE1\u5C1A\u672A\u6388\u6743\uFF0C\u8BF7\u5728\u90E8\u7F72\u673A\u8FD0\u884C wecom-cli auth init \u5B8C\u6210\u626B\u7801\u767B\u5F55\u3002" : summarizeFailure(output || diagnostic || `\u9000\u51FA\u7801 ${String(code)}`),
+            unauthorized ? "unauthorized" : "failed"
+          ));
+          return;
+        }
+        if (output === "") {
+          resolve3({});
+          return;
+        }
+        try {
+          resolve3(JSON.parse(output));
+        } catch {
+          reject(new WecomCliError("\u4F01\u4E1A\u5FAE\u4FE1 CLI \u6CA1\u6709\u8FD4\u56DE\u6709\u6548 JSON\u3002", "invalid-output"));
+        }
+      }));
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        finish(() => reject(new WecomCliError(`\u4F01\u4E1A\u5FAE\u4FE1\u64CD\u4F5C\u8D85\u8FC7 ${this.config.wecomCliTimeoutMs} ms\u3002`, "timeout")));
+      }, this.config.wecomCliTimeoutMs);
+      timer.unref();
+    });
+  }
+};
+function inferWecomCard(service, method, parameters, result) {
+  if (service === "meeting") return meetingCard(method, parameters, result);
+  if (service === "doc" || service === "sheet" || service === "smartsheet" || service === "smartpage") {
+    return documentCard(service, parameters, result);
+  }
+  return void 0;
+}
+function meetingCard(method, parameters, result) {
+  if (!/(?:create|get|update)$/u.test(method)) return void 0;
+  const title = firstString(result, ["subject", "title", "meeting_subject"]) ?? firstString(parameters, ["subject", "title"]);
+  if (title === void 0) return void 0;
+  const beginTime = firstString(result, ["begin_time", "start_time"]) ?? firstString(parameters, ["begin_time", "start_time"]);
+  const endTime = firstString(result, ["end_time"]) ?? firstString(parameters, ["end_time"]);
+  const url = firstUrl(result, ["meeting_url", "join_url", "url", "meeting_link"]);
+  const location = firstString(result, ["location", "meeting_room_name"]) ?? firstString(parameters, ["location"]);
+  const status = firstString(result, ["status", "meeting_status"]);
+  const attendees = stringArray(result, ["attendee_names", "participant_names"]);
+  return {
+    kind: "meeting",
+    title,
+    ...beginTime === void 0 ? {} : { beginTime },
+    ...endTime === void 0 ? {} : { endTime },
+    ...url === void 0 ? {} : { url },
+    ...location === void 0 ? {} : { location },
+    ...status === void 0 ? {} : { status },
+    ...attendees === void 0 ? {} : { attendees }
+  };
+}
+function documentCard(service, parameters, result) {
+  const title = firstString(result, ["doc_name", "name", "title", "file_name"]) ?? firstString(parameters, ["doc_name", "name", "title"]);
+  const url = firstUrl(result, ["doc_url", "url", "share_url"]);
+  if (title === void 0 || url === void 0) return void 0;
+  const documentType = firstString(result, ["doc_type", "type"]) ?? service;
+  const modifiedAt = firstString(result, ["update_time", "modified_at", "updated_at"]);
+  const owner = firstString(result, ["owner_name", "creator_name"]);
+  return {
+    kind: "document",
+    title,
+    documentType,
+    url,
+    ...modifiedAt === void 0 ? {} : { modifiedAt },
+    ...owner === void 0 ? {} : { owner }
+  };
+}
+function firstString(value, keys) {
+  for (const record of records(value)) {
+    for (const key of keys) {
+      const candidate = record[key];
+      if (typeof candidate === "string" && candidate.trim() !== "") return candidate;
+    }
+  }
+  return void 0;
+}
+function firstUrl(value, keys) {
+  const candidate = firstString(value, keys);
+  if (candidate === void 0) return void 0;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "https:" ? candidate : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function stringArray(value, keys) {
+  for (const record of records(value)) {
+    for (const key of keys) {
+      const candidate = record[key];
+      if (Array.isArray(candidate) && candidate.every((item) => typeof item === "string")) return candidate;
+    }
+  }
+  return void 0;
+}
+function records(value) {
+  const output = [];
+  const visit = (candidate, depth) => {
+    if (depth > 4 || candidate === null || typeof candidate !== "object") return;
+    if (Array.isArray(candidate)) {
+      for (const item of candidate.slice(0, 5)) visit(item, depth + 1);
+      return;
+    }
+    const record = candidate;
+    output.push(record);
+    for (const nested of Object.values(record).slice(0, 20)) visit(nested, depth + 1);
+  };
+  visit(value, 0);
+  return output;
+}
+function joinCommand(service, resource, method) {
+  return [service, ...resource, method].join(".");
+}
+function summarizeFailure(value) {
+  return [...value.replace(/\s+/gu, " ").trim()].slice(0, 500).join("") || "\u4F01\u4E1A\u5FAE\u4FE1\u64CD\u4F5C\u5931\u8D25\u3002";
+}
+
+// src/wecom-tools.ts
+import { createUserMessage as createUserMessage2 } from "@deepseek-ai/dsh-llm";
+import { defineTool as defineTool2 } from "@deepseek-ai/dsh-tools";
+var COMMAND_PART = /^[a-z][a-z0-9_-]*$/u;
+function registerWecomAgentTools(ctx, client) {
+  ctx.tools.register(defineTool2({
+    name: "wecom_schema",
+    description: "Read the official wecom-cli JSON schema for one Enterprise WeChat calendar, meeting, document, sheet, smart sheet, smart document, contact, or identity operation. Always call this before an unfamiliar action.",
+    parameters: {
+      service: { type: "string", required: true, enum: [...WECOM_SERVICES] },
+      resource: { type: "array", items: { type: "string" }, description: 'Optional nested resource tokens, for example ["schedules", "free"].' },
+      method: { type: "string", required: true, description: "Final CLI method token, for example create, list, get, update, append, overwrite, or search." }
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { schemaJson: { type: "string", required: true } }
+      },
+      render: (_args, value) => [{ type: "text", text: value.schemaJson }]
+    },
+    async execute(args) {
+      const resource = commandParts(args.resource ?? []);
+      const method = commandPart(args.method);
+      const value = await client.schema(args.service, resource, method);
+      return { schemaJson: JSON.stringify(value) };
+    },
+    presentCall: (args) => ({ card: "generic", title: `\u4F01\u5FAE\u63A5\u53E3\u5B9A\u4E49 \xB7 ${args.service}`, kind: "read", rawInput: args })
+  }));
+  ctx.tools.register(defineTool2({
+    name: "wecom_action",
+    description: "Execute one official wecom-cli operation. Supports calendar CRUD/free-busy/rooms, meetings and transcripts, document search/permissions, online sheets, smart sheets, smart documents, contact resolution, and identity. Resolve people first, never invent internal IDs, and call wecom_schema before writes.",
+    parameters: {
+      service: { type: "string", required: true, enum: [...WECOM_SERVICES] },
+      resource: { type: "array", items: { type: "string" }, description: "Optional nested resource tokens." },
+      method: { type: "string", required: true },
+      parametersJson: { type: "string", required: true, description: "A JSON object matching the official method schema." }
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { resultJson: { type: "string", required: true } }
+      },
+      render: (_args, value) => [{ type: "text", text: value.resultJson }]
+    },
+    async execute(args, exec) {
+      const service = args.service;
+      const resource = commandParts(args.resource ?? []);
+      const method = commandPart(args.method);
+      const parameters = parseObject(args.parametersJson);
+      const result = await client.invoke(service, resource, method, parameters);
+      const card = inferWecomCard(service, method, parameters, result);
+      if (card !== void 0) {
+        exec.deferContext(createUserMessage2({
+          content: [
+            {
+              type: "text",
+              text: "The Enterprise WeChat operation succeeded. Send the next content block as your entire next assistant response. Preserve it exactly, including invisible metadata. Do not expose internal IDs and do not call another tool."
+            },
+            { type: "text", text: identifyExternalCardText(card) }
+          ],
+          source: {
+            kind: "plugin",
+            plugin: "deepseek-harness-chatroom",
+            form: "notice",
+            summary: `Render Enterprise WeChat ${card.kind} card`
+          }
+        }));
+      }
+      return { resultJson: JSON.stringify(result) };
+    },
+    presentCall: (args) => ({ card: "generic", title: `\u4F01\u5FAE \xB7 ${args.service} ${args.method}`, kind: "other", rawInput: args })
+  }));
+}
+function commandParts(parts) {
+  return parts.map(commandPart);
+}
+function commandPart(value) {
+  if (!COMMAND_PART.test(value)) throw new Error(`Invalid wecom-cli command token ${JSON.stringify(value)}`);
+  return value;
+}
+function parseObject(value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("parametersJson must contain valid JSON");
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("parametersJson must contain a JSON object");
+  }
+  return parsed;
+}
+
 // src/room.ts
 var ChatroomInputError = class extends Error {
 };
@@ -1913,6 +2237,7 @@ var ChatroomRuntime = class {
     this.ctx = ctx;
     this.config = config;
     this.log = ctx.logger("deepseek-harness-chatroom");
+    this.wecom = new WecomCliClient(config);
   }
   ctx;
   config;
@@ -1939,6 +2264,7 @@ var ChatroomRuntime = class {
   notificationClients = /* @__PURE__ */ new Set();
   ignoredAssistantMessageIds = /* @__PURE__ */ new Set();
   chatroomAgentContexts = /* @__PURE__ */ new WeakSet();
+  wecom;
   ready = false;
   stopping = false;
   /** Public metadata for the configured legacy room. */
@@ -2354,6 +2680,90 @@ var ChatroomRuntime = class {
     if (identity !== void 0) this.ensureRoomTitle(binding, this.requireState(roomId).record.title);
     return this.projectRoom(this.requireState(roomId), identity?.participantId);
   }
+  /** Stop the active Agent turn while retaining the room and queued user intake. */
+  async stopRoomSession(roomId, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    this.assertRoomMember(roomId, identity.participantId);
+    const binding = await this.ensureRoom(roomId);
+    binding.agent.cancel({ kind: "user" }, { keepInbox: true });
+    await binding.agent.whenIdle();
+    return this.projectRoom(state, identity.participantId);
+  }
+  /** Replace one room's Harness Session while retaining the room identity and roster. */
+  async renewRoomSession(roomId, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    this.assertRoomMember(roomId, identity.participantId);
+    if (state.rotation !== void 0) {
+      await state.rotation;
+      return this.projectRoom(state, identity.participantId);
+    }
+    let resolveRotation;
+    const predecessor = state.admission;
+    state.admission = new Promise((resolve3) => {
+      resolveRotation = resolve3;
+    });
+    const rotation = (async () => {
+      await predecessor;
+      const previous = await this.ensureRoom(roomId);
+      previous.agent.cancel({ kind: "user" });
+      await previous.agent.whenIdle();
+      this.archiveRoomSession(state, previous.agent.session);
+      await previous.release();
+      state.binding = void 0;
+      state.activation = void 0;
+      const sessionId = `chatroom-v1-${roomId}-${randomUUID3()}`;
+      const record = await this.requireRoomRecords().update(roomId, (current) => ({
+        ...current,
+        sessionId,
+        updatedAt: Date.now()
+      }));
+      state.record = record;
+      this.archiveRoom(record);
+      const binding = await this.ensureRoom(roomId);
+      this.ensureRoomTitle(binding, record.title);
+      this.broadcast(state, { type: "room-updated", room: this.projectRoom(state), members: this.roomMembers(state) });
+    })();
+    state.rotation = rotation;
+    try {
+      await rotation;
+      return this.projectRoom(state, identity.participantId);
+    } finally {
+      if (state.rotation === rotation) state.rotation = void 0;
+      resolveRotation();
+    }
+  }
+  /** Create an Enterprise WeChat online meeting and post it to the room as a durable card. */
+  async createQuickMeeting(roomId, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    this.assertRoomMember(roomId, identity.participantId);
+    const task = state.admission.then(async () => {
+      const whoami = await this.wecom.invoke("identity", [], "whoami", {});
+      const userid = findStringField(whoami, ["userid", "user_id", "open_userid", "open_vid"]);
+      if (userid === void 0) throw new ChatroomInputError("\u4F01\u4E1A\u5FAE\u4FE1\u8EAB\u4EFD\u4FE1\u606F\u4E2D\u7F3A\u5C11\u53EF\u7528\u7684\u7528\u6237\u6807\u8BC6\u3002");
+      const begin = new Date(Date.now() + 5 * 6e4);
+      const end = new Date(begin.getTime() + this.config.wecomQuickMeetingDurationMinutes * 6e4);
+      const parameters = {
+        subject: this.config.wecomQuickMeetingSubject,
+        begin_time: formatWecomTime(begin, this.config.wecomTimeZone),
+        end_time: formatWecomTime(end, this.config.wecomTimeZone),
+        attendees: [{ userid }],
+        timezone: {
+          timezone_id: this.config.wecomTimeZone,
+          timezone_offset: timezoneOffsetSeconds(begin, this.config.wecomTimeZone)
+        }
+      };
+      const result = await this.wecom.invoke("meeting", [], "create", parameters);
+      const inferred = inferWecomCard("meeting", "create", parameters, result);
+      if (inferred?.kind !== "meeting") throw new ChatroomInputError("\u4F01\u5FAE\u5DF2\u521B\u5EFA\u4F1A\u8BAE\uFF0C\u4F46\u8FD4\u56DE\u4FE1\u606F\u7F3A\u5C11\u4F1A\u8BAE\u6807\u9898\u3002");
+      await this.appendRoomCard(state, identity, inferred);
+      return inferred;
+    });
+    state.admission = task.then(() => void 0, () => void 0);
+    return await task;
+  }
   /** Rename one room as its owner or an administrator. */
   async renameRoom(roomId, title, identity) {
     this.assertReady();
@@ -2441,7 +2851,7 @@ var ChatroomRuntime = class {
         }
       }
       const durable = await this.durableContent(roomId, identity, identifyPrompt(content, identity, reply));
-      const message = createUserMessage2({ content: durable, source: { kind: "user" } });
+      const message = createUserMessage3({ content: durable, source: { kind: "user" } });
       if (!aiTriggered) {
         binding.agent.session.append("user/message", message, { surfaceOp: "append" });
       } else if (mode === "steer") {
@@ -2578,7 +2988,7 @@ var ChatroomRuntime = class {
       };
       const identified = identifyPrompt([{ type: "text", text: identifyForwardText(bundle) }], identity);
       const durable = await this.durableContent(targetRoomId, identity, identified);
-      binding.agent.session.append("user/message", createUserMessage2({
+      binding.agent.session.append("user/message", createUserMessage3({
         content: durable,
         source: { kind: "user" }
       }), { surfaceOp: "append" });
@@ -2831,7 +3241,7 @@ var ChatroomRuntime = class {
       const text = promptPreview(content);
       const files = durable.flatMap((block) => block.type === "text" ? projectFileText(block.text).files : []);
       const sequence = this.nextThreadSequence(threadId);
-      const message = createUserMessage2({
+      const message = createUserMessage3({
         content: durable,
         source: { kind: "user" }
       });
@@ -3186,8 +3596,8 @@ var ChatroomRuntime = class {
     return refs;
   }
   async seedConfiguredRoom() {
-    const records = this.requireRoomRecords();
-    const existing = records.get(this.config.roomId);
+    const records2 = this.requireRoomRecords();
+    const existing = records2.get(this.config.roomId);
     const configured = {
       id: this.config.roomId,
       title: existing?.title ?? this.config.roomTitle,
@@ -3201,7 +3611,7 @@ var ChatroomRuntime = class {
       autoTriggerEnabled: existing?.autoTriggerEnabled ?? false
     };
     if (existing === void 0 || existing.title !== configured.title || existing.aiDisplayName !== configured.aiDisplayName || existing.sessionId !== configured.sessionId || existing.updatedAt === void 0 || existing.autoTriggerEnabled === void 0) {
-      await records.put(configured.id, configured);
+      await records2.put(configured.id, configured);
     }
   }
   agentToolTarget(sessionId) {
@@ -3477,6 +3887,7 @@ var ChatroomRuntime = class {
     if (this.chatroomAgentContexts.has(agentCtx)) return;
     this.chatroomAgentContexts.add(agentCtx);
     registerChatroomAgentTools(agentCtx, this, sessionId);
+    registerWecomAgentTools(agentCtx, this.wecom);
     agentCtx.systemPrompt.section({
       name: "chatroom:main-agent",
       order: 10,
@@ -3486,6 +3897,35 @@ var ChatroomRuntime = class {
       name: "chatroom:collaboration-tools",
       order: 11,
       text: () => "\u4F60\u53EF\u4F7F\u7528 chatroom_capabilities \u67E5\u770B\u5F53\u524D\u7FA4\u804A\u80FD\u529B\u548C\u53EF\u64CD\u4F5C\u7684\u8FD1\u671F\u6D88\u606F ID\uFF0C\u5E76\u4F7F\u7528 chatroom_action \u62C9\u4EBA\u3001\u4E3B\u52A8\u53D1\u6D88\u606F\u3001\u53D1\u9001\u5DE5\u4F5C\u533A\u6587\u4EF6\u3001\u56DE\u590D\u5F15\u7528\u3001\u8D34\u8868\u60C5\u3001\u521B\u5EFA\u5206\u652F\u6216\u64A4\u56DE\u81EA\u5DF1\u7684\u6D88\u606F\u3002\u6267\u884C\u7FA4\u804A\u526F\u4F5C\u7528\u524D\u5148\u8C03\u7528\u5DE5\u5177\uFF0C\u53EA\u6709\u5DE5\u5177\u6210\u529F\u540E\u624D\u80FD\u58F0\u79F0\u64CD\u4F5C\u5B8C\u6210\u3002"
+    });
+    agentCtx.systemPrompt.section({
+      name: "chatroom:wecom-tools",
+      order: 12,
+      text: () => "\u4F60\u53EF\u4F7F\u7528 wecom_schema \u4E0E wecom_action \u64CD\u4F5C\u4F01\u4E1A\u5FAE\u4FE1\u65E5\u7A0B\u3001\u4F1A\u8BAE\u3001\u4F1A\u8BAE\u7EAA\u8981\u3001\u6587\u6863\u3001\u5728\u7EBF\u8868\u683C\u3001\u667A\u80FD\u8868\u683C\u548C\u667A\u80FD\u6587\u6863\u3002\u5199\u64CD\u4F5C\u524D\u5148\u8BFB\u53D6\u5BF9\u5E94 schema\uFF1B\u6D89\u53CA\u4EBA\u5458\u65F6\u5148\u7528 contact \u89E3\u6790\u771F\u5B9E\u8D26\u53F7\uFF1B\u4E0D\u8981\u731C\u6D4B\u6216\u5411\u7528\u6237\u5C55\u793A userid\u3001docid\u3001meeting_id \u7B49\u5185\u90E8\u6807\u8BC6\u3002\u7528\u6237\u672A\u6307\u5B9A\u6587\u6863\u7C7B\u578B\u65F6\u9ED8\u8BA4\u521B\u5EFA\u667A\u80FD\u6587\u6863\u3002"
+    });
+  }
+  async appendRoomCard(state, identity, card) {
+    const binding = await this.ensureRoom(state.record.id);
+    const durable = await this.durableContent(
+      state.record.id,
+      identity,
+      identifyPrompt([{ type: "text", text: identifyExternalCardText(card) }], identity)
+    );
+    binding.agent.session.append("user/message", createUserMessage3({
+      content: durable,
+      source: { kind: "user" }
+    }), { surfaceOp: "append" });
+    await this.touchMember(state.record.id, identity);
+    await this.touchRoom(state.record.id);
+    this.notify({
+      id: randomUUID3(),
+      roomId: state.record.id,
+      roomTitle: state.record.title,
+      participantId: identity.participantId,
+      displayName: identity.displayName,
+      role: "human",
+      text: `\u521B\u5EFA\u4E86\u4F01\u5FAE\u4F1A\u8BAE\u300C${card.title}\u300D`,
+      createdAt: Date.now()
     });
   }
   /** Ensure one shared Session uses native Workspace navigation. */
@@ -3784,7 +4224,7 @@ var ChatroomRuntime = class {
   }
   appendThreadRoot(binding, root, content) {
     if (root.role === "human") {
-      binding.agent.session.append("user/message", createUserMessage2({ content, source: { kind: "user" } }), { surfaceOp: "append" });
+      binding.agent.session.append("user/message", createUserMessage3({ content, source: { kind: "user" } }), { surfaceOp: "append" });
       return;
     }
     const selection = binding.agent.options.provider !== void 0 && binding.agent.options.model !== void 0 ? { provider: binding.agent.options.provider, model: binding.agent.options.model } : this.ctx.agentDefaultModel.currentSelection();
@@ -3809,7 +4249,7 @@ var ChatroomRuntime = class {
         model: settings.model,
         ...reasoningEffort === void 0 ? {} : { reasoningEffort },
         system: settings.controllerPrompt,
-        messages: [createUserMessage2({
+        messages: [createUserMessage3({
           source: { kind: "user" },
           content: [{ type: "text", text: JSON.stringify({ history, latest: promptPreview(content) }) }]
         })],
@@ -3827,7 +4267,7 @@ var ChatroomRuntime = class {
     const owner = thread ?? room;
     const task = owner.automation.then(async () => {
       if (!await this.shouldAutoTrigger(room, binding, content, thread)) return;
-      binding.agent.followup(createUserMessage2({
+      binding.agent.followup(createUserMessage3({
         content: [{
           type: "text",
           text: `The automatic-response controller selected this chatroom message for an AI response: ${JSON.stringify(promptPreview(content))}. Respond to that message now. Do not mention this controller notice.`
@@ -3986,7 +4426,8 @@ function newRoomState(record) {
     binding: void 0,
     activation: void 0,
     admission: Promise.resolve(),
-    automation: Promise.resolve()
+    automation: Promise.resolve(),
+    rotation: void 0
   };
 }
 function newThreadState(record) {
@@ -4301,6 +4742,64 @@ function promptPreview(content) {
   if (content.some((part) => part.type === "file")) return "\u53D1\u9001\u4E86\u6587\u4EF6";
   return "\u53D1\u9001\u4E86\u56FE\u7247";
 }
+function formatWecomTime(value, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(value);
+  const field = (type) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${field("year")}-${field("month")}-${field("day")} ${field("hour")}:${field("minute")}:${field("second")}`;
+}
+function timezoneOffsetSeconds(value, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(value);
+  const numbers = Object.fromEntries(parts.flatMap((part) => part.type === "literal" ? [] : [[part.type, Number(part.value)]]));
+  return Math.round((Date.UTC(
+    numbers.year,
+    numbers.month - 1,
+    numbers.day,
+    numbers.hour,
+    numbers.minute,
+    numbers.second
+  ) - value.getTime()) / 1e3);
+}
+function findStringField(value, keys) {
+  const visit = (candidate, depth) => {
+    if (depth > 4 || candidate === null || typeof candidate !== "object") return void 0;
+    if (Array.isArray(candidate)) {
+      for (const item of candidate.slice(0, 10)) {
+        const found = visit(item, depth + 1);
+        if (found !== void 0) return found;
+      }
+      return void 0;
+    }
+    const record = candidate;
+    for (const key of keys) {
+      const field = record[key];
+      if (typeof field === "string" && field.trim() !== "") return field;
+    }
+    for (const nested of Object.values(record).slice(0, 30)) {
+      const found = visit(nested, depth + 1);
+      if (found !== void 0) return found;
+    }
+    return void 0;
+  };
+  return visit(value, 0);
+}
 function assistantText(content) {
   return content.filter((block) => block.type === "text").map((block) => block.text.trim()).filter(Boolean).join("\n").trim();
 }
@@ -4430,6 +4929,14 @@ var ChatroomHttpController = class {
       }
       if (route.endpoint === "/rooms/manage") {
         await this.handleRoomManagement(request, response);
+        return;
+      }
+      if (route.endpoint === "/rooms/session") {
+        await this.handleRoomSession(request, response);
+        return;
+      }
+      if (route.endpoint === "/wecom/quick-meeting") {
+        await this.handleQuickMeeting(request, response);
         return;
       }
       if (route.endpoint === "/automation") {
@@ -4924,7 +5431,7 @@ var ChatroomHttpController = class {
     if (action === "add-members") {
       const members = await this.runtime.addRoomMembers(
         roomId,
-        stringArray(body, "participantIds"),
+        stringArray2(body, "participantIds"),
         identity
       );
       json(response, 200, {
@@ -4935,6 +5442,33 @@ var ChatroomHttpController = class {
       return;
     }
     throw new ChatroomInputError("\u7FA4\u7BA1\u7406\u64CD\u4F5C\u65E0\u6548\u3002");
+  }
+  async handleRoomSession(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = await this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const body = await readJson(request, smallRequestLimit(this.config));
+    const roomId = fieldString(body, "roomId");
+    const action = fieldString(body, "action");
+    const room = action === "stop" ? await this.runtime.stopRoomSession(roomId, identity) : action === "new" ? await this.runtime.renewRoomSession(roomId, identity) : void 0;
+    if (room === void 0) throw new ChatroomInputError("\u4F1A\u8BDD\u63A7\u5236\u64CD\u4F5C\u65E0\u6548\u3002");
+    json(response, 200, { room, members: this.runtime.membersForRoom(roomId) });
+  }
+  async handleQuickMeeting(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = await this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const body = await readJson(request, smallRequestLimit(this.config));
+    const card = await this.runtime.createQuickMeeting(fieldString(body, "roomId"), identity);
+    json(response, 201, { accepted: true, card });
   }
   async handleAutomation(request, response) {
     const identity = await this.requireIdentity(request, response);
@@ -5357,7 +5891,7 @@ function fieldString(body, field) {
   if (typeof value !== "string") throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
   return value;
 }
-function stringArray(body, field) {
+function stringArray2(body, field) {
   const value = body[field];
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
     throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u6570\u7EC4\u3002`);

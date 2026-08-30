@@ -5,7 +5,7 @@ import { ChatroomAuth } from './auth.js';
 import { type ChatroomAgentAction, type ChatroomAgentActionInput } from './agent-tools.js';
 import type { Config } from './config.js';
 import { type ChatroomReactionEmoji } from './reactions.js';
-import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
+import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMeetingCard, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
 /** Runtime validation failure safe to return to a browser. */
 export declare class ChatroomInputError extends Error {
 }
@@ -36,6 +36,7 @@ export declare class ChatroomRuntime {
     private readonly notificationClients;
     private readonly ignoredAssistantMessageIds;
     private readonly chatroomAgentContexts;
+    private readonly wecom;
     private ready;
     private stopping;
     constructor(ctx: Context, config: Config);
@@ -105,6 +106,12 @@ export declare class ChatroomRuntime {
     private createSessionRoom;
     /** Activate an existing room and return its public metadata. */
     selectRoom(roomId: string, identity?: ChatroomIdentity): Promise<ChatroomInfo>;
+    /** Stop the active Agent turn while retaining the room and queued user intake. */
+    stopRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
+    /** Replace one room's Harness Session while retaining the room identity and roster. */
+    renewRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
+    /** Create an Enterprise WeChat online meeting and post it to the room as a durable card. */
+    createQuickMeeting(roomId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard>;
     /** Rename one room as its owner or an administrator. */
     renameRoom(roomId: string, title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Promote or demote one room member; only the owner controls administrators. */
@@ -190,6 +197,7 @@ export declare class ChatroomRuntime {
     private acquireAgent;
     private setupAgentContext;
     private augmentChatroomAgentContext;
+    private appendRoomCard;
     /** Ensure one shared Session uses native Workspace navigation. */
     private attachWorkspace;
     private durableContent;

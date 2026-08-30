@@ -1,7 +1,7 @@
 import { type ComponentType } from 'react';
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import { type ChatroomAvatarId } from '../avatars.js';
-import type { ChatroomFileReference, ChatroomForwardBundle, ChatroomForwardItem, ChatroomIdentity, ChatroomReplyReference, ChatroomRoomAvatar, ChatroomThreadRoot } from '../types.js';
+import type { ChatroomFileReference, ChatroomExternalCard, ChatroomForwardBundle, ChatroomForwardItem, ChatroomIdentity, ChatroomReplyReference, ChatroomRoomAvatar, ChatroomThreadRoot } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 import type { ChatroomView } from './store.js';
 import type { ChatroomAgentTarget } from './store.js';
@@ -31,6 +31,7 @@ export declare function projectChatroomMessage(node: ParticipantNode, identity: 
     readonly participantId?: string;
     readonly reply?: ChatroomReplyReference;
     readonly files: readonly ChatroomFileReference[];
+    readonly cards: readonly ChatroomExternalCard[];
     readonly forward?: ChatroomForwardBundle;
     readonly text: string;
     readonly avatarUrl?: string | undefined;

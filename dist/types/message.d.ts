@@ -1,4 +1,4 @@
-import type { ChatroomForwardBundle, ChatroomIdentity, ChatroomPromptContentPart } from './types.js';
+import type { ChatroomExternalCard, ChatroomForwardBundle, ChatroomIdentity, ChatroomPromptContentPart } from './types.js';
 import type { ChatroomFileReference, ChatroomReplyReference } from './types.js';
 import { type ChatroomAvatarId } from './avatars.js';
 export declare const PARTICIPANT_MARKER_START = "\u2063dsh-chatroom:";
@@ -6,6 +6,7 @@ export declare const PARTICIPANT_MARKER_END = "\u2063";
 export declare const REPLY_MARKER_START = "\u2063dsh-chatroom-reply:";
 export declare const FILE_MARKER_START = "\u2063dsh-chatroom-file:";
 export declare const FORWARD_MARKER_START = "\u2063dsh-chatroom-forward:";
+export declare const EXTERNAL_CARD_MARKER_START = "\u2063dsh-chatroom-card:";
 /** Add a durable, visually invisible participant id before the display name. */
 export declare function identifyChatroomText(text: string, identity: ChatroomIdentity): string;
 /** Add the room identity to the first text block without altering image order. */
@@ -36,6 +37,13 @@ export declare function identifyForwardText(bundle: ChatroomForwardBundle): stri
 export declare function projectForwardText(text: string): {
     text: string;
     forward?: ChatroomForwardBundle;
+};
+/** Add a model-readable Enterprise WeChat summary plus invisible card metadata. */
+export declare function identifyExternalCardText(card: ChatroomExternalCard): string;
+/** Remove Enterprise WeChat markers while collecting browser cards. */
+export declare function projectExternalCardText(text: string): {
+    text: string;
+    cards: ChatroomExternalCard[];
 };
 /** Whether visible room text explicitly mentions the generic or configured AI name. */
 export declare function mentionsAi(content: readonly ChatroomPromptContentPart[], aiDisplayName: string): boolean;

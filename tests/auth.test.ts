@@ -314,5 +314,7 @@ function config(): Config {
     authPublicOrigin: 'https://chat.example.com', authBootstrapToken: 'bootstrap-token',
     authAllowSelfRegistration: true, authDshAuthHeaders: false, authDshAuthVerifyUrl: '',
     authDshAuthLoginPath: '/auth/login',
+    wecomEnabled: true, wecomCliPath: '', wecomCliConfigDirectory: '', wecomCliTimeoutMs: 30_000,
+    wecomQuickMeetingDurationMinutes: 60, wecomQuickMeetingSubject: '快速会议', wecomTimeZone: 'Asia/Shanghai',
   }
 }

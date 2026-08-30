@@ -5,18 +5,28 @@ import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatroomReplyReference } from '../types.js'
 import type { ChatroomAgentTarget, ChatroomClientStore, ChatroomView } from './store.js'
 
-interface ChatroomComposerInjected {
+interface ChatroomComposerBaseInjected {
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
+  resolveTarget(sessionId: string): ChatroomAgentTarget | undefined
+}
+
+interface ChatroomFileInjected extends ChatroomComposerBaseInjected {
   addFiles(roomId: string, files: readonly File[]): void
   removeFile(roomId: string, fileId: string): void
   clearReply(roomId: string): void
   sendFiles(roomId: string): Promise<void>
-  resolveTarget(sessionId: string): ChatroomAgentTarget | undefined
 }
 
-type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomComposerInjected
-type ComposerDockProps = PropsRuntime<'conversation.input.dock'> & ChatroomComposerInjected
-type ComposerAttachmentsInjected = Pick<ChatroomComposerInjected, 'useChatroom' | 'clearReply' | 'resolveTarget'> & {
+interface ChatroomSessionInjected extends ChatroomComposerBaseInjected {
+  stopRoomSession(roomId: string): Promise<boolean>
+  newRoomSession(roomId: string): Promise<boolean>
+  quickMeeting(roomId: string): Promise<boolean>
+}
+
+type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomFileInjected
+type ComposerDockProps = PropsRuntime<'conversation.input.dock'> & ChatroomFileInjected
+type ComposerRightProps = PropsRuntime<'conversation.input.right'> & ChatroomSessionInjected
+type ComposerAttachmentsInjected = ChatroomComposerBaseInjected & Pick<ChatroomFileInjected, 'clearReply'> & {
   nativeAttachmentsView: ComponentType<ComposerAttachmentsProps>
 }
 export type ChatroomComposerAttachmentsProps = ComposerAttachmentsProps & ComposerAttachmentsInjected
@@ -90,6 +100,39 @@ export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
           event.currentTarget.value = ''
         }}
       />
+    </div>
+  )
+}
+
+/** Native-composer controls for stopping work or rotating the room Session. */
+export function ChatroomSessionControls(props: ComposerRightProps): JSX.Element | null {
+  const room = props.useChatroom(snapshot => snapshot)
+  const target = props.resolveTarget(String(props.sessionId))
+  if (target?.kind !== 'room') return null
+  return (
+    <div className="dsh-chatroom-session-controls">
+      <button
+        type="button"
+        disabled={!props.session.running || room.sessionControlBusy}
+        onClick={() => { void props.stopRoomSession(target.room.id) }}
+      >■ 停止</button>
+      <button
+        type="button"
+        disabled={room.sessionControlBusy}
+        onClick={() => { void props.newRoomSession(target.room.id) }}
+      >＋ 新会话</button>
+      <button
+        type="button"
+        className="dsh-chatroom-quick-meeting"
+        disabled={room.wecomBusy}
+        onClick={() => { void props.quickMeeting(target.room.id) }}
+      >⚡ 快速会议</button>
+      {room.sessionControlError !== undefined && (
+        <span className="dsh-chatroom-control-error" role="alert" title={room.sessionControlError}>{room.sessionControlError}</span>
+      )}
+      {room.wecomError !== undefined && (
+        <span className="dsh-chatroom-control-error" role="alert" title={room.wecomError}>{room.wecomError}</span>
+      )}
     </div>
   )
 }

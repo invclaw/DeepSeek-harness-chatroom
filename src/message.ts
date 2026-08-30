@@ -1,4 +1,11 @@
-import type { ChatroomForwardBundle, ChatroomIdentity, ChatroomPromptContentPart } from './types.js'
+import type {
+  ChatroomDocumentCard,
+  ChatroomExternalCard,
+  ChatroomForwardBundle,
+  ChatroomIdentity,
+  ChatroomMeetingCard,
+  ChatroomPromptContentPart,
+} from './types.js'
 import type { ChatroomFileReference, ChatroomReplyReference } from './types.js'
 import { fallbackAvatarId, isChatroomAvatarId, type ChatroomAvatarId } from './avatars.js'
 
@@ -7,6 +14,7 @@ export const PARTICIPANT_MARKER_END = '\u2063'
 export const REPLY_MARKER_START = '\u2063dsh-chatroom-reply:'
 export const FILE_MARKER_START = '\u2063dsh-chatroom-file:'
 export const FORWARD_MARKER_START = '\u2063dsh-chatroom-forward:'
+export const EXTERNAL_CARD_MARKER_START = '\u2063dsh-chatroom-card:'
 
 /** Add a durable, visually invisible participant id before the display name. */
 export function identifyChatroomText(text: string, identity: ChatroomIdentity): string {
@@ -113,6 +121,32 @@ export function projectForwardText(text: string): { text: string; forward?: Chat
   return { text: visible, forward }
 }
 
+/** Add a model-readable Enterprise WeChat summary plus invisible card metadata. */
+export function identifyExternalCardText(card: ChatroomExternalCard): string {
+  return `${EXTERNAL_CARD_MARKER_START}${encodePayload(card)}${PARTICIPANT_MARKER_END}${externalCardPrefix(card)}`
+}
+
+/** Remove Enterprise WeChat markers while collecting browser cards. */
+export function projectExternalCardText(text: string): { text: string; cards: ChatroomExternalCard[] } {
+  const cards: ChatroomExternalCard[] = []
+  let visible = text
+  while (true) {
+    const start = visible.indexOf(EXTERNAL_CARD_MARKER_START)
+    if (start < 0) break
+    const end = visible.indexOf(PARTICIPANT_MARKER_END, start + EXTERNAL_CARD_MARKER_START.length)
+    if (end < 0) break
+    const card = decodePayload<ChatroomExternalCard>(visible.slice(start + EXTERNAL_CARD_MARKER_START.length, end))
+    if (!validExternalCard(card)) break
+    cards.push(card)
+    const before = visible.slice(0, start).replace(/\n$/u, '')
+    let after = visible.slice(end + PARTICIPANT_MARKER_END.length)
+    const prefix = externalCardPrefix(card)
+    if (after.startsWith(prefix)) after = after.slice(prefix.length)
+    visible = `${before}${after}`
+  }
+  return { text: visible, cards }
+}
+
 /** Whether visible room text explicitly mentions the generic or configured AI name. */
 export function mentionsAi(content: readonly ChatroomPromptContentPart[], aiDisplayName: string): boolean {
   return [aiDisplayName, 'AI'].some(name => mentionsName(content, name))
@@ -160,6 +194,14 @@ function filePrefix(file: ChatroomFileReference): string {
 function forwardPrefix(bundle: ChatroomForwardBundle): string {
   const lines = bundle.items.map(item => `${item.displayName}：${item.text}`)
   return `合并转发（${bundle.items.length} 条）\n${lines.join('\n')}`
+}
+
+function externalCardPrefix(card: ChatroomExternalCard): string {
+  if (card.kind === 'meeting') {
+    const time = [card.beginTime, card.endTime].filter(value => value !== undefined).join(' - ')
+    return `企微会议：${card.title}${time === '' ? '' : `（${time}）`}`
+  }
+  return `企微${card.documentType ?? '文档'}：${card.title}`
 }
 
 function encodePayload(value: unknown): string {
@@ -220,4 +262,23 @@ function validForwardContentPart(value: unknown): boolean {
   const image = part.image as Record<string, unknown>
   return typeof image.attachmentId === 'string' && typeof image.mediaType === 'string'
     && typeof image.bytes === 'number' && typeof image.width === 'number' && typeof image.height === 'number'
+}
+
+function validExternalCard(value: unknown): value is ChatroomExternalCard {
+  if (value === null || typeof value !== 'object') return false
+  const card = value as Partial<ChatroomExternalCard>
+  if (card.kind !== 'meeting' && card.kind !== 'document') return false
+  if (typeof card.title !== 'string' || card.title.trim() === '') return false
+  if (card.kind === 'meeting') {
+    const meeting = value as Partial<ChatroomMeetingCard>
+    return optionalStrings(meeting.beginTime, meeting.endTime, meeting.url, meeting.location, meeting.status)
+      && (meeting.attendees === undefined
+        || (Array.isArray(meeting.attendees) && meeting.attendees.every(item => typeof item === 'string')))
+  }
+  const document = value as Partial<ChatroomDocumentCard>
+  return optionalStrings(document.documentType, document.url, document.modifiedAt, document.owner)
+}
+
+function optionalStrings(...values: readonly unknown[]): boolean {
+  return values.every(value => value === undefined || typeof value === 'string')
 }
