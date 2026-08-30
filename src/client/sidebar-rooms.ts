@@ -149,11 +149,15 @@ export function reconcileSidebarRoomRows(
     const bySession = sessionId === undefined
       ? undefined
       : takeRoom(remaining, candidate => candidate.sessionId === sessionId)
+    const rowTitle = findNativeTitleElement(row)?.textContent?.trim()
+    const looksLikeBranch = summary !== undefined && summaryLooksLikeBranch(summary)
+      || rowTitle?.startsWith(BRANCH_TITLE_PREFIX) === true
+      || row.dataset.dshChatroomBranchSessionId !== undefined
     // Only a selected row without a session payload can be recovered from the
     // active room. A branch row has its own session id while the store still
     // points at the parent room; binding it here would turn the branch into a
     // duplicate parent row.
-    const active = bySession === undefined && sessionId === undefined && selected && snapshot.room !== undefined
+    const active = bySession === undefined && sessionId === undefined && !looksLikeBranch && selected && snapshot.room !== undefined
       ? takeRoom(remaining, room => room.id === snapshot.room?.id)
       : undefined
     const room = bySession ?? active ?? takeUniquelyTitledRoom(remaining, row)

@@ -331,6 +331,28 @@ describe('native sidebar room rows', () => {
     expect(row.querySelector('[data-dsh-chatroom-branch-topic]')?.textContent).toBe('发布计划')
   })
 
+  it('keeps a branch-looking selected row distinct when the host has no drag payload', () => {
+    document.body.innerHTML = '<div role="treeitem" aria-selected="true"><span></span><span>分支：无拖拽 ID</span></div>'
+    const row = document.querySelector<HTMLElement>('[role="treeitem"]')!
+    row.draggable = true
+    const room = { id: 'room', title: '项目群', aiDisplayName: 'DeepSeek', sessionId: 'parent-session' } as const
+    const sessionList = {
+      byId: {
+        'chatroom-thread-v1-missing': {
+          id: 'chatroom-thread-v1-missing', displayTitle: '分支：无拖拽 ID', parentId: 'parent-session',
+          running: false, blank: false, updatedAt: 2,
+        },
+      },
+    } as never
+
+    reconcileSidebarRoomRows(document, {
+      rooms: [room], room, members: [], directPeers: [], directConversations: [],
+    } as unknown as ChatroomView, 'chatroom-thread-v1-missing' as never, undefined, undefined, undefined, sessionList)
+
+    expect(row.dataset.dshChatroomBranchRow).toBe('')
+    expect(row.dataset.dshChatroomRoomId).toBeUndefined()
+  })
+
   it('restores a native row when a branch is no longer part of the session list', () => {
     document.body.innerHTML = '<div role="treeitem" aria-selected="true"><span></span><span>分支：旧主题</span></div>'
     const row = document.querySelector<HTMLElement>('[role="treeitem"]')!
