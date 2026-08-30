@@ -260,15 +260,11 @@ function ThreadPanel(props: ChatroomPanelsProps & {
   const { thread } = props
   const parentSessionId = props.room.room?.sessionId
   const frameRef = useRef<HTMLIFrameElement>(null)
-  const frameSeed = useRef<{ thread: ChatroomThread; parentSessionId: string }>()
   const [frameInstance] = useState(() => ++branchFrameInstance)
   const [attempt, setAttempt] = useState(0)
   const [preparedAttempt, setPreparedAttempt] = useState(-1)
   const [ready, setReady] = useState(false)
   const [compatibilityMode, setCompatibilityMode] = useState(branchFrameCompatibilityPreferred)
-  if (frameSeed.current === undefined && parentSessionId !== undefined) {
-    frameSeed.current = { thread, parentSessionId }
-  }
   useLayoutEffect(() => {
     if (parentSessionId === undefined) return
     if (compatibilityMode) {
@@ -336,11 +332,10 @@ function ThreadPanel(props: ChatroomPanelsProps & {
       globalThis.clearTimeout(timer)
     }
   }, [attempt, compatibilityMode, parentSessionId, thread.id, thread.root.text, thread.sessionId])
-  const seed = frameSeed.current
   const summary = branchSummary(thread.root.text)
   const frameUrl = parentSessionId === undefined
     ? undefined
-    : branchFrameUrl(seed?.thread ?? thread, seed?.parentSessionId ?? parentSessionId, `${frameInstance}:${attempt}`)
+    : branchFrameUrl(thread, parentSessionId, `${frameInstance}:${attempt}`)
   return (
     <aside
       className="dsh-chatroom-thread-panel"
@@ -350,7 +345,7 @@ function ThreadPanel(props: ChatroomPanelsProps & {
       aria-label="分支回复"
     >
       <header>
-        <div><strong>分支回复</strong><small>{thread.root.displayName}：{summary}</small></div>
+        <div><strong>分支回复</strong><small>来自 {props.room.room?.title ?? '群聊'} · {thread.root.displayName}：{summary}</small></div>
         <button aria-label="关闭分支" type="button" onClick={props.closeThread}>×</button>
       </header>
       {parentSessionId === undefined
@@ -361,7 +356,6 @@ function ThreadPanel(props: ChatroomPanelsProps & {
             thread={thread}
             frameUrl={frameUrl!}
             retry={() => {
-              frameSeed.current = { thread, parentSessionId }
               forgetBlockedBranchFrame()
               setCompatibilityMode(false)
               setAttempt(value => value + 1)
