@@ -188,7 +188,7 @@ export declare class ChatroomRuntime {
     private publishDirectMessage;
     /** Create or reopen a branch rooted at one native room message. */
     openThread(roomId: string, identity: ChatroomIdentity, root: ChatroomThreadRoot): Promise<ChatroomThreadResponse>;
-    /** Append one branch message immediately and evaluate optional automatic responses separately. */
+    /** Append one branch message durably and enqueue it in the independent branch Agent. */
     submitThread(threadId: string, identity: ChatroomIdentity, text: string, reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
     submitThread(threadId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
     /** Project committed AI output into its parent room or branch stream. */

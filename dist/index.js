@@ -3688,9 +3688,8 @@ var ChatroomRuntime = class {
       const binding = await this.ensureThread(threadId);
       const roomState = this.requireState(state.record.roomId);
       const room = roomState.record;
-      const aiTriggered = mentionsAi(content, room.aiDisplayName) || room.autoTriggerEnabled === true && addressesAi(content, room.aiDisplayName);
       const { provider, model: modelId } = binding.agent.options;
-      if (aiTriggered && provider !== void 0 && modelId !== void 0 && content.some((part) => part.type === "image")) {
+      if (provider !== void 0 && modelId !== void 0 && content.some((part) => part.type === "image")) {
         const model = await this.ctx.llm.resolveModelInfo(provider, modelId);
         if (model.inputModalities !== void 0 && !model.inputModalities.includes("image")) {
           throw new ChatroomInputError(`\u6A21\u578B ${JSON.stringify(modelId)} \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165\u3002`);
@@ -3726,12 +3725,8 @@ var ChatroomRuntime = class {
       };
       await this.requireThreadMessages().put(record.id, record);
       this.archiveThreadMessage(state.record, record);
-      if (aiTriggered && mode === "steer") binding.agent.steer(message);
-      else if (aiTriggered) binding.agent.followup(message);
-      else binding.agent.session.append("user/message", message, { surfaceOp: "append" });
-      if (!aiTriggered && room.autoTriggerEnabled === true) {
-        this.scheduleAutomaticResponse(roomState, binding, content, state);
-      }
+      if (mode === "steer") binding.agent.steer(message);
+      else binding.agent.followup(message);
       await this.touchMember(state.record.roomId, identity);
       await this.touchRoom(state.record.roomId);
       const publicMessage = publicThreadMessage(record);
@@ -3751,7 +3746,7 @@ var ChatroomRuntime = class {
         text,
         createdAt: record.createdAt
       });
-      return { accepted: true, aiTriggered };
+      return { accepted: true, aiTriggered: true };
     });
     state.admission = task.then(() => void 0, () => void 0);
     return await task;

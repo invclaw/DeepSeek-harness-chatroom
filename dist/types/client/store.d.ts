@@ -289,7 +289,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     setThreadReply: (reply: ChatroomReplyReference) => void;
     /** Cancel the pending branch reply. */
     clearThreadReply: () => void;
-    /** Send one human-first branch message. */
+    /** Send one message to the independent branch Agent. */
     sendThreadMessage: (text: string) => Promise<boolean>;
     /** Request browser notification permission from an explicit user gesture. */
     enableSystemNotifications: () => Promise<void>;

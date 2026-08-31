@@ -1397,7 +1397,7 @@ export class ChatroomRuntime {
     return await task
   }
 
-  /** Append one branch message immediately and evaluate optional automatic responses separately. */
+  /** Append one branch message durably and enqueue it in the independent branch Agent. */
   async submitThread(
     threadId: string,
     identity: ChatroomIdentity,
@@ -1429,10 +1429,8 @@ export class ChatroomRuntime {
       const binding = await this.ensureThread(threadId)
       const roomState = this.requireState(state.record.roomId)
       const room = roomState.record
-      const aiTriggered = mentionsAi(content, room.aiDisplayName)
-        || (room.autoTriggerEnabled === true && addressesAi(content, room.aiDisplayName))
       const { provider, model: modelId } = binding.agent.options
-      if (aiTriggered && provider !== undefined && modelId !== undefined && content.some(part => part.type === 'image')) {
+      if (provider !== undefined && modelId !== undefined && content.some(part => part.type === 'image')) {
         const model = await this.ctx.llm.resolveModelInfo(provider, modelId)
         if (model.inputModalities !== undefined && !model.inputModalities.includes('image')) {
           throw new ChatroomInputError(`模型 ${JSON.stringify(modelId)} 不支持图片输入。`)
@@ -1468,12 +1466,8 @@ export class ChatroomRuntime {
       }
       await this.requireThreadMessages().put(record.id, record)
       this.archiveThreadMessage(state.record, record)
-      if (aiTriggered && mode === 'steer') binding.agent.steer(message)
-      else if (aiTriggered) binding.agent.followup(message)
-      else binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
-      if (!aiTriggered && room.autoTriggerEnabled === true) {
-        this.scheduleAutomaticResponse(roomState, binding, content, state)
-      }
+      if (mode === 'steer') binding.agent.steer(message)
+      else binding.agent.followup(message)
       await this.touchMember(state.record.roomId, identity)
       await this.touchRoom(state.record.roomId)
       const publicMessage = publicThreadMessage(record)
@@ -1493,7 +1487,7 @@ export class ChatroomRuntime {
         text,
         createdAt: record.createdAt,
       })
-      return { accepted: true as const, aiTriggered }
+      return { accepted: true as const, aiTriggered: true }
     })
     state.admission = task.then(() => undefined, () => undefined)
     return await task

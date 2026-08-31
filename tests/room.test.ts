@@ -749,16 +749,16 @@ describe('ChatroomRuntime', () => {
     expect(harness.agents[1]?.session.append).toHaveBeenCalledOnce()
     expect(harness.attached).toEqual(['chatroom-v1-lobby', opened.thread.sessionId])
 
-    await runtime.submitThread(opened.thread.id, bob, '先讨论，不叫 AI')
-    expect(harness.agents[1]?.session.append).toHaveBeenCalledTimes(2)
-    expect(harness.agents[1]?.followup).not.toHaveBeenCalled()
-    await runtime.submitThread(opened.thread.id, alice, '@AI 给出结论', {
-      messageId: 'branch-human-1', displayName: 'Bob', text: '先讨论，不叫 AI',
-    })
+    await runtime.submitThread(opened.thread.id, bob, '啊？')
+    expect(harness.agents[1]?.session.append).toHaveBeenCalledOnce()
     expect(harness.agents[1]?.followup).toHaveBeenCalledOnce()
-    expect(harness.agents[1]?.followup.mock.calls[0]?.[0]?.content[0]).toMatchObject({
+    await runtime.submitThread(opened.thread.id, alice, '@AI 给出结论', {
+      messageId: 'branch-human-1', displayName: 'Bob', text: '啊？',
+    })
+    expect(harness.agents[1]?.followup).toHaveBeenCalledTimes(2)
+    expect(harness.agents[1]?.followup.mock.calls[1]?.[0]?.content[0]).toMatchObject({
       type: 'text',
-      text: expect.stringContaining('回复 Bob「先讨论，不叫 AI」'),
+      text: expect.stringContaining('回复 Bob「啊？」'),
     })
 
     runtime.handleSessionEvent(
@@ -775,12 +775,12 @@ describe('ChatroomRuntime', () => {
     await vi.waitFor(async () => {
       const reopened = await runtime.openThread('lobby', alice, opened.thread.root)
       expect(reopened.messages.map(message => [message.role, message.text])).toEqual([
-        ['human', '先讨论，不叫 AI'],
+        ['human', '啊？'],
         ['human', '@AI 给出结论'],
         ['ai', '分支结论'],
       ])
       expect(reopened.messages[1]?.reply).toEqual({
-        messageId: 'branch-human-1', displayName: 'Bob', text: '先讨论，不叫 AI',
+        messageId: 'branch-human-1', displayName: 'Bob', text: '啊？',
       })
     })
     const branchEvents = writes.filter(value => value.startsWith('data: '))
@@ -791,7 +791,7 @@ describe('ChatroomRuntime', () => {
       .filter(event => event.type === 'thread-message')
     expect(branchEvents.at(-1)?.preview).toMatchObject({
       totalMessages: 3,
-      recentMessages: [{ text: '先讨论，不叫 AI' }, { text: '@AI 给出结论' }, { text: '分支结论' }],
+      recentMessages: [{ text: '啊？' }, { text: '@AI 给出结论' }, { text: '分支结论' }],
     })
     const reconnectWrites: string[] = []
     const reconnect = runtime.subscribe('lobby', bob, {
@@ -805,7 +805,7 @@ describe('ChatroomRuntime', () => {
     }
     expect(reconnectSnapshot.threadPreviews).toMatchObject([{
       totalMessages: 3,
-      recentMessages: [{ text: '先讨论，不叫 AI' }, { text: '@AI 给出结论' }, { text: '分支结论' }],
+      recentMessages: [{ text: '啊？' }, { text: '@AI 给出结论' }, { text: '分支结论' }],
     }])
     reconnect()
     await runtime.stop()

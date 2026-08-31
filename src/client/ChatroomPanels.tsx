@@ -402,7 +402,7 @@ function ThreadCompatibilityPanel(props: ChatroomPanelsProps & {
   const mentionCandidates = useMemo(() => {
     const aiNames = [...new Set(['AI', props.room.room?.aiDisplayName].filter((name): name is string => name !== undefined))]
     return [
-      ...aiNames.map(name => ({ name, description: '提及后在本分支触发 AI', ai: true })),
+      ...aiNames.map(name => ({ name, description: '当前分支的 AI 助手', ai: true })),
       ...props.room.members
         .filter(member => member.participantId !== props.room.identity?.participantId)
         .map(member => ({ name: member.displayName, description: member.online ? '在线成员' : '群成员', ai: false })),
@@ -443,7 +443,7 @@ function ThreadCompatibilityPanel(props: ChatroomPanelsProps & {
         : props.thread.root.text}</div>
     </div>
     <div className="dsh-chatroom-thread-messages">
-      {props.room.threadMessages.length === 0 && <p className="dsh-chatroom-thread-empty">从这里开始分支讨论。输入 <code>@AI</code> 只会在本分支触发 AI。</p>}
+      {props.room.threadMessages.length === 0 && <p className="dsh-chatroom-thread-empty">从这里开始与分支 AI 对话；回复只会进入当前分支。</p>}
       {props.room.threadMessages.map(message => <ThreadMessage key={message.id} message={message} roomId={props.thread.roomId} props={props} />)}
       <div ref={endRef} />
     </div>
@@ -460,7 +460,7 @@ function ThreadCompatibilityPanel(props: ChatroomPanelsProps & {
       <textarea
         ref={textareaRef}
         rows={3}
-        placeholder="回复分支；输入 @AI 让 AI 在本分支回答"
+        placeholder="给分支 AI 发消息"
         value={text}
         aria-expanded={visibleMentions.length > 0}
         aria-controls="dsh-chatroom-thread-mentions"

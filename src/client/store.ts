@@ -1297,7 +1297,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     if (this.snapshot.threadReply !== undefined) this.set({ threadReply: undefined, threadError: undefined })
   }
 
-  /** Send one human-first branch message. */
+  /** Send one message to the independent branch Agent. */
   sendThreadMessage = async (text: string): Promise<boolean> => {
     const thread = this.snapshot.thread
     const reply = this.snapshot.threadReply

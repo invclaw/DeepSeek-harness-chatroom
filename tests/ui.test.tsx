@@ -424,9 +424,9 @@ describe('native chatroom integration', () => {
     expect(screen.getByText('兼容模式消息')).toBeTruthy()
     const fullAgent = screen.getByRole('link', { name: '在新标签打开完整 Agent' }) as HTMLAnchorElement
     expect(new URL(fullAgent.href).searchParams.get('dsh-chatroom-thread')).toBe('thread')
-    fireEvent.change(screen.getByPlaceholderText('回复分支；输入 @AI 让 AI 在本分支回答'), { target: { value: '@AI 你好' } })
+    fireEvent.change(screen.getByPlaceholderText('给分支 AI 发消息'), { target: { value: '你好' } })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
-    expect(sendThreadMessage).toHaveBeenCalledWith('@AI 你好')
+    expect(sendThreadMessage).toHaveBeenCalledWith('你好')
   })
 
   it('reuses the compatibility view after an origin rejects a branch frame', () => {
