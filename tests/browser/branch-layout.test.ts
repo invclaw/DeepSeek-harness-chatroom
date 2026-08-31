@@ -95,6 +95,36 @@ describe('branch surfaces in a real browser', () => {
       await page.viewport(1280, 720)
     }
   })
+
+  it('keeps branch markers close to the parent and removes the parent edge stripe', () => {
+    mountSidebarFixture()
+
+    const parent = requiredElement<HTMLElement>('[data-dsh-chatroom-has-branches]')
+    const branch = requiredElement<HTMLElement>('[data-dsh-chatroom-branch-row]')
+
+    expect(getComputedStyle(branch).marginLeft).toBe('18px')
+    expect(getComputedStyle(parent).boxShadow).toBe('none')
+  })
+
+  it('replaces the chatroom settings fallback gear with its group glyph', () => {
+    const style = document.createElement('style')
+    style.textContent = CHATROOM_STYLES
+    document.head.append(style)
+    document.body.innerHTML = `
+      <div role="dialog">
+        <nav>
+          <button type="button" data-dsh-chatroom-settings-nav>
+            <svg data-fallback="gear"></svg><span>群聊与账号</span>
+          </button>
+        </nav>
+      </div>
+    `
+
+    const button = requiredElement<HTMLButtonElement>('[data-dsh-chatroom-settings-nav]')
+    const fallback = requiredElement<SVGElement>('[data-fallback="gear"]')
+    expect(getComputedStyle(fallback).display).toBe('none')
+    expect(getComputedStyle(button, '::before').maskImage).toContain('data:image/svg+xml')
+  })
 })
 
 function mountFixture(scheme: string, markNativeActions = true): void {
@@ -137,6 +167,27 @@ function mountFixture(scheme: string, markNativeActions = true): void {
       <div class="dsh-chatroom-thread-frame-error">无法加载分支</div>
       <div class="dsh-chatroom-thread-compatibility-notice"><span>兼容模式</span><span><button>重试</button></span></div>
     </aside>
+  `
+}
+
+function mountSidebarFixture(): void {
+  const style = document.createElement('style')
+  style.textContent = `${CHATROOM_STYLES}
+    [role="tree"] { width: 640px; }
+    [role="treeitem"] { display: flex; align-items: center; }
+    [data-dsh-chatroom-has-branches] { box-shadow: inset 2px 0 0 rgb(79 124 255); }
+  `
+  document.head.append(style)
+  document.body.innerHTML = `
+    <div role="tree">
+      <div role="treeitem" data-dsh-chatroom-room-row data-dsh-chatroom-has-branches aria-selected="true">
+        <span data-dsh-chatroom-group-avatar></span><span>LightHouse 研发</span>
+      </div>
+      <div role="treeitem" data-dsh-chatroom-branch-row aria-selected="false">
+        <span data-dsh-chatroom-branch-marker>↳</span>
+        <span data-dsh-chatroom-branch-surface><span>分支</span></span>
+      </div>
+    </div>
   `
 }
 
