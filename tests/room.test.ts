@@ -183,48 +183,53 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
-  it('updates a meeting after it ends, summarizes its notes, and posts the summary once', async () => {
+  it('automatically detects an ended meeting, summarizes its notes, and posts the summary once', async () => {
+    vi.useFakeTimers()
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
-    await runtime.start()
-    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
-    await runtime.selectRoom('lobby', identity)
-    const wecom = (runtime as unknown as { wecom: { client: ReturnType<typeof vi.fn> } }).wecom
-    const invoke = vi.fn()
-      .mockResolvedValueOnce({ users: [{ userid: 'alice-wecom', name: 'Alice' }] })
-      .mockResolvedValueOnce({
-        meeting_id: 'provider-meeting', subject: '周会', meeting_link: 'https://meeting.example.com/join',
-        begin_time: '2026-09-01 10:00:00', end_time: '2026-09-01 11:00:00',
+    try {
+      await runtime.start()
+      const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+      await runtime.selectRoom('lobby', identity)
+      const wecom = (runtime as unknown as { wecom: { client: ReturnType<typeof vi.fn> } }).wecom
+      const invoke = vi.fn()
+        .mockResolvedValueOnce({ users: [{ userid: 'alice-wecom', name: 'Alice' }] })
+        .mockResolvedValueOnce({
+          meeting_id: 'provider-meeting', subject: '周会', meeting_link: 'https://meeting.example.com/join',
+          begin_time: '2026-09-01 10:00:00', end_time: '2026-09-01 11:00:00',
+        })
+        .mockResolvedValueOnce({ meetings: [{
+          meeting_id: 'provider-meeting', subject: '周会', meeting_status: 'end',
+          begin_time: '2026-09-01 10:00:00', end_time: '2026-09-01 11:00:00',
+          attendees: [{ name: 'Alice', is_attended: true, duration: 1800 }],
+          notes: [{ note_content: '确认发布计划', todo_content: 'Alice 明天发布' }],
+        }] })
+      wecom.client = vi.fn(() => ({ invoke }))
+      const card = await runtime.createQuickMeeting('lobby', identity)
+      harness.llmStream.mockImplementationOnce(async function* () {
+        yield { type: 'text-delta', index: 0, text: '结论：按计划发布。\n\n行动项：Alice 明天发布。' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
       })
-      .mockResolvedValueOnce({ meetings: [{
-        meeting_id: 'provider-meeting', subject: '周会', meeting_status: 'end',
-        begin_time: '2026-09-01 10:00:00', end_time: '2026-09-01 11:00:00',
-        attendees: [{ name: 'Alice', is_attended: true, duration: 1800 }],
-        notes: [{ note_content: '确认发布计划', todo_content: 'Alice 明天发布' }],
-      }] })
-    wecom.client = vi.fn(() => ({ invoke }))
-    const card = await runtime.createQuickMeeting('lobby', identity)
-    harness.llmStream.mockImplementationOnce(async function* () {
-      yield { type: 'text-delta', index: 0, text: '结论：按计划发布。\n\n行动项：Alice 明天发布。' }
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    })
 
-    await runtime.synchronizeMeetings()
+      await vi.advanceTimersByTimeAsync(30_000)
 
-    expect(invoke).toHaveBeenNthCalledWith(3, 'meeting', [], 'get', {
-      meeting_ids: [{ meeting_id: 'provider-meeting' }],
-    })
-    expect(runtime.meetingSummary(card.id!, identity)).toMatchObject({
-      id: card.id,
-      status: 'end',
-      summaryStatus: 'completed',
-      summary: '结论：按计划发布。\n\n行动项：Alice 明天发布。',
-    })
-    expect(harness.agents[0]?.session.append.mock.calls.at(-1)?.[0]).toBe('assistant/message')
-    expect(JSON.stringify(harness.agents[0]?.session.append.mock.calls.at(-1)?.[1])).toContain('会议总结 · 周会')
-    await runtime.synchronizeMeetings()
-    expect(invoke).toHaveBeenCalledTimes(3)
-    await runtime.stop()
+      expect(invoke).toHaveBeenNthCalledWith(3, 'meeting', [], 'get', {
+        meeting_ids: [{ meeting_id: 'provider-meeting' }],
+      })
+      expect(runtime.meetingSummary(card.id!, identity)).toMatchObject({
+        id: card.id,
+        status: 'end',
+        summaryStatus: 'completed',
+        summary: '结论：按计划发布。\n\n行动项：Alice 明天发布。',
+      })
+      expect(harness.agents[0]?.session.append.mock.calls.at(-1)?.[0]).toBe('assistant/message')
+      expect(JSON.stringify(harness.agents[0]?.session.append.mock.calls.at(-1)?.[1])).toContain('会议总结 · 周会')
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(invoke).toHaveBeenCalledTimes(3)
+    } finally {
+      await runtime.stop()
+      vi.useRealTimers()
+    }
   })
 
   it('recovers a legacy meeting card and posts its summary after restart', async () => {
