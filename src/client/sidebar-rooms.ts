@@ -38,7 +38,15 @@ const NATIVE_GROUP_SECTION_ATTRIBUTE = 'data-dsh-chatroom-native-group-section'
 const NATIVE_FOLDER_WRAPPER_ATTRIBUTE = 'data-dsh-chatroom-native-folder-wrapper'
 const NATIVE_FOLDER_EXPAND_ATTEMPTED_ATTRIBUTE = 'data-dsh-chatroom-native-folder-expand-attempted'
 const NATIVE_OVERFLOW_BUTTON_ATTRIBUTE = 'data-dsh-chatroom-native-overflow-button'
+const NATIVE_OVERFLOW_EXPAND_ATTEMPTED_ATTRIBUTE = 'data-dsh-chatroom-native-overflow-expand-attempted'
+const CATEGORY_OVERFLOW_ATTRIBUTE = 'data-dsh-chatroom-category-overflow'
+const OVERFLOW_ROW_ATTRIBUTE = 'data-dsh-chatroom-overflow-row'
 const SIDEBAR_MUTATION_SELECTOR = '[role="tree"], [role="treeitem"], [role="menu"]'
+const GROUP_ORDER_BASE = -10_000
+const SOLO_ORDER_BASE = -6_000
+// Categories merge every Workspace into one list, so they need their own
+// truncation instead of the native per-Workspace limit of five.
+const CATEGORY_VISIBLE_LIMIT = 8
 
 type SidebarSessionList = Pick<SessionListState, 'byId'>
 
@@ -220,7 +228,7 @@ export function reconcileSidebarRoomRows(
         clearBranchRow(row)
       }
       decorateBranchRow(row, branch)
-      row.style.order = String(-10_000 + groupOrder++)
+      row.style.order = String(GROUP_ORDER_BASE + groupOrder++)
       row.querySelector(`:scope > [${SOLO_AVATAR_ATTRIBUTE}]`)?.remove()
       setRowCategory(row, 'group')
       categorized.push(row)
@@ -435,7 +443,7 @@ function decorateRoomRow(
   row.dataset.dshChatroomRoomRow = ''
   row.dataset.dshChatroomRoomId = room.id
   row.dataset.pinned = String(room.pinned === true)
-  row.style.order = String(-10_000 + order)
+  row.style.order = String(GROUP_ORDER_BASE + order)
   row.parentElement?.setAttribute('data-dsh-chatroom-room-list', '')
   decorateNativeMenuTrigger(row, room)
   row.querySelector(`:scope > [${SOLO_AVATAR_ATTRIBUTE}]`)?.remove()
@@ -664,9 +672,11 @@ function clearCategorizedRow(row: HTMLElement): void {
   clearRoomRow(row)
   row.removeAttribute(CATEGORY_ATTRIBUTE)
   row.removeAttribute(BRANCH_ROW_ATTRIBUTE)
+  row.removeAttribute(OVERFLOW_ROW_ATTRIBUTE)
   row.querySelector(`:scope > [${SOLO_AVATAR_ATTRIBUTE}]`)?.remove()
   const wrapper = row.parentElement
   wrapper?.removeAttribute(CATEGORY_WRAPPER_ATTRIBUTE)
+  wrapper?.removeAttribute(OVERFLOW_ROW_ATTRIBUTE)
   wrapper?.style.removeProperty('order')
 }
 
@@ -681,7 +691,7 @@ function setRowCategory(row: HTMLElement, category: 'group' | 'solo'): void {
 }
 
 function decorateSoloRow(row: HTMLElement, order: number): void {
-  row.style.order = String(-6_000 + order)
+  row.style.order = String(SOLO_ORDER_BASE + order)
   if (row.querySelector(`:scope > [${SOLO_AVATAR_ATTRIBUTE}]`) !== null) return
   const avatar = row.ownerDocument.createElement('span')
   avatar.setAttribute(SOLO_AVATAR_ATTRIBUTE, '')
@@ -711,11 +721,13 @@ function reconcileWorkspaceCategories(
   if (primary === undefined) return
   primary.setAttribute(CATEGORY_ROOT_ATTRIBUTE, '')
   reconcileNativeTreeSections(primary)
-  reconcileNativeOverflowButtons(primary)
-  const groupCount = rows.filter(row => row.getAttribute(CATEGORY_ATTRIBUTE) === 'group').length
-  const soloCount = rows.filter(row => row.getAttribute(CATEGORY_ATTRIBUTE) === 'solo').length
-  reconcileCategoryHeader(primary, 'group', '群聊', groupCount, -11_000)
-  reconcileCategoryHeader(primary, 'solo', 'Solo', soloCount, -7_000)
+  expandNativeOverflowButtons(primary)
+  const groupRows = rows.filter(row => row.getAttribute(CATEGORY_ATTRIBUTE) === 'group')
+  const soloRows = rows.filter(row => row.getAttribute(CATEGORY_ATTRIBUTE) === 'solo')
+  reconcileCategoryHeader(primary, 'group', '群聊', groupRows.length, -11_000)
+  reconcileCategoryOverflow(primary, 'group', groupRows, GROUP_ORDER_BASE)
+  reconcileCategoryHeader(primary, 'solo', 'Solo', soloRows.length, -7_000)
+  reconcileCategoryOverflow(primary, 'solo', soloRows, SOLO_ORDER_BASE)
   const peers = directDirectoryPeers(snapshot.directPeers ?? [], snapshot.directConversations ?? [])
   reconcileCategoryHeader(primary, 'direct', '私聊', peers.length, -3_000)
   reconcileDirectRows(primary, peers, snapshot, openDirect)
@@ -749,29 +761,91 @@ function reconcileNativeTreeSections(root: HTMLElement): void {
   }
 }
 
-// Native group sections are flattened with display:contents, so each section's
-// "show more sessions" button would sink below every negatively-ordered row.
-// Pin each button just after its own section's last visible row instead.
-function reconcileNativeOverflowButtons(root: HTMLElement): void {
+// Each native section truncates its own Workspace and offers its own "show more
+// sessions" button. Categories flatten every Workspace with display:contents and
+// hide the Workspace headers, so those buttons land mid-list with counts that
+// belong to a grouping the reader can no longer see. Expand them once so every
+// session reaches the DOM, then let the category own a single overflow control.
+function expandNativeOverflowButtons(root: HTMLElement): void {
   for (const section of root.querySelectorAll<HTMLElement>(`[${NATIVE_GROUP_SECTION_ATTRIBUTE}]`)) {
-    const button = section.querySelector<HTMLElement>(':scope > button')
+    const button = section.querySelector<HTMLElement>(':scope > button[aria-expanded]')
     if (button === null) continue
-    let lastRowOrder: number | undefined
-    for (const child of section.querySelectorAll<HTMLElement>(':scope > *')) {
-      if (child === button) continue
-      const order = Number(child.style.order)
-      if (child.style.order !== '' && Number.isFinite(order)) {
-        lastRowOrder = lastRowOrder === undefined ? order : Math.max(lastRowOrder, order)
-      }
-    }
-    if (lastRowOrder === undefined) {
-      button.removeAttribute(NATIVE_OVERFLOW_BUTTON_ATTRIBUTE)
-      button.style.removeProperty('order')
-      continue
-    }
     button.setAttribute(NATIVE_OVERFLOW_BUTTON_ATTRIBUTE, '')
-    button.style.order = String(lastRowOrder + 1)
+    button.style.removeProperty('order')
+    if (button.getAttribute('aria-expanded') === 'true') {
+      button.removeAttribute(NATIVE_OVERFLOW_EXPAND_ATTEMPTED_ATTRIBUTE)
+    } else if (!button.hasAttribute(NATIVE_OVERFLOW_EXPAND_ATTEMPTED_ATTRIBUTE)) {
+      button.setAttribute(NATIVE_OVERFLOW_EXPAND_ATTEMPTED_ATTRIBUTE, '')
+      button.click()
+    }
   }
+}
+
+function categoryExpandedAttribute(category: 'group' | 'solo'): string {
+  return `data-dsh-chatroom-${category}-overflow-expanded`
+}
+
+// A categorized row is positioned through its HoverCard wrapper when the native
+// markup provides one, so truncation has to hide the same element the category
+// collapse hides. A wrapper shared by several rows is not that element: hiding it
+// would take the whole native section down with one truncated row.
+function categoryRowShell(row: HTMLElement): HTMLElement {
+  const wrapper = row.parentElement
+  if (wrapper === null || !wrapper.hasAttribute(CATEGORY_WRAPPER_ATTRIBUTE)) return row
+  return wrapper.querySelectorAll('div[role="treeitem"]').length > 1 ? row : wrapper
+}
+
+function reconcileCategoryOverflow(
+  root: HTMLElement,
+  category: 'group' | 'solo',
+  rows: readonly HTMLElement[],
+  orderBase: number,
+): void {
+  const overflowing = rows.length > CATEGORY_VISIBLE_LIMIT
+  rows.forEach((row, index) => {
+    const shell = categoryRowShell(row)
+    if (overflowing && index >= CATEGORY_VISIBLE_LIMIT) shell.setAttribute(OVERFLOW_ROW_ATTRIBUTE, category)
+    else shell.removeAttribute(OVERFLOW_ROW_ATTRIBUTE)
+  })
+  let control = root.querySelector<HTMLElement>(`:scope > [${CATEGORY_OVERFLOW_ATTRIBUTE}="${category}"]`)
+  if (!overflowing) {
+    control?.remove()
+    return
+  }
+  if (control === null) {
+    control = root.ownerDocument.createElement('div')
+    control.setAttribute(CATEGORY_OVERFLOW_ATTRIBUTE, category)
+    const button = root.ownerDocument.createElement('button')
+    button.type = 'button'
+    const owner = control
+    button.onclick = () => {
+      const attribute = categoryExpandedAttribute(category)
+      root.setAttribute(attribute, String(root.getAttribute(attribute) !== 'true'))
+      paintCategoryOverflow(root, owner, category, orderBase)
+    }
+    control.append(button)
+    root.append(control)
+  }
+  control.dataset.total = String(rows.length)
+  paintCategoryOverflow(root, control, category, orderBase)
+}
+
+// Expansion is a root attribute the stylesheet reads, so a toggle repaints its
+// own control instead of waiting for the next sidebar mutation.
+function paintCategoryOverflow(
+  root: HTMLElement,
+  control: HTMLElement,
+  category: 'group' | 'solo',
+  orderBase: number,
+): void {
+  const total = Number(control.dataset.total ?? '0')
+  const expanded = root.getAttribute(categoryExpandedAttribute(category)) === 'true'
+  control.style.order = String(orderBase + (expanded ? total : CATEGORY_VISIBLE_LIMIT))
+  const button = control.querySelector('button')
+  if (button === null) return
+  button.setAttribute('aria-expanded', String(expanded))
+  const label = expanded ? '收起' : `展开其余 ${String(total - CATEGORY_VISIBLE_LIMIT)} 个会话`
+  if (button.textContent !== label) button.textContent = label
 }
 
 function directChildContaining(root: HTMLElement, descendant: HTMLElement): HTMLElement | undefined {
@@ -900,8 +974,12 @@ function clearCategoryRoot(root: HTMLElement): void {
   root.removeAttribute('data-dsh-chatroom-group-collapsed')
   root.removeAttribute('data-dsh-chatroom-solo-collapsed')
   root.removeAttribute('data-dsh-chatroom-direct-collapsed')
-  for (const header of root.querySelectorAll(`:scope > [${CATEGORY_HEADER_ATTRIBUTE}], :scope > [${DIRECT_ROW_ATTRIBUTE}]`)) {
-    header.remove()
+  root.removeAttribute(categoryExpandedAttribute('group'))
+  root.removeAttribute(categoryExpandedAttribute('solo'))
+  const owned = `:scope > [${CATEGORY_HEADER_ATTRIBUTE}], :scope > [${DIRECT_ROW_ATTRIBUTE}], :scope > [${CATEGORY_OVERFLOW_ATTRIBUTE}]`
+  for (const header of root.querySelectorAll(owned)) header.remove()
+  for (const shell of root.querySelectorAll(`[${OVERFLOW_ROW_ATTRIBUTE}]`)) {
+    shell.removeAttribute(OVERFLOW_ROW_ATTRIBUTE)
   }
   for (const section of root.querySelectorAll<HTMLElement>(`[${NATIVE_GROUP_SECTION_ATTRIBUTE}]`)) {
     section.removeAttribute(NATIVE_GROUP_SECTION_ATTRIBUTE)
@@ -917,6 +995,7 @@ function clearCategoryRoot(root: HTMLElement): void {
   }
   for (const button of root.querySelectorAll<HTMLElement>(`[${NATIVE_OVERFLOW_BUTTON_ATTRIBUTE}]`)) {
     button.removeAttribute(NATIVE_OVERFLOW_BUTTON_ATTRIBUTE)
+    button.removeAttribute(NATIVE_OVERFLOW_EXPAND_ATTEMPTED_ATTRIBUTE)
     button.style.removeProperty('order')
   }
 }
