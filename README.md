@@ -49,7 +49,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
   </tr>
 </table>
 
-> Screenshots are captured from the deployed v1.1.5 product UI. No mockups are used.
+> The screenshots are historical captures from the deployed v1.1.5 product UI. They are not a current-version guarantee, and no mockups are used.
 
 ## Core capabilities
 
@@ -69,7 +69,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 - The native sidebar, Conversation/Trajectory tabs, composer, model and permission selectors, reasoning/tool flow, Session log, approvals, questions, slash commands, stop/queue/steer, failures, and retries remain intact.
 - The room composer adds **Stop** and **New session**. Stop cancels the active Agent turn while retaining queued input. New session keeps the room's visible Session and complete transcript, first shows a new-AI-conversation divider above the composer, and then permanently keeps it before the next participant message. The server persists the matching context boundary so later AI requests contain only messages sent after that point. Concurrent requests coalesce into one reset.
 - While an Agent is running, Think and tool rows stay visible. Once the final answer arrives, the preceding process rows collapse into one expandable summary.
-- Persistent branches open in a right-side panel and own independent Harness Sessions. Branches support Markdown, `@` candidates, images/files, quotes, reactions, forwarding, selection, and the full Agent runtime without nested chatroom branches. Gateways that reject embedded documents switch immediately to an inline compatibility view instead of waiting for a timeout, with the complete Agent available in a new tab.
+- Persistent branches open in a right-side panel and own independent Harness Sessions. Branches support Markdown, `@` candidates, images/files, quotes, reactions, forwarding, selection, and the full Agent runtime without nested chatroom branches. Their sidebar rows use a compact marker and parent context instead of a heavy edge stripe, keeping the hierarchy visible without making the branch look like a second room. Gateways that reject embedded documents switch immediately to an inline compatibility view instead of waiting for a timeout, with the complete Agent available in a new tab.
 - Historical images remain durable. For text-only models, only the model request receives deterministic text markers in place of image input; the UI keeps the original media.
 
 ### Messaging and media
@@ -106,6 +106,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 
 - **1.3.3** — unify the full-width Group, Solo, and Direct composer experience, persist the AI-context reset divider at its exact transcript position, and add per-platform-account Enterprise WeChat QR authorization with Quick-meeting compatibility for identity responses that omit a structured human user id.
 - **1.3.2** — retain the complete room transcript when starting a new AI conversation and exclude every earlier user, assistant, and tool-result message from later model requests.
+- **1.3.1** — polish branch navigation with a closer marker and no parent edge stripe, replace the generic Settings navigation gear with a semantic group/account icon and safe fallback, and add browser coverage for the layout and settings navigation.
 - **1.3.0** — add room Stop/New-session controls, official schema-driven wecom-cli Agent tools, Quick meeting, and native meeting/document cards while keeping Enterprise WeChat authorization failures isolated from Harness startup.
 - **1.2.5** — append ordinary room and branch messages before the optional automatic-response model runs, and repair historical tool-call/result ordering from older chatroom builds before requests reach the model provider.
 - **1.2.4** — add the plugin-owned SQLite chat archive and content-addressed local Blob store, migrate legacy inline attachments, enforce membership visibility in authenticated deployments, and make recall remove the original model message from future Agent context.
@@ -140,7 +141,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 
 ### Regression gates
 
-`pnpm check` runs type checks, observable-behavior tests, and production builds. CI additionally installs Chromium and runs `pnpm test:browser`, which verifies the branch panel's computed light/dark colors and proves that injected AI branch activity expands the native Harness actions row without overlapping the composer. These browser assertions deliberately use geometry and computed styles instead of screenshot snapshots.
+`pnpm check` runs type checks, observable-behavior tests, and production builds. CI additionally installs Chromium and runs `pnpm test:browser`, which verifies the branch panel's computed light/dark colors, keeps branch markers close to their parent without the parent edge stripe, proves that injected AI branch activity expands the native Harness actions row without overlapping the composer, and checks the semantic/fallback group/account Settings icon. These browser assertions deliberately use geometry and computed styles instead of screenshot snapshots.
 
 ## Install from GitHub
 
