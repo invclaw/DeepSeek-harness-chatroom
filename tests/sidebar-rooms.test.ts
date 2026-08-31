@@ -517,6 +517,39 @@ describe('native sidebar room rows', () => {
     expect(openDirect).toHaveBeenCalledWith('bob-id')
   })
 
+  it('pins each native overflow button after its own section rows', () => {
+    document.body.innerHTML = `
+      <div role="tree">
+        <div>
+          <span><div role="treeitem" aria-selected="true"><span></span><span>项目群</span></div></span>
+          <span><div role="treeitem" aria-selected="false"><span></span><span>个人工作</span><button aria-label="个人工作操作">•••</button></div></span>
+          <button type="button">展开其余 3 个会话</button>
+        </div>
+        <div>
+          <span><div role="treeitem" aria-selected="false"><span></span><span>另一个会话</span><button aria-label="另一个会话操作">•••</button></div></span>
+          <button type="button">展开其余 6 个会话</button>
+        </div>
+      </div>
+    `
+    const room = { id: 'room', title: '项目群', aiDisplayName: 'DeepSeek', sessionId: 'room-session' } as const
+
+    reconcileSidebarRoomRows(document, {
+      rooms: [room], room, members: [], directPeers: [], directConversations: [],
+    } as unknown as ChatroomView)
+
+    const sections = [...document.querySelectorAll<HTMLElement>('[role="tree"] > div')]
+    const firstButton = sections[0]!.querySelector<HTMLElement>(':scope > button')!
+    const secondButton = sections[1]!.querySelector<HTMLElement>(':scope > button')!
+    const soloOrder = (section: HTMLElement) =>
+      Number(section.querySelector<HTMLElement>('[data-dsh-chatroom-sidebar-category="solo"]')!.style.order)
+
+    expect(firstButton.dataset.dshChatroomNativeOverflowButton).toBe('')
+    expect(secondButton.dataset.dshChatroomNativeOverflowButton).toBe('')
+    expect(Number(firstButton.style.order)).toBeGreaterThan(soloOrder(sections[0]!))
+    expect(firstButton.style.order).toBe('-5999')
+    expect(secondButton.style.order).toBe('-5998')
+  })
+
   it('ignores conversation mutations outside the native sidebar', async () => {
     document.body.innerHTML = `
       <div role="tree"><div role="treeitem" aria-selected="true"><span>会话</span></div></div>

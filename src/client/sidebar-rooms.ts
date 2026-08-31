@@ -37,6 +37,7 @@ const BRANCH_TITLE_PREFIX = '分支：'
 const NATIVE_GROUP_SECTION_ATTRIBUTE = 'data-dsh-chatroom-native-group-section'
 const NATIVE_FOLDER_WRAPPER_ATTRIBUTE = 'data-dsh-chatroom-native-folder-wrapper'
 const NATIVE_FOLDER_EXPAND_ATTEMPTED_ATTRIBUTE = 'data-dsh-chatroom-native-folder-expand-attempted'
+const NATIVE_OVERFLOW_BUTTON_ATTRIBUTE = 'data-dsh-chatroom-native-overflow-button'
 const SIDEBAR_MUTATION_SELECTOR = '[role="tree"], [role="treeitem"], [role="menu"]'
 
 type SidebarSessionList = Pick<SessionListState, 'byId'>
@@ -710,6 +711,7 @@ function reconcileWorkspaceCategories(
   if (primary === undefined) return
   primary.setAttribute(CATEGORY_ROOT_ATTRIBUTE, '')
   reconcileNativeTreeSections(primary)
+  reconcileNativeOverflowButtons(primary)
   const groupCount = rows.filter(row => row.getAttribute(CATEGORY_ATTRIBUTE) === 'group').length
   const soloCount = rows.filter(row => row.getAttribute(CATEGORY_ATTRIBUTE) === 'solo').length
   reconcileCategoryHeader(primary, 'group', '群聊', groupCount, -11_000)
@@ -744,6 +746,31 @@ function reconcileNativeTreeSections(root: HTMLElement): void {
       row.setAttribute(NATIVE_FOLDER_EXPAND_ATTEMPTED_ATTRIBUTE, '')
       row.click()
     }
+  }
+}
+
+// Native group sections are flattened with display:contents, so each section's
+// "show more sessions" button would sink below every negatively-ordered row.
+// Pin each button just after its own section's last visible row instead.
+function reconcileNativeOverflowButtons(root: HTMLElement): void {
+  for (const section of root.querySelectorAll<HTMLElement>(`[${NATIVE_GROUP_SECTION_ATTRIBUTE}]`)) {
+    const button = section.querySelector<HTMLElement>(':scope > button')
+    if (button === null) continue
+    let lastRowOrder: number | undefined
+    for (const child of section.querySelectorAll<HTMLElement>(':scope > *')) {
+      if (child === button) continue
+      const order = Number(child.style.order)
+      if (child.style.order !== '' && Number.isFinite(order)) {
+        lastRowOrder = lastRowOrder === undefined ? order : Math.max(lastRowOrder, order)
+      }
+    }
+    if (lastRowOrder === undefined) {
+      button.removeAttribute(NATIVE_OVERFLOW_BUTTON_ATTRIBUTE)
+      button.style.removeProperty('order')
+      continue
+    }
+    button.setAttribute(NATIVE_OVERFLOW_BUTTON_ATTRIBUTE, '')
+    button.style.order = String(lastRowOrder + 1)
   }
 }
 
@@ -887,6 +914,10 @@ function clearCategoryRoot(root: HTMLElement): void {
   }
   for (const row of root.querySelectorAll<HTMLElement>(`[${NATIVE_FOLDER_EXPAND_ATTEMPTED_ATTRIBUTE}]`)) {
     row.removeAttribute(NATIVE_FOLDER_EXPAND_ATTEMPTED_ATTRIBUTE)
+  }
+  for (const button of root.querySelectorAll<HTMLElement>(`[${NATIVE_OVERFLOW_BUTTON_ATTRIBUTE}]`)) {
+    button.removeAttribute(NATIVE_OVERFLOW_BUTTON_ATTRIBUTE)
+    button.style.removeProperty('order')
   }
 }
 

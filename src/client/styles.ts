@@ -328,6 +328,18 @@ export const CHATROOM_STYLES = `
   border-radius: 50%; background: var(--brand-primary, #4f7cff);
 }
 
+/* Native session rows reserve a 16px status slot plus a 4px title margin in
+   front of the title. Once the chatroom avatar is prepended, the empty slot
+   only widens the icon-to-title gap, so collapse it while it holds no dots. */
+[data-dsh-chatroom-room-row] > [data-dsh-chatroom-group-avatar] + span:empty,
+[data-dsh-chatroom-sidebar-category="solo"] > [data-dsh-chatroom-solo-avatar] + span:empty {
+  display: none;
+}
+[data-dsh-chatroom-room-row] > [data-dsh-chatroom-group-avatar] + span:empty + span,
+[data-dsh-chatroom-sidebar-category="solo"] > [data-dsh-chatroom-solo-avatar] + span:empty + span {
+  margin-left: 0 !important;
+}
+
 [data-dsh-chatroom-group-avatar] {
   position: relative;
   display: grid;

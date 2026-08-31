@@ -106,6 +106,38 @@ describe('branch surfaces in a real browser', () => {
     expect(getComputedStyle(parent).boxShadow).toBe('none')
   })
 
+  it('collapses the empty native status slot between avatar and title', () => {
+    const style = document.createElement('style')
+    style.textContent = `${CHATROOM_STYLES}
+      [role="treeitem"] { display: flex; align-items: center; }
+      .host-slot { flex: none; width: 16px; height: 20px; }
+      .host-title { margin: 0 6px 0 4px; }
+    `
+    document.head.append(style)
+    document.body.innerHTML = `
+      <div role="tree">
+        <div role="treeitem" data-dsh-chatroom-room-row aria-selected="true">
+          <span data-dsh-chatroom-group-avatar></span><span class="host-slot"></span><span class="host-title">项目群</span>
+        </div>
+        <div role="treeitem" data-dsh-chatroom-sidebar-category="solo" aria-selected="false">
+          <span data-dsh-chatroom-solo-avatar></span><span class="host-slot"></span><span class="host-title">个人工作</span>
+        </div>
+        <div role="treeitem" data-dsh-chatroom-room-row aria-selected="false">
+          <span data-dsh-chatroom-group-avatar></span><span class="host-slot">●</span><span class="host-title">活跃群</span>
+        </div>
+      </div>
+    `
+    const rows = [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+
+    expect(getComputedStyle(rows[0]!.querySelector('.host-slot')!).display).toBe('none')
+    expect(getComputedStyle(rows[0]!.querySelector('.host-title')!).marginLeft).toBe('0px')
+    expect(getComputedStyle(rows[1]!.querySelector('.host-slot')!).display).toBe('none')
+    expect(getComputedStyle(rows[1]!.querySelector('.host-title')!).marginLeft).toBe('0px')
+    // A slot that actually carries status dots keeps its place in the row.
+    expect(getComputedStyle(rows[2]!.querySelector('.host-slot')!).display).not.toBe('none')
+    expect(getComputedStyle(rows[2]!.querySelector('.host-title')!).marginLeft).toBe('4px')
+  })
+
   it('replaces the chatroom settings fallback gear with its group glyph', () => {
     const style = document.createElement('style')
     style.textContent = CHATROOM_STYLES
