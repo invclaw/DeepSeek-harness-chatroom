@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
@@ -597,7 +598,8 @@ describe('ChatroomRuntime', () => {
     const action = harness.registeredTools.find(tool => tool.name === 'chatroom_action')
     if (capabilities === undefined || action === undefined) throw new Error('chatroom tools were not registered')
     const concludeTurn = vi.fn()
-    const exec = { concludeTurn, signal: new AbortController().signal } as never
+    const deferContext = vi.fn()
+    const exec = { concludeTurn, deferContext, signal: new AbortController().signal } as never
 
     await expect(capabilities.execute({}, exec)).resolves.toMatchObject({
       room: 'AI 聊天室',
@@ -610,8 +612,11 @@ describe('ChatroomRuntime', () => {
     await action.execute({ action: 'send_file', path: 'package.json', caption: '项目清单' }, exec)
     await action.execute({ action: 'send_message', text: '主动同步一条进展。' }, exec)
     await action.execute({ action: 'start_branch', messageId: 'user:9' }, exec)
-    const assistantPayload = harness.agents[0]?.session.append.mock.calls
-      .filter(call => call[0] === 'assistant/message').at(-1)?.[1]
+    const assistantMessage = createAssistantMessage({
+      content: [{ type: 'text', text: '可以撤回的正常 AI 消息' }],
+      source: { provider: 'deepseek', model: 'chat' },
+    })
+    const assistantPayload = { turn: 3, step: 1, message: assistantMessage }
     Object.assign(harness.agents[0]!.session, {
       events: [
         { type: 'user/message', seq: 9, time: 1, data: payload },
@@ -620,7 +625,7 @@ describe('ChatroomRuntime', () => {
     })
     await action.execute({
       action: 'recall_message',
-      messageId: String(assistantPayload?.message.id),
+      messageId: String(assistantMessage.id),
     }, exec)
 
     expect(runtime.membersForRoom('lobby')).toContainEqual(expect.objectContaining({ participantId: bob.participantId }))
@@ -628,21 +633,16 @@ describe('ChatroomRuntime', () => {
       expect.any(String), expect.objectContaining({ messageId: 'user:9', emoji: '🎉', participantId: 'ai' }),
     ])
     expect([...(harness.tables.get('recalls')?.entries() ?? [])]).toContainEqual([
-      expect.any(String), expect.objectContaining({ messageId: String(assistantPayload?.message.id), participantId: 'ai' }),
+      expect.any(String), expect.objectContaining({ messageId: String(assistantMessage.id), participantId: 'ai' }),
     ])
-    const assistantTexts = harness.agents[0]?.session.append.mock.calls
-      .filter(call => call[0] === 'assistant/message')
-      .map(call => call[1]?.message.content[0]?.text as string)
-      ?? []
-    expect(assistantTexts.some(text => projectReplyText(text).reply?.messageId === 'user:9')).toBe(true)
-    expect(assistantTexts.some(text => projectFileText(text).files.some(file => file.name === 'package.json'))).toBe(true)
-    expect(harness.agents[0]?.session.append).toHaveBeenCalledWith(
-      'assistant/message',
-      expect.objectContaining({ message: expect.objectContaining({ role: 'assistant' }) }),
-      { surfaceOp: 'append' },
-    )
+    const deferredTexts = deferContext.mock.calls.map(call => call[0]?.content[1]?.text as string)
+    expect(deferredTexts.some(text => projectReplyText(text).reply?.messageId === 'user:9')).toBe(true)
+    expect(deferredTexts.some(text => projectFileText(text).files.some(file => file.name === 'package.json'))).toBe(true)
+    expect(deferredTexts).toContain('主动同步一条进展。')
+    expect(harness.agents[0]?.session.append.mock.calls.filter(call => call[0] === 'assistant/message')).toEqual([])
     expect(harness.agents).toHaveLength(2)
-    expect(concludeTurn).toHaveBeenCalledTimes(3)
+    expect(deferContext).toHaveBeenCalledTimes(3)
+    expect(concludeTurn).not.toHaveBeenCalled()
     await runtime.stop()
   })
 

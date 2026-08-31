@@ -9,6 +9,10 @@ afterEach(() => {
 })
 
 describe('native mention avatars', () => {
+  const settleMutations = async (): Promise<void> => {
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+
   it('uses account avatars and keeps the emoji as a failed-image fallback', () => {
     const option = document.createElement('button')
     option.id = 'dsh-slash-option-群聊成员-0'
@@ -58,6 +62,34 @@ describe('native mention avatars', () => {
 
     const dispose = installNativeMentionAvatarImages(store)
     expect(option.querySelector('img')).toBeNull()
+    dispose()
+  })
+
+  it('ignores unrelated conversation mutations and reacts when the member menu opens', async () => {
+    const getSnapshot = vi.fn(() => ({
+      members: [{
+        participantId: 'bob-id', displayName: 'Bob', avatarId: 'panda',
+        avatarUrl: 'https://ioa.example.com/bob.png', joinedAt: 1, lastSeenAt: 1, online: true,
+      }],
+      directPeers: [],
+    } as unknown as ChatroomView))
+    const store = {
+      getSnapshot,
+      subscribe: () => () => undefined,
+    } as unknown as ChatroomClientStore
+    const dispose = installNativeMentionAvatarImages(store)
+    getSnapshot.mockClear()
+
+    document.body.append(document.createElement('p'))
+    await settleMutations()
+    expect(getSnapshot).not.toHaveBeenCalled()
+
+    const option = document.createElement('button')
+    option.id = 'dsh-slash-option-群聊成员-0'
+    option.innerHTML = '<span>🐼</span><span>Bob</span>'
+    document.body.append(option)
+    await settleMutations()
+    expect(option.querySelector('img')?.src).toBe('https://ioa.example.com/bob.png')
     dispose()
   })
 })

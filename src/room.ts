@@ -302,24 +302,23 @@ export class ChatroomRuntime {
   async agentAction(
     sessionId: string,
     input: ChatroomAgentActionInput,
-  ): Promise<{ readonly action: ChatroomAgentAction; readonly summary: string }> {
+  ): Promise<{ readonly action: ChatroomAgentAction; readonly summary: string; readonly followupText?: string }> {
     const target = this.agentToolTarget(sessionId)
     switch (input.action) {
       case 'send_message': {
         const text = normalizeAgentToolText(input.text, '消息', this.config.maxMessageTextChars)
-        await this.appendAgentMessage(target, text)
-        return { action: input.action, summary: '消息已发送到当前会话。' }
+        return { action: input.action, summary: '消息已准备发送到当前会话。', followupText: text }
       }
       case 'send_file': {
         const file = await this.storeAgentFile(target.room, input.path)
         const caption = input.caption === undefined || input.caption.trim() === ''
           ? ''
           : `${normalizeAgentToolText(input.caption, '文件说明', this.config.maxMessageTextChars)}\n\n`
-        await this.appendAgentMessage(
-          target,
-          `${caption}${identifyFileText(file)}`,
-        )
-        return { action: input.action, summary: `文件 ${file.name} 已发送。` }
+        return {
+          action: input.action,
+          summary: `文件 ${file.name} 已准备发送。`,
+          followupText: `${caption}${identifyFileText(file)}`,
+        }
       }
       case 'react': {
         const messageId = normalizeMessageId(input.messageId ?? '')
@@ -333,12 +332,15 @@ export class ChatroomRuntime {
       case 'reply': {
         const message = await this.agentMessage(target, normalizeMessageId(input.messageId ?? ''))
         const text = normalizeAgentToolText(input.text, '回复', this.config.maxMessageTextChars)
-        await this.appendAgentMessage(target, identifyReplyText(text, {
-          messageId: message.messageId,
-          displayName: message.displayName,
-          text: message.text,
-        }))
-        return { action: input.action, summary: `已回复 ${message.displayName}。` }
+        return {
+          action: input.action,
+          summary: `已准备回复 ${message.displayName}。`,
+          followupText: identifyReplyText(text, {
+            messageId: message.messageId,
+            displayName: message.displayName,
+            text: message.text,
+          }),
+        }
       }
       case 'start_branch': {
         if (target.thread !== undefined) throw new ChatroomInputError('分支内不能继续创建嵌套分支。')
@@ -1630,17 +1632,6 @@ export class ChatroomRuntime {
       displayName: room.record.aiDisplayName,
       avatarId: fallbackAvatarId('ai'),
     }
-  }
-
-  private async appendAgentMessage(target: AgentToolTarget, text: string): Promise<void> {
-    const binding = target.thread === undefined
-      ? await this.ensureRoom(target.room.record.id)
-      : await this.ensureThread(target.thread.record.id)
-    const selection = binding.agent.options.provider !== undefined && binding.agent.options.model !== undefined
-      ? { provider: binding.agent.options.provider, model: binding.agent.options.model }
-      : this.ctx.agentDefaultModel.currentSelection()
-    const message = createAssistantMessage({ content: [{ type: 'text', text }], source: selection })
-    binding.agent.session.append('assistant/message', { turn: 0, step: 0, message }, { surfaceOp: 'append' })
   }
 
   private async storeAgentFile(room: RoomState, path: string | undefined): Promise<ChatroomFileReference> {

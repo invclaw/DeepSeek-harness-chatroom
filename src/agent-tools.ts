@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { CHATROOM_REACTION_EMOJIS, type ChatroomReactionEmoji } from './reactions.js'
 
@@ -43,6 +44,7 @@ export interface ChatroomAgentToolsHost {
   agentAction(sessionId: string, input: ChatroomAgentActionInput): Promise<{
     readonly action: ChatroomAgentAction
     readonly summary: string
+    readonly followupText?: string
   }>
 }
 
@@ -113,10 +115,25 @@ export function registerChatroomAgentTools(
     },
     async execute(args, exec) {
       const result = await host.agentAction(sessionId, args)
-      if (args.action === 'send_message' || args.action === 'send_file' || args.action === 'reply') {
-        exec.concludeTurn()
+      if (result.followupText !== undefined) {
+        exec.deferContext(createUserMessage({
+          content: [
+            {
+              type: 'text',
+              text: 'The chatroom action succeeded. Send the next content block as your entire next assistant response. Preserve it exactly, including invisible metadata. Do not explain the action and do not call another tool.',
+            },
+            { type: 'text', text: result.followupText },
+          ],
+          source: {
+            kind: 'plugin',
+            plugin: 'deepseek-harness-chatroom',
+            form: 'notice',
+            summary: `Deliver ${result.action} output to the chatroom`,
+          },
+        }))
       }
-      return result
+      const { followupText: _followupText, ...output } = result
+      return output
     },
     presentCall: args => ({ card: 'generic', title: `Chatroom: ${args.action}`, kind: 'other', rawInput: args }),
   }))

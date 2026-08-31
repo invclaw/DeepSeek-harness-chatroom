@@ -1142,10 +1142,11 @@ import { readFile } from "fs/promises";
 import { basename, relative, resolve } from "path";
 import { resolveSessionPreset } from "@deepseek-ai/dsh-agent-presets";
 import { AttachmentError } from "@deepseek-ai/dsh-attachment";
-import { BlockAssembler, createAssistantMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
+import { BlockAssembler, createAssistantMessage, createUserMessage as createUserMessage2 } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
 
 // src/agent-tools.ts
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 
 // src/reactions.ts
@@ -1225,10 +1226,25 @@ function registerChatroomAgentTools(ctx, host, sessionId) {
     },
     async execute(args, exec) {
       const result = await host.agentAction(sessionId, args);
-      if (args.action === "send_message" || args.action === "send_file" || args.action === "reply") {
-        exec.concludeTurn();
+      if (result.followupText !== void 0) {
+        exec.deferContext(createUserMessage({
+          content: [
+            {
+              type: "text",
+              text: "The chatroom action succeeded. Send the next content block as your entire next assistant response. Preserve it exactly, including invisible metadata. Do not explain the action and do not call another tool."
+            },
+            { type: "text", text: result.followupText }
+          ],
+          source: {
+            kind: "plugin",
+            plugin: "deepseek-harness-chatroom",
+            form: "notice",
+            summary: `Deliver ${result.action} output to the chatroom`
+          }
+        }));
       }
-      return result;
+      const { followupText: _followupText, ...output } = result;
+      return output;
     },
     presentCall: (args) => ({ card: "generic", title: `Chatroom: ${args.action}`, kind: "other", rawInput: args })
   }));
@@ -1767,19 +1783,18 @@ var ChatroomRuntime = class {
     switch (input.action) {
       case "send_message": {
         const text = normalizeAgentToolText(input.text, "\u6D88\u606F", this.config.maxMessageTextChars);
-        await this.appendAgentMessage(target, text);
-        return { action: input.action, summary: "\u6D88\u606F\u5DF2\u53D1\u9001\u5230\u5F53\u524D\u4F1A\u8BDD\u3002" };
+        return { action: input.action, summary: "\u6D88\u606F\u5DF2\u51C6\u5907\u53D1\u9001\u5230\u5F53\u524D\u4F1A\u8BDD\u3002", followupText: text };
       }
       case "send_file": {
         const file = await this.storeAgentFile(target.room, input.path);
         const caption = input.caption === void 0 || input.caption.trim() === "" ? "" : `${normalizeAgentToolText(input.caption, "\u6587\u4EF6\u8BF4\u660E", this.config.maxMessageTextChars)}
 
 `;
-        await this.appendAgentMessage(
-          target,
-          `${caption}${identifyFileText(file)}`
-        );
-        return { action: input.action, summary: `\u6587\u4EF6 ${file.name} \u5DF2\u53D1\u9001\u3002` };
+        return {
+          action: input.action,
+          summary: `\u6587\u4EF6 ${file.name} \u5DF2\u51C6\u5907\u53D1\u9001\u3002`,
+          followupText: `${caption}${identifyFileText(file)}`
+        };
       }
       case "react": {
         const messageId = normalizeMessageId(input.messageId ?? "");
@@ -1793,12 +1808,15 @@ var ChatroomRuntime = class {
       case "reply": {
         const message = await this.agentMessage(target, normalizeMessageId(input.messageId ?? ""));
         const text = normalizeAgentToolText(input.text, "\u56DE\u590D", this.config.maxMessageTextChars);
-        await this.appendAgentMessage(target, identifyReplyText(text, {
-          messageId: message.messageId,
-          displayName: message.displayName,
-          text: message.text
-        }));
-        return { action: input.action, summary: `\u5DF2\u56DE\u590D ${message.displayName}\u3002` };
+        return {
+          action: input.action,
+          summary: `\u5DF2\u51C6\u5907\u56DE\u590D ${message.displayName}\u3002`,
+          followupText: identifyReplyText(text, {
+            messageId: message.messageId,
+            displayName: message.displayName,
+            text: message.text
+          })
+        };
       }
       case "start_branch": {
         if (target.thread !== void 0) throw new ChatroomInputError("\u5206\u652F\u5185\u4E0D\u80FD\u7EE7\u7EED\u521B\u5EFA\u5D4C\u5957\u5206\u652F\u3002");
@@ -2140,7 +2158,7 @@ var ChatroomRuntime = class {
         }
       }
       const durable = await this.durableContent(roomId, identity, identifyPrompt(content, identity, reply));
-      const message = createUserMessage({ content: durable, source: { kind: "user" } });
+      const message = createUserMessage2({ content: durable, source: { kind: "user" } });
       if (!aiTriggered) {
         binding.agent.session.append("user/message", message, { surfaceOp: "append" });
       } else if (mode === "steer") {
@@ -2269,7 +2287,7 @@ var ChatroomRuntime = class {
       };
       const identified = identifyPrompt([{ type: "text", text: identifyForwardText(bundle) }], identity);
       const durable = await this.durableContent(targetRoomId, identity, identified);
-      binding.agent.session.append("user/message", createUserMessage({
+      binding.agent.session.append("user/message", createUserMessage2({
         content: durable,
         source: { kind: "user" }
       }), { surfaceOp: "append" });
@@ -2532,7 +2550,7 @@ var ChatroomRuntime = class {
         createdAt: Date.now()
       };
       await this.requireThreadMessages().put(record.id, record);
-      const message = createUserMessage({
+      const message = createUserMessage2({
         content: durable,
         source: { kind: "user" }
       });
@@ -2891,12 +2909,6 @@ var ChatroomRuntime = class {
       displayName: room.record.aiDisplayName,
       avatarId: fallbackAvatarId("ai")
     };
-  }
-  async appendAgentMessage(target, text) {
-    const binding = target.thread === void 0 ? await this.ensureRoom(target.room.record.id) : await this.ensureThread(target.thread.record.id);
-    const selection = binding.agent.options.provider !== void 0 && binding.agent.options.model !== void 0 ? { provider: binding.agent.options.provider, model: binding.agent.options.model } : this.ctx.agentDefaultModel.currentSelection();
-    const message = createAssistantMessage({ content: [{ type: "text", text }], source: selection });
-    binding.agent.session.append("assistant/message", { turn: 0, step: 0, message }, { surfaceOp: "append" });
   }
   async storeAgentFile(room, path) {
     const requested = normalizeAgentToolText(path, "\u6587\u4EF6\u8DEF\u5F84", 4096);
@@ -3297,7 +3309,7 @@ var ChatroomRuntime = class {
   }
   appendThreadRoot(binding, root, content) {
     if (root.role === "human") {
-      binding.agent.session.append("user/message", createUserMessage({ content, source: { kind: "user" } }), { surfaceOp: "append" });
+      binding.agent.session.append("user/message", createUserMessage2({ content, source: { kind: "user" } }), { surfaceOp: "append" });
       return;
     }
     const selection = binding.agent.options.provider !== void 0 && binding.agent.options.model !== void 0 ? { provider: binding.agent.options.provider, model: binding.agent.options.model } : this.ctx.agentDefaultModel.currentSelection();
@@ -3319,7 +3331,7 @@ var ChatroomRuntime = class {
         model: settings.model,
         ...reasoningEffort === void 0 ? {} : { reasoningEffort },
         system: settings.controllerPrompt,
-        messages: [createUserMessage({
+        messages: [createUserMessage2({
           source: { kind: "user" },
           content: [{ type: "text", text: JSON.stringify({ history, latest: promptPreview(content) }) }]
         })],

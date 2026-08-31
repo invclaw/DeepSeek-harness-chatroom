@@ -77,6 +77,7 @@ export declare class ChatroomRuntime {
     agentAction(sessionId: string, input: ChatroomAgentActionInput): Promise<{
         readonly action: ChatroomAgentAction;
         readonly summary: string;
+        readonly followupText?: string;
     }>;
     /** Open storage, seed the original room, and acquire its Session without blocking Harness startup. */
     start(): Promise<void>;
@@ -172,7 +173,6 @@ export declare class ChatroomRuntime {
     private seedConfiguredRoom;
     private agentToolTarget;
     private agentIdentity;
-    private appendAgentMessage;
     private storeAgentFile;
     private toggleAgentReaction;
     private agentInviteMembers;
