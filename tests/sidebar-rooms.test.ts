@@ -517,37 +517,93 @@ describe('native sidebar room rows', () => {
     expect(openDirect).toHaveBeenCalledWith('bob-id')
   })
 
-  it('pins each native overflow button after its own section rows', () => {
-    document.body.innerHTML = `
-      <div role="tree">
-        <div>
-          <span><div role="treeitem" aria-selected="true"><span></span><span>项目群</span></div></span>
-          <span><div role="treeitem" aria-selected="false"><span></span><span>个人工作</span><button aria-label="个人工作操作">•••</button></div></span>
-          <button type="button">展开其余 3 个会话</button>
-        </div>
-        <div>
-          <span><div role="treeitem" aria-selected="false"><span></span><span>另一个会话</span><button aria-label="另一个会话操作">•••</button></div></span>
-          <button type="button">展开其余 6 个会话</button>
-        </div>
-      </div>
-    `
-    const room = { id: 'room', title: '项目群', aiDisplayName: 'DeepSeek', sessionId: 'room-session' } as const
+  function nativeSections(sessionsPerSection: readonly number[]): string {
+    let session = 0
+    const sections = sessionsPerSection.map((count, index) => {
+      const rows = Array.from({ length: count }, () => {
+        session += 1
+        const title = `会话 ${String(session)}`
+        return `<span><div role="treeitem" aria-selected="false"><span></span><span>${title}</span>`
+          + `<button aria-label="${title}操作">•••</button></div></span>`
+      }).join('')
+      return `<div>${rows}<button type="button" aria-expanded="false">展开其余 ${String(index + 3)} 个会话</button></div>`
+    }).join('')
+    return `<div role="tree">${sections}</div>`
+  }
 
-    reconcileSidebarRoomRows(document, {
-      rooms: [room], room, members: [], directPeers: [], directConversations: [],
-    } as unknown as ChatroomView)
+  const emptySnapshot = {
+    rooms: [], members: [], directPeers: [], directConversations: [],
+  } as unknown as ChatroomView
 
-    const sections = [...document.querySelectorAll<HTMLElement>('[role="tree"] > div')]
-    const firstButton = sections[0]!.querySelector<HTMLElement>(':scope > button')!
-    const secondButton = sections[1]!.querySelector<HTMLElement>(':scope > button')!
-    const soloOrder = (section: HTMLElement) =>
-      Number(section.querySelector<HTMLElement>('[data-dsh-chatroom-sidebar-category="solo"]')!.style.order)
+  it('expands every native section so one category control owns the overflow', () => {
+    document.body.innerHTML = nativeSections([5, 5])
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('[role="tree"] > div > button')]
+    const expand = vi.fn()
+    for (const button of buttons) button.addEventListener('click', expand)
 
-    expect(firstButton.dataset.dshChatroomNativeOverflowButton).toBe('')
-    expect(secondButton.dataset.dshChatroomNativeOverflowButton).toBe('')
-    expect(Number(firstButton.style.order)).toBeGreaterThan(soloOrder(sections[0]!))
-    expect(firstButton.style.order).toBe('-5999')
-    expect(secondButton.style.order).toBe('-5998')
+    reconcileSidebarRoomRows(document, emptySnapshot)
+
+    // The native per-Workspace buttons are taken over, not repositioned: they are
+    // clicked once to release the hidden rows and never given an order again.
+    expect(expand).toHaveBeenCalledTimes(2)
+    for (const button of buttons) {
+      expect(button.dataset.dshChatroomNativeOverflowButton).toBe('')
+      expect(button.style.order).toBe('')
+    }
+    expect(document.querySelectorAll('[data-dsh-chatroom-category-overflow]')).toHaveLength(1)
+    const control = document.querySelector<HTMLElement>('[data-dsh-chatroom-category-overflow="solo"]')!
+    expect(control.querySelector('button')?.textContent).toBe('展开其余 2 个会话')
+    expect(control.style.order).toBe('-5992')
+  })
+
+  it('reports the real category total and toggles its own overflow rows', () => {
+    document.body.innerHTML = nativeSections([6, 4])
+
+    reconcileSidebarRoomRows(document, emptySnapshot)
+
+    const shells = [...document.querySelectorAll<HTMLElement>('[data-dsh-chatroom-category-wrapper="solo"]')]
+    expect(shells).toHaveLength(10)
+    // The header counts every row the category owns, so it no longer disagrees
+    // with the overflow label the way the per-Workspace buttons did.
+    expect(document.querySelector('[data-dsh-chatroom-category-header="solo"]')?.textContent).toContain('Solo10')
+    expect(shells.filter(shell => shell.dataset.dshChatroomOverflowRow === 'solo')).toHaveLength(2)
+    expect(shells.slice(0, 8).every(shell => shell.dataset.dshChatroomOverflowRow === undefined)).toBe(true)
+
+    const button = document.querySelector<HTMLButtonElement>('[data-dsh-chatroom-category-overflow="solo"] button')!
+    button.click()
+
+    const root = document.querySelector<HTMLElement>('[data-dsh-chatroom-workspace-categories]')!
+    expect(root.dataset.dshChatroomSoloOverflowExpanded).toBe('true')
+    expect(button.textContent).toBe('收起')
+    expect(button.getAttribute('aria-expanded')).toBe('true')
+    expect(button.parentElement?.style.order).toBe('-5990')
+
+    button.click()
+    expect(root.dataset.dshChatroomSoloOverflowExpanded).toBe('false')
+    expect(button.textContent).toBe('展开其余 2 个会话')
+  })
+
+  it('truncates the row itself when native markup shares one wrapper', () => {
+    const rows = Array.from({ length: 10 }, (_, index) =>
+      `<div role="treeitem" aria-selected="false"><span></span><span>会话 ${String(index)}</span>`
+      + `<button aria-label="会话 ${String(index)}操作">•••</button></div>`).join('')
+    document.body.innerHTML = `<div role="tree"><div>${rows}</div></div>`
+
+    reconcileSidebarRoomRows(document, emptySnapshot)
+
+    const shells = [...document.querySelectorAll<HTMLElement>('[data-dsh-chatroom-overflow-row="solo"]')]
+    expect(shells).toHaveLength(2)
+    expect(shells.every(shell => shell.getAttribute('role') === 'treeitem')).toBe(true)
+    expect(document.querySelector('[data-dsh-chatroom-native-group-section]')?.hasAttribute('data-dsh-chatroom-overflow-row')).toBe(false)
+  })
+
+  it('leaves a category without an overflow control when nothing is truncated', () => {
+    document.body.innerHTML = nativeSections([3])
+
+    reconcileSidebarRoomRows(document, emptySnapshot)
+
+    expect(document.querySelector('[data-dsh-chatroom-category-overflow]')).toBeNull()
+    expect(document.querySelector('[data-dsh-chatroom-overflow-row]')).toBeNull()
   })
 
   it('ignores conversation mutations outside the native sidebar', async () => {

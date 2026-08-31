@@ -242,6 +242,23 @@ export const CHATROOM_STYLES = `
 [data-dsh-chatroom-workspace-categories] { display: flex !important; flex-direction: column; }
 [data-dsh-chatroom-workspace-categories] > [data-dsh-chatroom-native-group-section] { display: contents !important; }
 [data-dsh-chatroom-native-folder-wrapper][data-hidden="true"] { display: none !important; }
+[data-dsh-chatroom-native-overflow-button] { display: none !important; }
+[data-dsh-chatroom-workspace-categories]:not([data-dsh-chatroom-group-overflow-expanded="true"]) [data-dsh-chatroom-overflow-row="group"],
+[data-dsh-chatroom-workspace-categories]:not([data-dsh-chatroom-solo-overflow-expanded="true"]) [data-dsh-chatroom-overflow-row="solo"] { display: none !important; }
+[data-dsh-chatroom-category-overflow] { box-sizing: border-box; width: 100%; padding: 0 8px 2px 22px; }
+[data-dsh-chatroom-category-overflow] > button {
+  width: 100%;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  padding: 6px 7px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+[data-dsh-chatroom-category-overflow] > button:hover { background: var(--bg-secondary, #f3f4f6); color: var(--text-primary, #111827); }
 [data-dsh-chatroom-sidebar-category] { padding-left: 22px !important; }
 [data-dsh-chatroom-category-header] {
   box-sizing: border-box;
@@ -271,7 +288,9 @@ export const CHATROOM_STYLES = `
 [data-dsh-chatroom-category-header] [data-folder-icon] { display: inline-flex; width: 17px; height: 17px; align-items: center; }
 [data-dsh-chatroom-category-header] [data-folder-icon] svg { display: block; width: 16px; height: 16px; }
 [data-dsh-chatroom-group-collapsed="true"] [data-dsh-chatroom-category-wrapper="group"],
+[data-dsh-chatroom-group-collapsed="true"] > [data-dsh-chatroom-category-overflow="group"],
 [data-dsh-chatroom-solo-collapsed="true"] [data-dsh-chatroom-category-wrapper="solo"],
+[data-dsh-chatroom-solo-collapsed="true"] > [data-dsh-chatroom-category-overflow="solo"],
 [data-dsh-chatroom-direct-collapsed="true"] > [data-dsh-chatroom-direct-row] { display: none !important; }
 
 [data-dsh-chatroom-solo-avatar] {

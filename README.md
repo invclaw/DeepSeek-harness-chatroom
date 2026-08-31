@@ -55,7 +55,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 
 ### Shared rooms and human-first AI
 
-- The workspace sidebar groups activity into **Group / Solo / Direct**. Shared Rooms appear under Group, native one-person Agent Sessions under Solo, and every available platform account under Direct.
+- The workspace sidebar groups activity into **Group / Solo / Direct**. Shared Rooms appear under Group, native one-person Agent Sessions under Solo, and every available platform account under Direct. Because a category merges every Workspace, the per-Workspace "show more sessions" buttons are expanded and replaced by one show-more control per category whose count matches the folder count.
 - **New session** keeps the native welcome screen and composer, with Group selected by default in a Group/Solo switch. The first regular Group message creates its Room; Solo remains a native one-person Agent Session.
 - Human messages synchronize in real time. `@AI` and direct forms such as `DeepSeek please answer` request an Agent reply without consulting the decision model; rooms may also enable model-controlled replies for other messages without an explicit mention.
 - **Settings → Chatroom & accounts** selects the global auto-reply decision model and edits separate system prompts for the main/branch Agent and the auto-reply decision Agent. Prompt changes apply to the next turn without restarting Harness.
@@ -104,6 +104,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.3.4** — expand the native per-Workspace session truncation and give each sidebar category a single show-more control whose count matches its folder count, instead of several native buttons stranded mid-list by the flattened categories.
 - **1.3.3** — unify the full-width Group, Solo, and Direct composer experience, persist the AI-context reset divider at its exact transcript position, and add per-platform-account Enterprise WeChat QR authorization with Quick-meeting compatibility for identity responses that omit a structured human user id.
 - **1.3.2** — retain the complete room transcript when starting a new AI conversation and exclude every earlier user, assistant, and tool-result message from later model requests.
 - **1.3.1** — polish branch navigation with a closer marker and no parent edge stripe, replace the generic Settings navigation gear with a semantic group/account icon and safe fallback, and add browser coverage for the layout and settings navigation.
