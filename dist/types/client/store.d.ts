@@ -60,6 +60,10 @@ export interface ChatroomView {
     readonly reply: ChatroomReplyReference | undefined;
     readonly composerBusy: boolean;
     readonly composerError: string | undefined;
+    readonly sessionControlBusy: boolean;
+    readonly sessionControlError: string | undefined;
+    readonly wecomBusy: boolean;
+    readonly wecomError: string | undefined;
     readonly thread: ChatroomThread | undefined;
     readonly threadMessages: readonly ChatroomThreadMessage[];
     readonly threadReply: ChatroomReplyReference | undefined;
@@ -257,6 +261,12 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     selectRoom: (roomId: string) => Promise<void>;
     /** Create, activate, and navigate to a new independent shared room. */
     createRoom: (title: string) => Promise<void>;
+    /** Stop the active Agent turn for one shared room. */
+    stopRoomSession: (roomId: string) => Promise<boolean>;
+    /** Start a clean native Harness Session behind an existing room. */
+    newRoomSession: (roomId: string) => Promise<boolean>;
+    /** Create a default Enterprise WeChat meeting and publish its card to the room. */
+    quickMeeting: (roomId: string) => Promise<boolean>;
     /** Create or reopen a branch rooted at one main-room message. */
     openThread: (roomId: string, root: ChatroomThreadRoot) => Promise<void>;
     /** Close the right-side branch panel. */

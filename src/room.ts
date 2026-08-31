@@ -16,6 +16,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { ChatroomAuth } from './auth.js'
+import { ChatArchive, openChatArchive } from './archive.js'
 import {
   CHATROOM_AGENT_ACTIONS,
   registerChatroomAgentTools,
@@ -41,6 +42,7 @@ import {
 } from './domain.js'
 import {
   identifyFileText,
+  identifyExternalCardText,
   identifyForwardText,
   identifyPrompt,
   identifyReplyText,
@@ -52,6 +54,8 @@ import {
   projectReplyText,
 } from './message.js'
 import { CHATROOM_REACTION_EMOJIS, type ChatroomReactionEmoji } from './reactions.js'
+import { WecomCliClient, inferWecomCard } from './wecom.js'
+import { registerWecomAgentTools } from './wecom-tools.js'
 import type {
   ChatroomAutomationOverview,
   ChatroomDirectConversation,
@@ -66,6 +70,7 @@ import type {
   ChatroomIdentity,
   ChatroomImageReference,
   ChatroomInfo,
+  ChatroomMeetingCard,
   ChatroomMember,
   ChatroomMemberRole,
   ChatroomNotification,
@@ -106,6 +111,8 @@ interface RoomState {
   binding: AgentBinding | undefined
   activation: Promise<AgentBinding> | undefined
   admission: Promise<void>
+  automation: Promise<void>
+  rotation: Promise<void> | undefined
 }
 
 interface ThreadState {
@@ -113,6 +120,7 @@ interface ThreadState {
   binding: AgentBinding | undefined
   activation: Promise<AgentBinding> | undefined
   admission: Promise<void>
+  automation: Promise<void>
 }
 
 interface ResolvedThreadRoot {
@@ -133,6 +141,7 @@ export class ChatroomInputError extends Error {}
 export class ChatroomRuntime {
   private readonly log
   private domain: Domain<typeof chatroomDomainSpec> | undefined
+  private archive: ChatArchive | undefined
   private identities: KvTable<string, IdentityRecord> | undefined
   private roomRecords: KvTable<string, RoomRecord> | undefined
   private roomPreferences: KvTable<string, RoomPreferenceRecord> | undefined
@@ -152,6 +161,8 @@ export class ChatroomRuntime {
   private readonly threadStates = new Map<string, ThreadState>()
   private readonly notificationClients = new Set<NotificationClient>()
   private readonly ignoredAssistantMessageIds = new Set<string>()
+  private readonly chatroomAgentContexts = new WeakSet<Context>()
+  private readonly wecom: WecomCliClient
   private ready = false
   private stopping = false
 
@@ -160,6 +171,7 @@ export class ChatroomRuntime {
     readonly config: Config,
   ) {
     this.log = ctx.logger('deepseek-harness-chatroom')
+    this.wecom = new WecomCliClient(config)
   }
 
   /** Public metadata for the configured legacy room. */
@@ -174,8 +186,10 @@ export class ChatroomRuntime {
 
   /** Ordered room directory personalized with one participant's pinned rooms. */
   roomsFor(identity?: ChatroomIdentity): readonly ChatroomInfo[] {
-    const states = [...this.states.values()]
     const participantId = identity?.participantId
+    const states = [...this.states.values()].filter(state => !this.config.authEnabled || participantId === undefined
+      || this.isRoomMember(state.record.id, participantId)
+      || (state.record.id === this.config.roomId && this.roomMemberCount(state.record.id) === 0))
     states.sort((left, right) => {
       const leftPinned = participantId === undefined ? false : this.roomPinned(left.record.id, participantId)
       const rightPinned = participantId === undefined ? false : this.roomPinned(right.record.id, participantId)
@@ -266,6 +280,11 @@ export class ChatroomRuntime {
   ownsSession(sessionId: string): boolean {
     return [...this.states.values()].some(state => state.record.sessionId === sessionId)
       || [...this.threadStates.values()].some(state => state.record.sessionId === sessionId)
+  }
+
+  /** Stable model message ids omitted from future requests after a chat recall. */
+  recalledMessageIds(sessionId: string): ReadonlySet<string> {
+    return this.archive?.recalledMessageIds(sessionId) ?? new Set()
   }
 
   /** Describe the collaboration operations available to one room-scoped Agent. */
@@ -367,6 +386,7 @@ export class ChatroomRuntime {
   async start(): Promise<void> {
     const domain = await this.ctx.storageDomain.open(chatroomDomainSpec)
     this.domain = domain
+    this.archive = await openChatArchive(this.config.dataDirectory ?? '')
     this.identities = domain.table('identities')
     this.roomRecords = domain.table('rooms')
     this.roomPreferences = domain.table('room_preferences')
@@ -398,6 +418,7 @@ export class ChatroomRuntime {
     for (const [, record] of this.requireThreads().entries()) {
       this.threadStates.set(record.id, newThreadState(record))
     }
+    await this.syncArchive()
     await this.ensureRoom(this.config.roomId)
     this.ready = true
   }
@@ -417,6 +438,7 @@ export class ChatroomRuntime {
     this.roomTitleWrites.clear()
     await Promise.allSettled([...this.states.values()].map(async (state) => {
       await state.admission
+      await state.automation
       await state.activation?.catch(() => undefined)
       await state.binding?.release()
       state.binding = undefined
@@ -424,11 +446,14 @@ export class ChatroomRuntime {
     this.states.clear()
     await Promise.allSettled([...this.threadStates.values()].map(async (state) => {
       await state.admission
+      await state.automation
       await state.activation?.catch(() => undefined)
       await state.binding?.release()
       state.binding = undefined
     }))
     this.threadStates.clear()
+    this.archive?.close()
+    this.archive = undefined
     await this.domain?.close()
     this.domain = undefined
     this.identities = undefined
@@ -495,6 +520,7 @@ export class ChatroomRuntime {
         avatarId: record.avatarId ?? fallbackAvatarId(record.participantId),
         lastSeenAt: record.lastSeenAt,
       })
+      this.requireArchive().upsertMember(member.roomId, record.participantId, record.displayName, member.joinedAt)
       const state = this.states.get(member.roomId)
       if (state !== undefined) this.broadcastPresence(state)
     }
@@ -525,6 +551,7 @@ export class ChatroomRuntime {
       autoTriggerEnabled: false,
     }
     await this.requireRoomRecords().put(id, record)
+    this.archiveRoom(record)
     const state = newRoomState(record)
     this.states.set(id, state)
     try {
@@ -548,13 +575,15 @@ export class ChatroomRuntime {
     this.assertReady()
     const existing = [...this.states.values()].find(state => state.record.sessionId === sessionId)
     if (existing !== undefined) {
-      await this.touchMember(existing.record.id, identity)
+      if (this.config.authEnabled) this.assertRoomMember(existing.record.id, identity.participantId)
+      else await this.touchMember(existing.record.id, identity)
       return this.projectRoom(existing, identity.participantId)
     }
     const pending = this.sessionRoomCreations.get(sessionId)
     if (pending !== undefined) {
       const room = await pending
-      await this.touchMember(room.id, identity)
+      if (this.config.authEnabled) this.assertRoomMember(room.id, identity.participantId)
+      else await this.touchMember(room.id, identity)
       return room
     }
     const creation = this.createSessionRoom(sessionId, title, identity)
@@ -594,6 +623,7 @@ export class ChatroomRuntime {
       autoTriggerEnabled: false,
     }
     await this.requireRoomRecords().put(id, record)
+    this.archiveRoom(record)
     const state = newRoomState(record)
     this.states.set(id, state)
     try {
@@ -610,10 +640,100 @@ export class ChatroomRuntime {
   /** Activate an existing room and return its public metadata. */
   async selectRoom(roomId: string, identity?: ChatroomIdentity): Promise<ChatroomInfo> {
     this.assertReady()
+    if (identity !== undefined) {
+      if (!this.config.authEnabled || (roomId === this.config.roomId && this.roomMemberCount(roomId) === 0)) {
+        await this.touchMember(roomId, identity)
+      }
+      else this.assertRoomMember(roomId, identity.participantId)
+    }
     const binding = await this.ensureRoom(roomId)
     if (identity !== undefined) this.ensureRoomTitle(binding, this.requireState(roomId).record.title)
-    if (identity !== undefined) await this.touchMember(roomId, identity)
     return this.projectRoom(this.requireState(roomId), identity?.participantId)
+  }
+
+  /** Stop the active Agent turn while retaining the room and queued user intake. */
+  async stopRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo> {
+    this.assertReady()
+    const state = this.requireState(roomId)
+    this.assertRoomMember(roomId, identity.participantId)
+    const binding = await this.ensureRoom(roomId)
+    binding.agent.cancel({ kind: 'user' }, { keepInbox: true })
+    await binding.agent.whenIdle()
+    return this.projectRoom(state, identity.participantId)
+  }
+
+  /** Replace one room's Harness Session while retaining the room identity and roster. */
+  async renewRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo> {
+    this.assertReady()
+    const state = this.requireState(roomId)
+    this.assertRoomMember(roomId, identity.participantId)
+    if (state.rotation !== undefined) {
+      await state.rotation
+      return this.projectRoom(state, identity.participantId)
+    }
+    let resolveRotation!: () => void
+    const predecessor = state.admission
+    state.admission = new Promise<void>((resolve) => { resolveRotation = resolve })
+    const rotation = (async (): Promise<void> => {
+      await predecessor
+      const previous = await this.ensureRoom(roomId)
+      previous.agent.cancel({ kind: 'user' })
+      await previous.agent.whenIdle()
+      this.archiveRoomSession(state, previous.agent.session)
+      await previous.release()
+      state.binding = undefined
+      state.activation = undefined
+      const sessionId = `chatroom-v1-${roomId}-${randomUUID()}`
+      const record = await this.requireRoomRecords().update(roomId, current => ({
+        ...current,
+        sessionId,
+        updatedAt: Date.now(),
+      }))
+      state.record = record
+      this.archiveRoom(record)
+      const binding = await this.ensureRoom(roomId)
+      this.ensureRoomTitle(binding, record.title)
+      this.broadcast(state, { type: 'room-updated', room: this.projectRoom(state), members: this.roomMembers(state) })
+    })()
+    state.rotation = rotation
+    try {
+      await rotation
+      return this.projectRoom(state, identity.participantId)
+    } finally {
+      if (state.rotation === rotation) state.rotation = undefined
+      resolveRotation()
+    }
+  }
+
+  /** Create an Enterprise WeChat online meeting and post it to the room as a durable card. */
+  async createQuickMeeting(roomId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard> {
+    this.assertReady()
+    const state = this.requireState(roomId)
+    this.assertRoomMember(roomId, identity.participantId)
+    const task = state.admission.then(async () => {
+      const whoami = await this.wecom.invoke('identity', [], 'whoami', {})
+      const userid = findStringField(whoami, ['userid', 'user_id', 'open_userid', 'open_vid'])
+      if (userid === undefined) throw new ChatroomInputError('企业微信身份信息中缺少可用的用户标识。')
+      const begin = new Date(Date.now() + 5 * 60_000)
+      const end = new Date(begin.getTime() + this.config.wecomQuickMeetingDurationMinutes * 60_000)
+      const parameters = {
+        subject: this.config.wecomQuickMeetingSubject,
+        begin_time: formatWecomTime(begin, this.config.wecomTimeZone),
+        end_time: formatWecomTime(end, this.config.wecomTimeZone),
+        attendees: [{ userid }],
+        timezone: {
+          timezone_id: this.config.wecomTimeZone,
+          timezone_offset: timezoneOffsetSeconds(begin, this.config.wecomTimeZone),
+        },
+      }
+      const result = await this.wecom.invoke('meeting', [], 'create', parameters)
+      const inferred = inferWecomCard('meeting', 'create', parameters, result)
+      if (inferred?.kind !== 'meeting') throw new ChatroomInputError('企微已创建会议，但返回信息缺少会议标题。')
+      await this.appendRoomCard(state, identity, inferred)
+      return inferred
+    })
+    state.admission = task.then(() => undefined, () => undefined)
+    return await task
   }
 
   /** Rename one room as its owner or an administrator. */
@@ -694,13 +814,14 @@ export class ChatroomRuntime {
         joinedAt: now,
         lastSeenAt: now,
       })
+      this.requireArchive().upsertMember(roomId, account.participantId, account.displayName, now)
     }
     const members = this.roomMembers(state)
     this.broadcast(state, { type: 'room-updated', room: this.projectRoom(state), members })
     return members
   }
 
-  /** Append human chat and wake the Agent for an explicit mention or an enabled model decision. */
+  /** Append human chat immediately and evaluate optional automatic responses in a separate queue. */
   async submit(
     roomId: string,
     identity: ChatroomIdentity,
@@ -713,7 +834,7 @@ export class ChatroomRuntime {
     const task = state.admission.then(async () => {
       const binding = await this.ensureRoom(roomId)
       const aiTriggered = mentionsAi(content, state.record.aiDisplayName)
-        || await this.shouldAutoTrigger(state, binding, content)
+        || (state.record.autoTriggerEnabled === true && addressesAi(content, state.record.aiDisplayName))
       const { provider, model: modelId } = binding.agent.options
       if (aiTriggered && provider !== undefined && modelId !== undefined && content.some(part => part.type === 'image')) {
         const model = await this.ctx.llm.resolveModelInfo(provider, modelId)
@@ -729,6 +850,9 @@ export class ChatroomRuntime {
         binding.agent.steer(message)
       } else {
         binding.agent.followup(message)
+      }
+      if (!aiTriggered && state.record.autoTriggerEnabled === true) {
+        this.scheduleAutomaticResponse(state, binding, content)
       }
       await this.touchMember(roomId, identity)
       await this.touchRoom(roomId)
@@ -787,6 +911,7 @@ export class ChatroomRuntime {
     const state = this.requireState(roomId)
     const normalizedMessageId = normalizeMessageId(messageId)
     const task = state.admission.then(async () => {
+      if (state.binding !== undefined) this.archiveRoomSession(state, state.binding.agent.session)
       this.assertRecallOwner(state, normalizedMessageId, identity.participantId)
       const key = recallKey(roomId, normalizedMessageId)
       const existing = this.requireRecalls().get(key)
@@ -798,6 +923,12 @@ export class ChatroomRuntime {
         createdAt: Date.now(),
       }
       await this.requireRecalls().put(key, record)
+      const threadMessage = this.requireThreadMessages().get(normalizedMessageId)
+      const conversationId = threadMessage?.threadId ?? roomId
+      const sessionId = threadMessage === undefined
+        ? state.record.sessionId
+        : this.requireThreads().get(threadMessage.threadId)?.sessionId
+      this.requireArchive().recallMessage(conversationId, normalizedMessageId, identity.participantId, record.createdAt, sessionId)
       for (const [reactionKey, reaction] of this.requireReactions().entries()) {
         if (reaction.roomId === roomId && reaction.messageId === normalizedMessageId) {
           await this.requireReactions().delete(reactionKey)
@@ -947,8 +1078,13 @@ export class ChatroomRuntime {
       if (conversation === undefined || !conversation.participantIds.includes(identity.participantId)) {
         throw new ChatroomInputError('文件不存在或你无权访问。')
       }
+    } else if (identity !== undefined) {
+      this.assertRoomMember(record.roomId, identity.participantId)
     }
-    return { ref: publicFile(record), data: decodeBase64(record.data, '文件') }
+    const data = record.storageKey === undefined
+      ? decodeBase64(record.data ?? '', '文件')
+      : this.requireArchive().readBlob(record.storageKey)
+    return { ref: publicFile(record), data }
   }
 
   /** Resolve one forwarded image only when the durable source event still owns its attachment. */
@@ -1046,6 +1182,7 @@ export class ChatroomRuntime {
         nextSequence: 1,
       }
       await this.requireDirectConversations().put(record.id, record)
+      this.archiveDirectConversation(record)
     }
     return {
       ...this.directDirectory(identity),
@@ -1098,6 +1235,8 @@ export class ChatroomRuntime {
       `${conversationId}:${String(message.sequence).padStart(12, '0')}:${message.id}`,
       message,
     )
+    this.archiveDirectConversation(updated)
+    this.archiveDirectMessage(message)
     const event: ChatroomDirectMessageEvent = {
       type: 'direct-message',
       conversation: this.publicDirectConversation(updated, identity.participantId),
@@ -1144,7 +1283,7 @@ export class ChatroomRuntime {
     return await task
   }
 
-  /** Append one branch message and apply the parent room's AI wake policy. */
+  /** Append one branch message immediately and evaluate optional automatic responses separately. */
   async submitThread(
     threadId: string,
     identity: ChatroomIdentity,
@@ -1177,7 +1316,7 @@ export class ChatroomRuntime {
       const roomState = this.requireState(state.record.roomId)
       const room = roomState.record
       const aiTriggered = mentionsAi(content, room.aiDisplayName)
-        || await this.shouldAutoTrigger(roomState, binding, content, state)
+        || (room.autoTriggerEnabled === true && addressesAi(content, room.aiDisplayName))
       const { provider, model: modelId } = binding.agent.options
       if (aiTriggered && provider !== undefined && modelId !== undefined && content.some(part => part.type === 'image')) {
         const model = await this.ctx.llm.resolveModelInfo(provider, modelId)
@@ -1193,6 +1332,10 @@ export class ChatroomRuntime {
       const text = promptPreview(content)
       const files = durable.flatMap(block => block.type === 'text' ? projectFileText(block.text).files : [])
       const sequence = this.nextThreadSequence(threadId)
+      const message = createUserMessage({
+        content: durable,
+        source: { kind: 'user' },
+      })
       const record: ThreadMessageRecord = {
         id: randomUUID(),
         threadId,
@@ -1207,15 +1350,16 @@ export class ChatroomRuntime {
         ...(durable.some(block => block.type === 'image') ? { hasImages: true } : {}),
         ...(reply === undefined ? {} : { reply }),
         createdAt: Date.now(),
+        modelMessageId: String(message.id),
       }
       await this.requireThreadMessages().put(record.id, record)
-      const message = createUserMessage({
-        content: durable,
-        source: { kind: 'user' },
-      })
+      this.archiveThreadMessage(state.record, record)
       if (aiTriggered && mode === 'steer') binding.agent.steer(message)
       else if (aiTriggered) binding.agent.followup(message)
       else binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
+      if (!aiTriggered && room.autoTriggerEnabled === true) {
+        this.scheduleAutomaticResponse(roomState, binding, content, state)
+      }
       await this.touchMember(state.record.roomId, identity)
       await this.touchRoom(state.record.roomId)
       const publicMessage = publicThreadMessage(record)
@@ -1244,6 +1388,7 @@ export class ChatroomRuntime {
   /** Project committed AI output into its parent room or branch stream. */
   handleSessionEvent(session: Session, event: SessionEvent): void {
     if (!this.isReady) return
+    this.archiveSessionEvent(session, event)
     if (event.type === 'session/title') {
       this.acceptSessionTitle(session, event.data.title)
       return
@@ -1254,7 +1399,7 @@ export class ChatroomRuntime {
     if (text === '') return
     const thread = [...this.threadStates.values()].find(state => state.record.sessionId === String(session.id))
     if (thread !== undefined) {
-      void this.recordThreadAssistant(thread, text, event.time).catch((error: unknown) => {
+      void this.recordThreadAssistant(thread, text, event.time, String(event.data.message.id), event.seq).catch((error: unknown) => {
         this.log.warn('Branch AI projection failed: %s', String(error))
       })
       return
@@ -1291,6 +1436,7 @@ export class ChatroomRuntime {
       ...(root.sourceSessionId === undefined ? {} : { rootContentVersion: 1 }),
     }
     await this.requireThreads().put(id, record)
+    this.archiveThread(record)
     const state = newThreadState(record)
     this.threadStates.set(id, state)
     try {
@@ -1358,7 +1504,13 @@ export class ChatroomRuntime {
     return await state.activation
   }
 
-  private async recordThreadAssistant(state: ThreadState, text: string, createdAt: number): Promise<void> {
+  private async recordThreadAssistant(
+    state: ThreadState,
+    text: string,
+    createdAt: number,
+    modelMessageId: string,
+    sessionSeq: number,
+  ): Promise<void> {
     const room = this.requireState(state.record.roomId)
     const record: ThreadMessageRecord = {
       id: randomUUID(),
@@ -1369,8 +1521,11 @@ export class ChatroomRuntime {
       displayName: room.record.aiDisplayName,
       text,
       createdAt,
+      modelMessageId,
+      sessionSeq,
     }
     await this.requireThreadMessages().put(record.id, record)
+    this.archiveThreadMessage(state.record, record)
     await this.touchRoom(state.record.roomId)
     const message = publicThreadMessage(record)
     this.broadcast(room, { type: 'thread-message', message, preview: this.threadPreview(state.record) })
@@ -1435,6 +1590,7 @@ export class ChatroomRuntime {
       joinedAt: existing?.joinedAt ?? now,
       lastSeenAt: now,
     })
+    this.requireArchive().upsertMember(roomId, identity.participantId, identity.displayName, existing?.joinedAt ?? now)
     const state = this.states.get(roomId)
     if (state !== undefined) {
       if (state.record.ownerParticipantId === undefined) {
@@ -1581,7 +1737,7 @@ export class ChatroomRuntime {
     this.validateFiles(prepared.filter(item => item.part.type === 'file').map(item => item.data))
     const refs: ChatroomFileReference[] = []
     for (const item of prepared) {
-      const record = this.fileRecord(`direct:${conversationId}`, identity, {
+      const record = await this.fileRecord(`direct:${conversationId}`, identity, {
         type: 'file',
         name: item.name,
         mediaType: item.part.mediaType,
@@ -1650,7 +1806,7 @@ export class ChatroomRuntime {
     }
     this.validateFiles([data])
     const identity = this.agentIdentity(room)
-    const record = this.fileRecord(room.record.id, identity, {
+    const record = await this.fileRecord(room.record.id, identity, {
       type: 'file',
       name: basename(absolute),
       mediaType: 'application/octet-stream',
@@ -1713,6 +1869,9 @@ export class ChatroomRuntime {
   }
 
   private async agentMessage(target: AgentToolTarget, messageId: string): Promise<ChatroomThreadRoot> {
+    if (this.requireRecalls().get(recallKey(target.room.record.id, messageId)) !== undefined) {
+      throw new ChatroomInputError('目标消息已撤回。')
+    }
     if (target.thread !== undefined) {
       const message = this.messagesForThread(target.thread.record.id).find(candidate => candidate.id === messageId)
       if (message !== undefined) {
@@ -1757,10 +1916,11 @@ export class ChatroomRuntime {
     readonly displayName: string
     readonly text: string
   }>> {
+    const recalled = new Set(this.recallsForRoom(target.room.record.id).map(record => record.messageId))
     if (target.thread !== undefined) {
       return [
         target.thread.record.root,
-        ...this.messagesForThread(target.thread.record.id).map(message => ({
+        ...this.messagesForThread(target.thread.record.id).filter(message => !recalled.has(message.id)).map(message => ({
           messageId: message.id,
           role: message.role,
           displayName: message.displayName,
@@ -1771,13 +1931,15 @@ export class ChatroomRuntime {
     const binding = await this.ensureRoom(target.room.record.id)
     return binding.agent.session.events.flatMap((event) => {
       if (event.type !== 'user/message' && event.type !== 'assistant/message') return []
+      const messageId = event.type === 'assistant/message' ? String(event.data.message.id) : `user:${event.seq}`
+      if (recalled.has(messageId) || (event.type === 'user/message' && recalled.has(`steering:${event.seq}`))) return []
       const role = event.type === 'assistant/message' ? 'ai' as const : 'human' as const
       const projected = projectForwardContent(
         event.type === 'assistant/message' ? event.data.message.content : event.data.content,
         role,
       )
       return [{
-        messageId: event.type === 'assistant/message' ? String(event.data.message.id) : `user:${event.seq}`,
+        messageId,
         role,
         displayName: role === 'ai' ? target.room.record.aiDisplayName : projected.displayName ?? '成员',
         text: projected.text,
@@ -1795,6 +1957,13 @@ export class ChatroomRuntime {
       createdAt: Date.now(),
     }
     await this.requireRecalls().put(recallKey(target.room.record.id, messageId), record)
+    this.requireArchive().recallMessage(
+      target.thread?.record.id ?? target.room.record.id,
+      messageId,
+      'ai',
+      record.createdAt,
+      target.thread?.record.sessionId ?? target.room.record.sessionId,
+    )
     for (const [key, reaction] of this.requireReactions().entries()) {
       if (reaction.roomId === target.room.record.id && reaction.messageId === messageId) {
         await this.requireReactions().delete(key)
@@ -1805,9 +1974,13 @@ export class ChatroomRuntime {
 
   private async ensureRoom(roomId: string): Promise<AgentBinding> {
     const state = this.requireState(roomId)
-    if (state.binding !== undefined) return state.binding
+    if (state.binding !== undefined) {
+      this.archiveRoomSession(state, state.binding.agent.session)
+      return state.binding
+    }
     state.activation ??= this.activateRoom(state).then((binding) => {
       state.binding = binding
+      this.archiveRoomSession(state, binding.agent.session)
       return binding
     }).finally(() => {
       state.activation = undefined
@@ -1839,7 +2012,10 @@ export class ChatroomRuntime {
   private async acquireAgent(sessionId: string, parentSessionId?: string): Promise<AgentBinding> {
     const id = SessionId(sessionId)
     const live = this.ctx.agents.get(id)
-    if (live !== undefined) return borrowAgent(live)
+    if (live !== undefined) {
+      this.augmentChatroomAgentContext(live.ctx, sessionId)
+      return borrowAgent(live)
+    }
     const persisted = (await this.ctx.sessionPersistence.list()).some(header => header.id === id)
     const model = this.ctx.agentDefaultModel.currentSelection()
     const agentOptions = { provider: model.provider, model: model.model }
@@ -1855,7 +2031,10 @@ export class ChatroomRuntime {
         }))
       } catch (error) {
         const raced = this.ctx.agents.get(id)
-        if (raced !== undefined) return borrowAgent(raced)
+        if (raced !== undefined) {
+          this.augmentChatroomAgentContext(raced.ctx, sessionId)
+          return borrowAgent(raced)
+        }
         throw error
       }
     }
@@ -1872,14 +2051,24 @@ export class ChatroomRuntime {
       }))
     } catch (error) {
       const raced = this.ctx.agents.get(id)
-      if (raced !== undefined) return borrowAgent(raced)
+      if (raced !== undefined) {
+        this.augmentChatroomAgentContext(raced.ctx, sessionId)
+        return borrowAgent(raced)
+      }
       throw error
     }
   }
 
   private async setupAgentContext(agentCtx: Context, agentPreset: string, sessionId: string): Promise<void> {
     await this.ctx.agentPresets.mount(agentCtx, agentPreset)
+    this.augmentChatroomAgentContext(agentCtx, sessionId)
+  }
+
+  private augmentChatroomAgentContext(agentCtx: Context, sessionId: string): void {
+    if (this.chatroomAgentContexts.has(agentCtx)) return
+    this.chatroomAgentContexts.add(agentCtx)
     registerChatroomAgentTools(agentCtx, this, sessionId)
+    registerWecomAgentTools(agentCtx, this.wecom)
     agentCtx.systemPrompt.section({
       name: 'chatroom:main-agent',
       order: 10,
@@ -1889,6 +2078,40 @@ export class ChatroomRuntime {
       name: 'chatroom:collaboration-tools',
       order: 11,
       text: () => '你可使用 chatroom_capabilities 查看当前群聊能力和可操作的近期消息 ID，并使用 chatroom_action 拉人、主动发消息、发送工作区文件、回复引用、贴表情、创建分支或撤回自己的消息。执行群聊副作用前先调用工具，只有工具成功后才能声称操作完成。',
+    })
+    agentCtx.systemPrompt.section({
+      name: 'chatroom:wecom-tools',
+      order: 12,
+      text: () => '你可使用 wecom_schema 与 wecom_action 操作企业微信日程、会议、会议纪要、文档、在线表格、智能表格和智能文档。写操作前先读取对应 schema；涉及人员时先用 contact 解析真实账号；不要猜测或向用户展示 userid、docid、meeting_id 等内部标识。用户未指定文档类型时默认创建智能文档。',
+    })
+  }
+
+  private async appendRoomCard(
+    state: RoomState,
+    identity: ChatroomIdentity,
+    card: ChatroomMeetingCard,
+  ): Promise<void> {
+    const binding = await this.ensureRoom(state.record.id)
+    const durable = await this.durableContent(
+      state.record.id,
+      identity,
+      identifyPrompt([{ type: 'text', text: identifyExternalCardText(card) }], identity),
+    )
+    binding.agent.session.append('user/message', createUserMessage({
+      content: durable,
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    await this.touchMember(state.record.id, identity)
+    await this.touchRoom(state.record.id)
+    this.notify({
+      id: randomUUID(),
+      roomId: state.record.id,
+      roomTitle: state.record.title,
+      participantId: identity.participantId,
+      displayName: identity.displayName,
+      role: 'human',
+      text: `创建了企微会议「${card.title}」`,
+      createdAt: Date.now(),
     })
   }
 
@@ -1936,7 +2159,7 @@ export class ChatroomRuntime {
     const fileRefs = new Map<Extract<ChatroomPromptContentPart, { type: 'file' }>, ChatroomFileReference>()
     for (const file of files) {
       if (file.part.type !== 'file') continue
-      const record = this.fileRecord(roomId, identity, file.part, file.data)
+      const record = await this.fileRecord(roomId, identity, file.part, file.data)
       await this.requireFiles().put(record.id, record)
       fileRefs.set(file.part, publicFile(record))
     }
@@ -1973,13 +2196,13 @@ export class ChatroomRuntime {
     }
   }
 
-  private fileRecord(
+  private async fileRecord(
     roomId: string,
     identity: ChatroomIdentity,
     part: Extract<ChatroomPromptContentPart, { type: 'file' }>,
     data: Uint8Array,
-  ): FileRecord {
-    return {
+  ): Promise<FileRecord> {
+    const base = {
       id: randomUUID(),
       roomId,
       participantId: identity.participantId,
@@ -1987,9 +2210,10 @@ export class ChatroomRuntime {
       name: normalizeFileName(part.name),
       mediaType: normalizeMediaType(part.mediaType),
       bytes: data.byteLength,
-      data: Buffer.from(data).toString('base64'),
       createdAt: Date.now(),
     }
+    const blob = await this.requireArchive().putAttachment(base, data)
+    return { ...base, ...blob }
   }
 
   private async resizeImage(data: Uint8Array): Promise<Uint8Array> {
@@ -2079,7 +2303,152 @@ export class ChatroomRuntime {
     const state = this.requireState(roomId)
     const record = await this.requireRoomRecords().update(roomId, current => ({ ...current, updatedAt: Date.now() }))
     state.record = record
+    this.archiveRoom(record)
     this.broadcast(state, { type: 'room-updated', room: this.projectRoom(state), members: this.roomMembers(state) })
+  }
+
+  private async syncArchive(): Promise<void> {
+    for (const [, room] of this.requireRoomRecords().entries()) this.archiveRoom(room)
+    for (const [, member] of this.requireMembers().entries()) {
+      this.requireArchive().upsertMember(member.roomId, member.participantId, member.displayName, member.joinedAt)
+    }
+    for (const [, thread] of this.requireThreads().entries()) this.archiveThread(thread)
+    for (const [, message] of this.requireThreadMessages().entries()) {
+      const thread = this.requireThreads().get(message.threadId)
+      if (thread !== undefined) this.archiveThreadMessage(thread, message)
+    }
+    for (const [, conversation] of this.requireDirectConversations().entries()) this.archiveDirectConversation(conversation)
+    for (const [, message] of this.requireDirectMessages().entries()) this.archiveDirectMessage(message)
+    for (const [, recall] of this.requireRecalls().entries()) {
+      const threadMessage = this.requireThreadMessages().get(recall.messageId)
+      const conversationId = threadMessage?.threadId ?? recall.roomId
+      const sessionId = threadMessage === undefined
+        ? this.requireRoomRecords().get(recall.roomId)?.sessionId
+        : this.requireThreads().get(threadMessage.threadId)?.sessionId
+      this.requireArchive().recallMessage(
+        conversationId,
+        recall.messageId,
+        recall.participantId,
+        recall.createdAt,
+        sessionId,
+      )
+    }
+    for (const [key, record] of this.requireFiles().entries()) {
+      if (record.data === undefined && record.storageKey !== undefined && record.sha256 !== undefined) continue
+      const data = decodeBase64(record.data ?? '', '文件')
+      const blob = await this.requireArchive().putAttachment(record, data)
+      const { data: _legacyData, ...metadata } = record
+      await this.requireFiles().put(key, { ...metadata, ...blob })
+    }
+  }
+
+  private archiveRoom(record: RoomRecord): void {
+    this.requireArchive().upsertConversation({
+      id: record.id,
+      kind: 'room',
+      title: record.title,
+      sessionId: record.sessionId,
+      createdAt: record.createdAt,
+      updatedAt: roomUpdatedAt(record),
+    })
+  }
+
+  private archiveThread(record: ThreadRecord): void {
+    this.requireArchive().upsertConversation({
+      id: record.id,
+      kind: 'thread',
+      title: `分支：${record.root.text}`,
+      sessionId: record.sessionId,
+      parentId: record.roomId,
+      createdAt: record.createdAt,
+      updatedAt: record.createdAt,
+    })
+  }
+
+  private archiveDirectConversation(record: DirectConversationRecord): void {
+    this.requireArchive().upsertConversation({
+      id: record.id,
+      kind: 'direct',
+      title: record.participantIds.join(' ↔ '),
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    })
+    for (const participantId of record.participantIds) {
+      const peer = this.directoryPeer(participantId)
+      this.requireArchive().upsertMember(record.id, participantId, peer?.displayName ?? participantId, record.createdAt)
+    }
+  }
+
+  private archiveDirectMessage(record: DirectMessageRecord): void {
+    const sender = this.directoryPeer(record.senderId)
+    this.requireArchive().upsertMessage({
+      conversationId: record.conversationId,
+      id: record.id,
+      sequence: record.sequence,
+      role: 'human',
+      senderId: record.senderId,
+      displayName: sender?.displayName ?? record.senderId,
+      text: record.text || '文件消息',
+      createdAt: record.createdAt,
+      content: { text: record.text, files: record.files ?? [] },
+    })
+  }
+
+  private archiveThreadMessage(thread: ThreadRecord, record: ThreadMessageRecord): void {
+    this.requireArchive().upsertMessage({
+      conversationId: thread.id,
+      id: record.id,
+      sequence: record.sequence,
+      role: record.role,
+      senderId: record.participantId,
+      displayName: record.displayName,
+      text: record.text,
+      createdAt: record.createdAt,
+      sessionId: thread.sessionId,
+      ...(record.sessionSeq === undefined ? {} : { sessionSeq: record.sessionSeq }),
+      ...(record.modelMessageId === undefined ? {} : { modelMessageId: record.modelMessageId }),
+      ...(record.reply === undefined ? {} : { replyTo: record.reply.messageId }),
+      content: { text: record.text, files: record.files ?? [], hasImages: record.hasImages ?? false, reply: record.reply },
+    })
+  }
+
+  private archiveRoomSession(state: RoomState, session: Session): void {
+    for (const event of session.events) this.archiveSessionEvent(session, event)
+    for (const recall of this.recallsForRoom(state.record.id)) {
+      this.requireArchive().recallMessage(
+        state.record.id,
+        recall.messageId,
+        recall.participantId,
+        recall.createdAt,
+        state.record.sessionId,
+      )
+    }
+  }
+
+  private archiveSessionEvent(session: Session, event: SessionEvent): void {
+    const room = [...this.states.values()].find(state => state.record.sessionId === String(session.id))
+    if (room === undefined || (event.type !== 'user/message' && event.type !== 'assistant/message')) return
+    const role = event.type === 'assistant/message' ? 'ai' as const : 'human' as const
+    const message = event.type === 'assistant/message' ? event.data.message : event.data
+    const firstText = message.content.find((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')?.text
+    const marker = firstText === undefined ? undefined : participantMarker(firstText)
+    if (role === 'human' && marker === undefined) return
+    const projected = projectForwardContent(message.content, role)
+    this.requireArchive().upsertMessage({
+      conversationId: room.record.id,
+      id: role === 'ai' ? String(message.id) : `user:${event.seq}`,
+      sequence: event.seq,
+      role,
+      ...(role === 'ai' ? { senderId: 'ai' } : marker === undefined ? {} : { senderId: marker.participantId }),
+      displayName: role === 'ai' ? room.record.aiDisplayName : projected.displayName ?? '成员',
+      text: projected.text,
+      createdAt: event.time,
+      sessionId: String(session.id),
+      sessionSeq: event.seq,
+      modelMessageId: String(message.id),
+      ...(projected.reply === undefined ? {} : { replyTo: projected.reply.messageId }),
+      content: projected,
+    })
   }
 
   private appendThreadRoot(binding: AgentBinding, root: ChatroomThreadRoot, content: ContentBlock[]): void {
@@ -2104,8 +2473,12 @@ export class ChatroomRuntime {
     if (room.record.autoTriggerEnabled !== true) return false
     if (addressesAi(content, room.record.aiDisplayName)) return true
     const history = thread === undefined
-      ? recentRoomConversation(binding.agent.session.events)
-      : recentThreadConversation(thread.record, this.messagesForThread(thread.record.id))
+      ? recentRoomConversation(binding.agent.session.events, this.recalledMessageIds(room.record.sessionId))
+      : recentThreadConversation(
+          thread.record,
+          this.messagesForThread(thread.record.id).filter(message =>
+            !this.requireRecalls().get(recallKey(room.record.id, message.id))),
+        )
     const settings = this.resolvedAutomationSettings()
     const assembler = new BlockAssembler()
     try {
@@ -2129,6 +2502,33 @@ export class ChatroomRuntime {
       this.log.warn('Automatic-response decision failed closed: %s', String(error))
       return false
     }
+  }
+
+  private scheduleAutomaticResponse(
+    room: RoomState,
+    binding: AgentBinding,
+    content: readonly ChatroomPromptContentPart[],
+    thread?: ThreadState,
+  ): void {
+    const owner = thread ?? room
+    const task = owner.automation.then(async () => {
+      if (!await this.shouldAutoTrigger(room, binding, content, thread)) return
+      binding.agent.followup(createUserMessage({
+        content: [{
+          type: 'text',
+          text: `The automatic-response controller selected this chatroom message for an AI response: ${JSON.stringify(promptPreview(content))}. Respond to that message now. Do not mention this controller notice.`,
+        }],
+        source: {
+          kind: 'plugin',
+          plugin: 'deepseek-harness-chatroom',
+          form: 'notice',
+          summary: 'Automatic chatroom response',
+        },
+      }))
+    })
+    owner.automation = task.catch((error: unknown) => {
+      this.log.warn('Automatic-response wake failed: %s', String(error))
+    })
   }
 
   private acceptSessionTitle(session: Session, title: string): void {
@@ -2185,6 +2585,11 @@ export class ChatroomRuntime {
     return this.automationSettings
   }
 
+  private requireArchive(): ChatArchive {
+    if (this.archive === undefined) throw new Error('chatroom archive is unavailable')
+    return this.archive
+  }
+
   private requireFiles(): KvTable<string, FileRecord> {
     if (this.files === undefined) throw new Error('chatroom file storage is unavailable')
     return this.files
@@ -2223,6 +2628,11 @@ export class ChatroomRuntime {
         || threadMessage.participantId !== participantId) {
         throw new ChatroomInputError('只能撤回自己发送的消息。')
       }
+      return
+    }
+    const archived = this.requireArchive().messageOwner(state.record.id, messageId, state.record.sessionId)
+    if (archived !== undefined) {
+      if (archived.senderId !== participantId) throw new ChatroomInputError('只能撤回自己发送的消息。')
       return
     }
     const match = /^(?:user|steering):(\d+)$/u.exec(messageId)
@@ -2276,6 +2686,14 @@ export class ChatroomRuntime {
       throw new ChatroomInputError('当前身份不是群成员。')
     }
   }
+
+  private isRoomMember(roomId: string, participantId: string): boolean {
+    return this.requireMembers().get(`${roomId}:${participantId}`) !== undefined
+  }
+
+  private roomMemberCount(roomId: string): number {
+    return [...this.requireMembers().entries()].filter(([, member]) => member.roomId === roomId).length
+  }
 }
 
 function newRoomState(record: RoomRecord): RoomState {
@@ -2285,6 +2703,8 @@ function newRoomState(record: RoomRecord): RoomState {
     binding: undefined,
     activation: undefined,
     admission: Promise.resolve(),
+    automation: Promise.resolve(),
+    rotation: undefined,
   }
 }
 
@@ -2294,6 +2714,7 @@ function newThreadState(record: ThreadRecord): ThreadState {
     binding: undefined,
     activation: undefined,
     admission: Promise.resolve(),
+    automation: Promise.resolve(),
   }
 }
 
@@ -2385,11 +2806,13 @@ function assertNever(value: never): never {
   throw new ChatroomInputError(`不支持的群聊操作：${String(value)}`)
 }
 
-function recentRoomConversation(events: readonly SessionEvent[]): readonly string[] {
+function recentRoomConversation(events: readonly SessionEvent[], recalledIds: ReadonlySet<string>): readonly string[] {
   return events.flatMap(event => {
     if (event.type !== 'user/message' && event.type !== 'assistant/message') return []
+    const message = event.type === 'assistant/message' ? event.data.message : event.data
+    if (recalledIds.has(String(message.id))) return []
     const role = event.type === 'assistant/message' ? 'AI' : '成员'
-    const content = event.type === 'assistant/message' ? event.data.message.content : event.data.content
+    const content = message.content
     const text = assistantText(content).replace(/\u2063dsh-chatroom:[^\u2063]+\u2063/gu, '').trim()
     return text === '' ? [] : [`${role}：${[...text].slice(0, 600).join('')}`]
   }).slice(-12)
@@ -2645,6 +3068,67 @@ function promptPreview(content: readonly ChatroomPromptContentPart[]): string {
   if (text !== '') return [...text.replace(/\s+/gu, ' ')].slice(0, 160).join('')
   if (content.some(part => part.type === 'file')) return '发送了文件'
   return '发送了图片'
+}
+
+function formatWecomTime(value: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(value)
+  const field = (type: Intl.DateTimeFormatPartTypes): string => parts.find(part => part.type === type)?.value ?? ''
+  return `${field('year')}-${field('month')}-${field('day')} ${field('hour')}:${field('minute')}:${field('second')}`
+}
+
+function timezoneOffsetSeconds(value: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(value)
+  const numbers = Object.fromEntries(parts.flatMap(part => part.type === 'literal' ? [] : [[part.type, Number(part.value)]]))
+  return Math.round((Date.UTC(
+    numbers.year!,
+    numbers.month! - 1,
+    numbers.day!,
+    numbers.hour!,
+    numbers.minute!,
+    numbers.second!,
+  ) - value.getTime()) / 1_000)
+}
+
+function findStringField(value: unknown, keys: readonly string[]): string | undefined {
+  const visit = (candidate: unknown, depth: number): string | undefined => {
+    if (depth > 4 || candidate === null || typeof candidate !== 'object') return undefined
+    if (Array.isArray(candidate)) {
+      for (const item of candidate.slice(0, 10)) {
+        const found = visit(item, depth + 1)
+        if (found !== undefined) return found
+      }
+      return undefined
+    }
+    const record = candidate as Record<string, unknown>
+    for (const key of keys) {
+      const field = record[key]
+      if (typeof field === 'string' && field.trim() !== '') return field
+    }
+    for (const nested of Object.values(record).slice(0, 30)) {
+      const found = visit(nested, depth + 1)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  return visit(value, 0)
 }
 
 function assistantText(content: readonly ContentBlock[]): string {

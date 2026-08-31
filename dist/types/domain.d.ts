@@ -17,7 +17,10 @@ export interface FileRecord {
     readonly name: string;
     readonly mediaType: string;
     readonly bytes: number;
-    readonly data: string;
+    /** Legacy inline payload retained only until startup migration writes it to the blob store. */
+    readonly data?: string;
+    readonly sha256?: string;
+    readonly storageKey?: string;
     readonly createdAt: number;
 }
 export interface MessageRecord {
@@ -93,6 +96,8 @@ export interface ThreadMessageRecord {
     readonly hasImages?: boolean;
     readonly reply?: ChatroomReplyReference;
     readonly createdAt: number;
+    readonly modelMessageId?: string;
+    readonly sessionSeq?: number;
 }
 export interface ReactionRecord {
     readonly roomId: string;

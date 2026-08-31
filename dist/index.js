@@ -2,6 +2,7 @@
 import { isAbsolute } from "path";
 import z from "@deepseek-ai/schemastery";
 var Config = z.object({
+  dataDirectory: z.string().default(""),
   roomId: z.string().min(1).max(64).pattern(/^[a-z0-9][a-z0-9_-]*$/u).default("lobby"),
   roomTitle: z.string().min(1).max(80).default("AI \u804A\u5929\u5BA4"),
   aiDisplayName: z.string().min(1).max(40).default("DeepSeek"),
@@ -34,11 +35,27 @@ var Config = z.object({
   authDshAuthSuperAdminSubjects: z.array(z.string().min(1).max(512)).default([]),
   authDshAuthAvatarUrlTemplate: z.string().default(""),
   authDshAuthAvatarAllowedOrigins: z.array(z.string().min(1)).default([]),
-  authDshAuthRevalidateSeconds: z.number().step(1).min(5).max(3600).default(60)
+  authDshAuthRevalidateSeconds: z.number().step(1).min(5).max(3600).default(60),
+  wecomEnabled: z.boolean().default(true),
+  wecomCliPath: z.string().default(""),
+  wecomCliConfigDirectory: z.string().default(""),
+  wecomCliTimeoutMs: z.number().step(1).min(1e3).max(12e4).default(3e4),
+  wecomQuickMeetingDurationMinutes: z.number().step(1).min(15).max(240).default(60),
+  wecomQuickMeetingSubject: z.string().min(1).max(100).default("\u5FEB\u901F\u4F1A\u8BAE"),
+  wecomTimeZone: z.string().min(1).max(80).default("Asia/Shanghai")
 });
 function validateConfig(config) {
+  if (config.dataDirectory !== void 0 && config.dataDirectory !== "" && config.dataDirectory !== ":memory:" && !isAbsolute(config.dataDirectory)) {
+    throw new Error(`chatroom: dataDirectory must be absolute or :memory:, got ${JSON.stringify(config.dataDirectory)}`);
+  }
   if (!isAbsolute(config.cwd)) {
     throw new Error(`chatroom: cwd must be absolute, got ${JSON.stringify(config.cwd)}`);
+  }
+  if (config.wecomCliPath !== "" && !isAbsolute(config.wecomCliPath)) {
+    throw new Error("chatroom: wecomCliPath must be absolute when configured");
+  }
+  if (config.wecomCliConfigDirectory !== "" && !isAbsolute(config.wecomCliConfigDirectory)) {
+    throw new Error("chatroom: wecomCliConfigDirectory must be absolute when configured");
   }
   if (config.maxMessageFileBytes < config.maxFileBytes) {
     throw new Error("chatroom: maxMessageFileBytes must be greater than or equal to maxFileBytes");
@@ -966,7 +983,7 @@ async function verifyPassword(password, encoded) {
   return timingSafeEqual(actual, expected);
 }
 function scrypt(password, salt) {
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve3, reject) => {
     deriveScrypt(password, salt, 32, {
       N: SCRYPT_N,
       r: SCRYPT_R,
@@ -974,7 +991,7 @@ function scrypt(password, salt) {
       maxmem: 64 * 1024 * 1024
     }, (error, derived) => {
       if (error !== null) reject(error);
-      else resolve2(derived);
+      else resolve3(derived);
     });
   });
 }
@@ -1137,13 +1154,264 @@ function matchChatroomApi(pathname) {
 }
 
 // src/room.ts
-import { createHash as createHash2, randomBytes as randomBytes2, randomUUID as randomUUID2 } from "crypto";
+import { createHash as createHash3, randomBytes as randomBytes2, randomUUID as randomUUID3 } from "crypto";
 import { readFile } from "fs/promises";
-import { basename, relative, resolve } from "path";
+import { basename, relative, resolve as resolve2 } from "path";
 import { resolveSessionPreset } from "@deepseek-ai/dsh-agent-presets";
 import { AttachmentError } from "@deepseek-ai/dsh-attachment";
-import { BlockAssembler, createAssistantMessage, createUserMessage as createUserMessage2 } from "@deepseek-ai/dsh-llm";
+import { BlockAssembler, createAssistantMessage, createUserMessage as createUserMessage3 } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
+
+// src/archive.ts
+import { createHash as createHash2, randomUUID as randomUUID2 } from "crypto";
+import { homedir } from "os";
+import { readFileSync } from "fs";
+import { mkdir, rename, unlink, writeFile } from "fs/promises";
+import { dirname, isAbsolute as isAbsolute2, join, resolve } from "path";
+var SCHEMA_VERSION = 1;
+var NODE_SQLITE_MODULE = "node:sqlite";
+async function openChatArchive(configuredDirectory) {
+  const memory = configuredDirectory === ":memory:";
+  const root = memory ? ":memory:" : resolveArchiveRoot(configuredDirectory);
+  if (!memory) await mkdir(root, { recursive: true, mode: 448 });
+  const { DatabaseSync: Database } = await import(NODE_SQLITE_MODULE);
+  return new ChatArchive(
+    new Database(memory ? ":memory:" : join(root, "chatroom.sqlite")),
+    memory ? void 0 : join(root, "blobs", "v1")
+  );
+}
+var ChatArchive = class {
+  constructor(database, blobRoot) {
+    this.database = database;
+    this.blobRoot = blobRoot;
+    this.initialize();
+  }
+  database;
+  blobRoot;
+  memoryBlobs = /* @__PURE__ */ new Map();
+  /** Close the SQLite connection after intake stops. */
+  close() {
+    if (this.database.isOpen) this.database.close();
+  }
+  /** Create or refresh one room, branch, or direct-conversation catalog entry. */
+  upsertConversation(input) {
+    this.database.prepare(`INSERT INTO conversations
+      (id, kind, title, session_id, parent_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, title = excluded.title,
+        session_id = excluded.session_id, parent_id = excluded.parent_id, updated_at = excluded.updated_at`).run(input.id, input.kind, input.title, input.sessionId ?? null, input.parentId ?? null, input.createdAt, input.updatedAt);
+  }
+  /** Record membership as a durable visibility and export relation. */
+  upsertMember(conversationId, participantId, displayName, joinedAt) {
+    this.database.prepare(`INSERT INTO conversation_members
+      (conversation_id, participant_id, display_name, joined_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(conversation_id, participant_id) DO UPDATE SET
+        display_name = excluded.display_name, left_at = NULL`).run(conversationId, participantId, displayName, joinedAt);
+  }
+  /** Project one committed chat message without duplicating a replayed Session event. */
+  upsertMessage(input) {
+    this.database.prepare(`INSERT INTO messages
+      (conversation_id, id, sequence, role, sender_id, display_name, text, created_at,
+       session_id, session_seq, model_message_id, reply_to, content_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(conversation_id, id) DO UPDATE SET
+        sequence = excluded.sequence, role = excluded.role, sender_id = excluded.sender_id,
+        display_name = excluded.display_name, text = excluded.text,
+        session_id = excluded.session_id, session_seq = excluded.session_seq,
+        model_message_id = excluded.model_message_id, reply_to = excluded.reply_to,
+        content_json = excluded.content_json`).run(
+      input.conversationId,
+      input.id,
+      input.sequence,
+      input.role,
+      input.senderId ?? null,
+      input.displayName,
+      input.text,
+      input.createdAt,
+      input.sessionId ?? null,
+      input.sessionSeq ?? null,
+      input.modelMessageId ?? null,
+      input.replyTo ?? null,
+      input.content === void 0 ? null : JSON.stringify(input.content)
+    );
+  }
+  /** Resolve a visible UI id to its authoritative sender and model message id. */
+  messageOwner(conversationId, messageId, sessionId) {
+    const sequence = visibleSequence(messageId);
+    const row = sequence === void 0 ? this.database.prepare(`SELECT sender_id, model_message_id FROM messages
+          WHERE conversation_id = ? AND (id = ? OR model_message_id = ?) LIMIT 1`).get(conversationId, messageId, messageId) : this.database.prepare(`SELECT sender_id, model_message_id FROM messages
+          WHERE conversation_id = ? AND (id = ? OR (session_id = ? AND session_seq = ?)) LIMIT 1`).get(conversationId, messageId, sessionId ?? null, sequence);
+    if (row === void 0) return void 0;
+    return {
+      ...typeof row.sender_id === "string" ? { senderId: row.sender_id } : {},
+      ...typeof row.model_message_id === "string" ? { modelMessageId: row.model_message_id } : {}
+    };
+  }
+  /** Tombstone a message while retaining the record for audit and export. */
+  recallMessage(conversationId, messageId, participantId, createdAt, sessionId) {
+    const sequence = visibleSequence(messageId);
+    const statement = sequence === void 0 ? this.database.prepare(`UPDATE messages SET recalled_at = ?, recalled_by = ?
+          WHERE conversation_id = ? AND (id = ? OR model_message_id = ?)`) : this.database.prepare(`UPDATE messages SET recalled_at = ?, recalled_by = ?
+          WHERE conversation_id = ? AND (id = ? OR (session_id = ? AND session_seq = ?))`);
+    if (sequence === void 0) statement.run(createdAt, participantId, conversationId, messageId, messageId);
+    else statement.run(createdAt, participantId, conversationId, messageId, sessionId ?? null, sequence);
+  }
+  /** Model message ids excluded from future requests after recall. */
+  recalledMessageIds(sessionId) {
+    const rows = this.database.prepare(`SELECT model_message_id FROM messages
+      WHERE session_id = ? AND recalled_at IS NOT NULL AND model_message_id IS NOT NULL`).all(sessionId);
+    return new Set(rows.flatMap((row) => typeof row.model_message_id === "string" ? [row.model_message_id] : []));
+  }
+  /** Persist bytes once by SHA-256 and return an opaque storage reference. */
+  async putBlob(data) {
+    const sha256 = createHash2("sha256").update(data).digest("hex");
+    const storageKey = `objects/${sha256.slice(0, 2)}/${sha256}`;
+    if (this.blobRoot === void 0) {
+      this.memoryBlobs.set(storageKey, data.slice());
+      return { sha256, storageKey };
+    }
+    const destination = join(this.blobRoot, storageKey);
+    await mkdir(dirname(destination), { recursive: true, mode: 448 });
+    const temporary = `${destination}.${randomUUID2()}.tmp`;
+    try {
+      await writeFile(temporary, data, { flag: "wx", mode: 384 });
+      try {
+        await rename(temporary, destination);
+      } catch (error) {
+        if (!isAlreadyExists(error)) throw error;
+        await unlink(temporary);
+      }
+    } catch (error) {
+      try {
+        await unlink(temporary);
+      } catch (cleanupError) {
+        if (!isMissing(cleanupError)) throw cleanupError;
+      }
+      if (!isAlreadyExists(error)) throw error;
+    }
+    return { sha256, storageKey };
+  }
+  /** Store file bytes and their durable metadata as one plugin-owned attachment. */
+  async putAttachment(input, data) {
+    const blob = await this.putBlob(data);
+    this.database.prepare(`INSERT INTO attachments
+      (id, room_id, participant_id, display_name, name, media_type, bytes, sha256, storage_key, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET name = excluded.name, media_type = excluded.media_type,
+        bytes = excluded.bytes, sha256 = excluded.sha256, storage_key = excluded.storage_key`).run(
+      input.id,
+      input.roomId,
+      input.participantId,
+      input.displayName,
+      input.name,
+      input.mediaType,
+      input.bytes,
+      blob.sha256,
+      blob.storageKey,
+      input.createdAt
+    );
+    return blob;
+  }
+  /** Read one content-addressed blob by the reference stored in file metadata. */
+  readBlob(storageKey) {
+    if (!/^objects\/[a-f0-9]{2}\/[a-f0-9]{64}$/u.test(storageKey)) throw new Error("invalid chatroom blob key");
+    if (this.blobRoot === void 0) {
+      const data = this.memoryBlobs.get(storageKey);
+      if (data === void 0) throw new Error("chatroom blob does not exist");
+      return data.slice();
+    }
+    return new Uint8Array(readFileSync(join(this.blobRoot, storageKey)));
+  }
+  initialize() {
+    this.database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+    if (this.blobRoot !== void 0) this.database.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS archive_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS conversations (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK(kind IN ('room', 'thread', 'direct')),
+        title TEXT NOT NULL,
+        session_id TEXT UNIQUE,
+        parent_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS conversation_members (
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        participant_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        joined_at INTEGER NOT NULL,
+        left_at INTEGER,
+        PRIMARY KEY(conversation_id, participant_id)
+      );
+      CREATE TABLE IF NOT EXISTS messages (
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('human', 'ai')),
+        sender_id TEXT,
+        display_name TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        session_id TEXT,
+        session_seq INTEGER,
+        model_message_id TEXT,
+        reply_to TEXT,
+        content_json TEXT,
+        recalled_at INTEGER,
+        recalled_by TEXT,
+        PRIMARY KEY(conversation_id, id)
+      );
+      CREATE INDEX IF NOT EXISTS messages_conversation_sequence
+        ON messages(conversation_id, sequence);
+      CREATE TABLE IF NOT EXISTS attachments (
+        id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL,
+        participant_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        name TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        storage_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    this.database.exec(`
+      DROP INDEX IF EXISTS messages_session_event;
+      CREATE INDEX messages_session_event
+        ON messages(session_id, session_seq) WHERE session_id IS NOT NULL AND session_seq IS NOT NULL;
+    `);
+    const current = this.database.prepare("SELECT value FROM archive_meta WHERE key = ?").get("schema_version");
+    if (current !== void 0 && Number(current.value) !== SCHEMA_VERSION) {
+      throw new Error(`unsupported chatroom archive schema ${String(current.value)}`);
+    }
+    this.database.prepare(`INSERT INTO archive_meta (key, value) VALUES ('schema_version', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(SCHEMA_VERSION));
+  }
+};
+function resolveArchiveRoot(configuredDirectory) {
+  if (configuredDirectory !== "") return configuredDirectory;
+  const dshHome = process.env.DSH_HOME?.trim();
+  const base = dshHome === void 0 || dshHome === "" ? join(homedir(), ".dsh") : dshHome;
+  return join(isAbsolute2(base) ? base : resolve(base), "chatroom");
+}
+function visibleSequence(messageId) {
+  const match = /^(?:user|steering):(\d+)$/u.exec(messageId);
+  if (match === null) return void 0;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) ? value : void 0;
+}
+function isAlreadyExists(error) {
+  return error instanceof Error && "code" in error && error.code === "EEXIST";
+}
+function isMissing(error) {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
 
 // src/agent-tools.ts
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
@@ -1296,8 +1564,12 @@ var fileSchema = z2.object({
   name: z2.string().min(1),
   mediaType: z2.string().min(1),
   bytes: nonNegativeSafeInteger,
-  data: z2.string().min(1),
+  data: z2.string().min(1).optional(),
+  sha256: z2.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  storageKey: z2.string().min(1).optional(),
   createdAt: nonNegativeSafeInteger
+}).refine((record) => record.data !== void 0 || record.sha256 !== void 0 && record.storageKey !== void 0, {
+  message: "file payload must be inline or reference the blob store"
 });
 var roomSchema = z2.object({
   id: z2.string().min(1),
@@ -1376,7 +1648,9 @@ var threadMessageSchema = z2.object({
   })).optional(),
   hasImages: z2.boolean().optional(),
   reply: replySchema.optional(),
-  createdAt: nonNegativeSafeInteger
+  createdAt: nonNegativeSafeInteger,
+  modelMessageId: z2.string().min(1).optional(),
+  sessionSeq: nonNegativeSafeInteger.optional()
 });
 var reactionSchema = z2.object({
   roomId: z2.string().min(1),
@@ -1494,6 +1768,7 @@ var PARTICIPANT_MARKER_END = "\u2063";
 var REPLY_MARKER_START = "\u2063dsh-chatroom-reply:";
 var FILE_MARKER_START = "\u2063dsh-chatroom-file:";
 var FORWARD_MARKER_START = "\u2063dsh-chatroom-forward:";
+var EXTERNAL_CARD_MARKER_START = "\u2063dsh-chatroom-card:";
 function identifyChatroomText(text, identity) {
   return `${PARTICIPANT_MARKER_START}${identity.participantId}|${identity.avatarId}${PARTICIPANT_MARKER_END}${identity.displayName}\uFF1A${text}`;
 }
@@ -1572,6 +1847,9 @@ function projectForwardText(text) {
   if (visible.startsWith(prefix)) visible = visible.slice(prefix.length);
   return { text: visible, forward };
 }
+function identifyExternalCardText(card) {
+  return `${EXTERNAL_CARD_MARKER_START}${encodePayload(card)}${PARTICIPANT_MARKER_END}${externalCardPrefix(card)}`;
+}
 function mentionsAi(content, aiDisplayName) {
   return [aiDisplayName, "AI"].some((name2) => mentionsName(content, name2));
 }
@@ -1603,6 +1881,13 @@ function forwardPrefix(bundle) {
   const lines = bundle.items.map((item) => `${item.displayName}\uFF1A${item.text}`);
   return `\u5408\u5E76\u8F6C\u53D1\uFF08${bundle.items.length} \u6761\uFF09
 ${lines.join("\n")}`;
+}
+function externalCardPrefix(card) {
+  if (card.kind === "meeting") {
+    const time = [card.beginTime, card.endTime].filter((value) => value !== void 0).join(" - ");
+    return `\u4F01\u5FAE\u4F1A\u8BAE\uFF1A${card.title}${time === "" ? "" : `\uFF08${time}\uFF09`}`;
+  }
+  return `\u4F01\u5FAE${card.documentType ?? "\u6587\u6863"}\uFF1A${card.title}`;
 }
 function encodePayload(value) {
   return encodeURIComponent(JSON.stringify(value));
@@ -1644,6 +1929,306 @@ function validForwardContentPart(value) {
   return typeof image.attachmentId === "string" && typeof image.mediaType === "string" && typeof image.bytes === "number" && typeof image.width === "number" && typeof image.height === "number";
 }
 
+// src/wecom.ts
+import { spawn } from "child_process";
+import { createRequire } from "module";
+var require2 = createRequire(import.meta.url);
+var MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+var WECOM_SERVICES = [
+  "calendar",
+  "meeting",
+  "doc",
+  "sheet",
+  "smartsheet",
+  "smartpage",
+  "contact",
+  "identity"
+];
+var WecomCliError = class extends Error {
+  constructor(message, code) {
+    super(message);
+    this.code = code;
+    this.name = "WecomCliError";
+  }
+  code;
+};
+var WecomCliClient = class {
+  constructor(config) {
+    this.config = config;
+  }
+  config;
+  /** Query one official CLI method schema without requiring plugin restart. */
+  schema(service, resource, method) {
+    return this.run(["schema", "get", joinCommand(service, resource, method)]);
+  }
+  /** Execute one official Enterprise WeChat method with JSON parameters. */
+  invoke(service, resource, method, parameters) {
+    return this.run([service, ...resource, method, "--json", JSON.stringify(parameters)]);
+  }
+  /** Read the current Enterprise WeChat authorization state. */
+  authStatus() {
+    return this.run(["auth", "show", "--status"]);
+  }
+  run(args) {
+    if (!this.config.wecomEnabled) {
+      return Promise.reject(new WecomCliError("\u4F01\u4E1A\u5FAE\u4FE1\u80FD\u529B\u5DF2\u5728\u63D2\u4EF6\u914D\u7F6E\u4E2D\u5173\u95ED\u3002", "disabled"));
+    }
+    const cli = this.config.wecomCliPath || require2.resolve("@wecom/cli/bin/wecom.js");
+    const environment = {
+      ...process.env,
+      ...this.config.wecomCliConfigDirectory === "" ? {} : { WECOM_CLI_CONFIG_DIR: this.config.wecomCliConfigDirectory }
+    };
+    return new Promise((resolve3, reject) => {
+      const child = spawn(process.execPath, [cli, ...args], {
+        env: environment,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true
+      });
+      let stdout = "";
+      let stderr = "";
+      let outputBytes = 0;
+      let settled = false;
+      const finish = (operation) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        operation();
+      };
+      const collect = (current, chunk) => {
+        outputBytes += chunk.byteLength;
+        if (outputBytes > MAX_OUTPUT_BYTES) {
+          child.kill("SIGKILL");
+          finish(() => reject(new WecomCliError("\u4F01\u4E1A\u5FAE\u4FE1 CLI \u8FD4\u56DE\u6570\u636E\u8D85\u8FC7 8 MB \u9650\u5236\u3002", "failed")));
+          return current;
+        }
+        return current + chunk.toString("utf8");
+      };
+      child.stdout.on("data", (chunk) => {
+        stdout = collect(stdout, chunk);
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr = collect(stderr, chunk);
+      });
+      child.once("error", (error) => finish(() => reject(new WecomCliError(`\u65E0\u6CD5\u542F\u52A8\u4F01\u4E1A\u5FAE\u4FE1 CLI\uFF1A${error.message}`, "failed"))));
+      child.once("close", (code) => finish(() => {
+        const output = stdout.trim();
+        const diagnostic = stderr.trim();
+        if (code !== 0) {
+          const unauthorized = /unauthorized|未授权|auth init|登录|扫码/iu.test(`${output}
+${diagnostic}`);
+          reject(new WecomCliError(
+            unauthorized ? "\u4F01\u4E1A\u5FAE\u4FE1\u5C1A\u672A\u6388\u6743\uFF0C\u8BF7\u5728\u90E8\u7F72\u673A\u8FD0\u884C wecom-cli auth init \u5B8C\u6210\u626B\u7801\u767B\u5F55\u3002" : summarizeFailure(output || diagnostic || `\u9000\u51FA\u7801 ${String(code)}`),
+            unauthorized ? "unauthorized" : "failed"
+          ));
+          return;
+        }
+        if (output === "") {
+          resolve3({});
+          return;
+        }
+        try {
+          resolve3(JSON.parse(output));
+        } catch {
+          reject(new WecomCliError("\u4F01\u4E1A\u5FAE\u4FE1 CLI \u6CA1\u6709\u8FD4\u56DE\u6709\u6548 JSON\u3002", "invalid-output"));
+        }
+      }));
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        finish(() => reject(new WecomCliError(`\u4F01\u4E1A\u5FAE\u4FE1\u64CD\u4F5C\u8D85\u8FC7 ${this.config.wecomCliTimeoutMs} ms\u3002`, "timeout")));
+      }, this.config.wecomCliTimeoutMs);
+      timer.unref();
+    });
+  }
+};
+function inferWecomCard(service, method, parameters, result) {
+  if (service === "meeting") return meetingCard(method, parameters, result);
+  if (service === "doc" || service === "sheet" || service === "smartsheet" || service === "smartpage") {
+    return documentCard(service, parameters, result);
+  }
+  return void 0;
+}
+function meetingCard(method, parameters, result) {
+  if (!/(?:create|get|update)$/u.test(method)) return void 0;
+  const title = firstString(result, ["subject", "title", "meeting_subject"]) ?? firstString(parameters, ["subject", "title"]);
+  if (title === void 0) return void 0;
+  const beginTime = firstString(result, ["begin_time", "start_time"]) ?? firstString(parameters, ["begin_time", "start_time"]);
+  const endTime = firstString(result, ["end_time"]) ?? firstString(parameters, ["end_time"]);
+  const url = firstUrl(result, ["meeting_url", "join_url", "url", "meeting_link"]);
+  const location = firstString(result, ["location", "meeting_room_name"]) ?? firstString(parameters, ["location"]);
+  const status = firstString(result, ["status", "meeting_status"]);
+  const attendees = stringArray(result, ["attendee_names", "participant_names"]);
+  return {
+    kind: "meeting",
+    title,
+    ...beginTime === void 0 ? {} : { beginTime },
+    ...endTime === void 0 ? {} : { endTime },
+    ...url === void 0 ? {} : { url },
+    ...location === void 0 ? {} : { location },
+    ...status === void 0 ? {} : { status },
+    ...attendees === void 0 ? {} : { attendees }
+  };
+}
+function documentCard(service, parameters, result) {
+  const title = firstString(result, ["doc_name", "name", "title", "file_name"]) ?? firstString(parameters, ["doc_name", "name", "title"]);
+  const url = firstUrl(result, ["doc_url", "url", "share_url"]);
+  if (title === void 0 || url === void 0) return void 0;
+  const documentType = firstString(result, ["doc_type", "type"]) ?? service;
+  const modifiedAt = firstString(result, ["update_time", "modified_at", "updated_at"]);
+  const owner = firstString(result, ["owner_name", "creator_name"]);
+  return {
+    kind: "document",
+    title,
+    documentType,
+    url,
+    ...modifiedAt === void 0 ? {} : { modifiedAt },
+    ...owner === void 0 ? {} : { owner }
+  };
+}
+function firstString(value, keys) {
+  for (const record of records(value)) {
+    for (const key of keys) {
+      const candidate = record[key];
+      if (typeof candidate === "string" && candidate.trim() !== "") return candidate;
+    }
+  }
+  return void 0;
+}
+function firstUrl(value, keys) {
+  const candidate = firstString(value, keys);
+  if (candidate === void 0) return void 0;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "https:" ? candidate : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function stringArray(value, keys) {
+  for (const record of records(value)) {
+    for (const key of keys) {
+      const candidate = record[key];
+      if (Array.isArray(candidate) && candidate.every((item) => typeof item === "string")) return candidate;
+    }
+  }
+  return void 0;
+}
+function records(value) {
+  const output = [];
+  const visit = (candidate, depth) => {
+    if (depth > 4 || candidate === null || typeof candidate !== "object") return;
+    if (Array.isArray(candidate)) {
+      for (const item of candidate.slice(0, 5)) visit(item, depth + 1);
+      return;
+    }
+    const record = candidate;
+    output.push(record);
+    for (const nested of Object.values(record).slice(0, 20)) visit(nested, depth + 1);
+  };
+  visit(value, 0);
+  return output;
+}
+function joinCommand(service, resource, method) {
+  return [service, ...resource, method].join(".");
+}
+function summarizeFailure(value) {
+  return [...value.replace(/\s+/gu, " ").trim()].slice(0, 500).join("") || "\u4F01\u4E1A\u5FAE\u4FE1\u64CD\u4F5C\u5931\u8D25\u3002";
+}
+
+// src/wecom-tools.ts
+import { createUserMessage as createUserMessage2 } from "@deepseek-ai/dsh-llm";
+import { defineTool as defineTool2 } from "@deepseek-ai/dsh-tools";
+var COMMAND_PART = /^[a-z][a-z0-9_-]*$/u;
+function registerWecomAgentTools(ctx, client) {
+  ctx.tools.register(defineTool2({
+    name: "wecom_schema",
+    description: "Read the official wecom-cli JSON schema for one Enterprise WeChat calendar, meeting, document, sheet, smart sheet, smart document, contact, or identity operation. Always call this before an unfamiliar action.",
+    parameters: {
+      service: { type: "string", required: true, enum: [...WECOM_SERVICES] },
+      resource: { type: "array", items: { type: "string" }, description: 'Optional nested resource tokens, for example ["schedules", "free"].' },
+      method: { type: "string", required: true, description: "Final CLI method token, for example create, list, get, update, append, overwrite, or search." }
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { schemaJson: { type: "string", required: true } }
+      },
+      render: (_args, value) => [{ type: "text", text: value.schemaJson }]
+    },
+    async execute(args) {
+      const resource = commandParts(args.resource ?? []);
+      const method = commandPart(args.method);
+      const value = await client.schema(args.service, resource, method);
+      return { schemaJson: JSON.stringify(value) };
+    },
+    presentCall: (args) => ({ card: "generic", title: `\u4F01\u5FAE\u63A5\u53E3\u5B9A\u4E49 \xB7 ${args.service}`, kind: "read", rawInput: args })
+  }));
+  ctx.tools.register(defineTool2({
+    name: "wecom_action",
+    description: "Execute one official wecom-cli operation. Supports calendar CRUD/free-busy/rooms, meetings and transcripts, document search/permissions, online sheets, smart sheets, smart documents, contact resolution, and identity. Resolve people first, never invent internal IDs, and call wecom_schema before writes.",
+    parameters: {
+      service: { type: "string", required: true, enum: [...WECOM_SERVICES] },
+      resource: { type: "array", items: { type: "string" }, description: "Optional nested resource tokens." },
+      method: { type: "string", required: true },
+      parametersJson: { type: "string", required: true, description: "A JSON object matching the official method schema." }
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { resultJson: { type: "string", required: true } }
+      },
+      render: (_args, value) => [{ type: "text", text: value.resultJson }]
+    },
+    async execute(args, exec) {
+      const service = args.service;
+      const resource = commandParts(args.resource ?? []);
+      const method = commandPart(args.method);
+      const parameters = parseObject(args.parametersJson);
+      const result = await client.invoke(service, resource, method, parameters);
+      const card = inferWecomCard(service, method, parameters, result);
+      if (card !== void 0) {
+        exec.deferContext(createUserMessage2({
+          content: [
+            {
+              type: "text",
+              text: "The Enterprise WeChat operation succeeded. Send the next content block as your entire next assistant response. Preserve it exactly, including invisible metadata. Do not expose internal IDs and do not call another tool."
+            },
+            { type: "text", text: identifyExternalCardText(card) }
+          ],
+          source: {
+            kind: "plugin",
+            plugin: "deepseek-harness-chatroom",
+            form: "notice",
+            summary: `Render Enterprise WeChat ${card.kind} card`
+          }
+        }));
+      }
+      return { resultJson: JSON.stringify(result) };
+    },
+    presentCall: (args) => ({ card: "generic", title: `\u4F01\u5FAE \xB7 ${args.service} ${args.method}`, kind: "other", rawInput: args })
+  }));
+}
+function commandParts(parts) {
+  return parts.map(commandPart);
+}
+function commandPart(value) {
+  if (!COMMAND_PART.test(value)) throw new Error(`Invalid wecom-cli command token ${JSON.stringify(value)}`);
+  return value;
+}
+function parseObject(value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("parametersJson must contain valid JSON");
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("parametersJson must contain a JSON object");
+  }
+  return parsed;
+}
+
 // src/room.ts
 var ChatroomInputError = class extends Error {
 };
@@ -1652,11 +2237,13 @@ var ChatroomRuntime = class {
     this.ctx = ctx;
     this.config = config;
     this.log = ctx.logger("deepseek-harness-chatroom");
+    this.wecom = new WecomCliClient(config);
   }
   ctx;
   config;
   log;
   domain;
+  archive;
   identities;
   roomRecords;
   roomPreferences;
@@ -1676,6 +2263,8 @@ var ChatroomRuntime = class {
   threadStates = /* @__PURE__ */ new Map();
   notificationClients = /* @__PURE__ */ new Set();
   ignoredAssistantMessageIds = /* @__PURE__ */ new Set();
+  chatroomAgentContexts = /* @__PURE__ */ new WeakSet();
+  wecom;
   ready = false;
   stopping = false;
   /** Public metadata for the configured legacy room. */
@@ -1688,8 +2277,8 @@ var ChatroomRuntime = class {
   }
   /** Ordered room directory personalized with one participant's pinned rooms. */
   roomsFor(identity) {
-    const states = [...this.states.values()];
     const participantId = identity?.participantId;
+    const states = [...this.states.values()].filter((state) => !this.config.authEnabled || participantId === void 0 || this.isRoomMember(state.record.id, participantId) || state.record.id === this.config.roomId && this.roomMemberCount(state.record.id) === 0);
     states.sort((left, right) => {
       const leftPinned = participantId === void 0 ? false : this.roomPinned(left.record.id, participantId);
       const rightPinned = participantId === void 0 ? false : this.roomPinned(right.record.id, participantId);
@@ -1763,6 +2352,10 @@ var ChatroomRuntime = class {
   /** Whether one model request belongs to a room or branch Session owned by this runtime. */
   ownsSession(sessionId) {
     return [...this.states.values()].some((state) => state.record.sessionId === sessionId) || [...this.threadStates.values()].some((state) => state.record.sessionId === sessionId);
+  }
+  /** Stable model message ids omitted from future requests after a chat recall. */
+  recalledMessageIds(sessionId) {
+    return this.archive?.recalledMessageIds(sessionId) ?? /* @__PURE__ */ new Set();
   }
   /** Describe the collaboration operations available to one room-scoped Agent. */
   async agentCapabilities(sessionId) {
@@ -1842,6 +2435,7 @@ var ChatroomRuntime = class {
   async start() {
     const domain = await this.ctx.storageDomain.open(chatroomDomainSpec);
     this.domain = domain;
+    this.archive = await openChatArchive(this.config.dataDirectory ?? "");
     this.identities = domain.table("identities");
     this.roomRecords = domain.table("rooms");
     this.roomPreferences = domain.table("room_preferences");
@@ -1873,6 +2467,7 @@ var ChatroomRuntime = class {
     for (const [, record] of this.requireThreads().entries()) {
       this.threadStates.set(record.id, newThreadState(record));
     }
+    await this.syncArchive();
     await this.ensureRoom(this.config.roomId);
     this.ready = true;
   }
@@ -1891,6 +2486,7 @@ var ChatroomRuntime = class {
     this.roomTitleWrites.clear();
     await Promise.allSettled([...this.states.values()].map(async (state) => {
       await state.admission;
+      await state.automation;
       await state.activation?.catch(() => void 0);
       await state.binding?.release();
       state.binding = void 0;
@@ -1898,11 +2494,14 @@ var ChatroomRuntime = class {
     this.states.clear();
     await Promise.allSettled([...this.threadStates.values()].map(async (state) => {
       await state.admission;
+      await state.automation;
       await state.activation?.catch(() => void 0);
       await state.binding?.release();
       state.binding = void 0;
     }));
     this.threadStates.clear();
+    this.archive?.close();
+    this.archive = void 0;
     await this.domain?.close();
     this.domain = void 0;
     this.identities = void 0;
@@ -1931,7 +2530,7 @@ var ChatroomRuntime = class {
     const normalized = normalizeDisplayName2(displayName, this.config.maxDisplayNameChars);
     const token = randomBytes2(32).toString("base64url");
     const now = Date.now();
-    const participantId = randomUUID2();
+    const participantId = randomUUID3();
     if (avatarId !== void 0 && !isChatroomAvatarId(avatarId)) throw new ChatroomInputError("\u8BF7\u9009\u62E9\u6709\u6548\u7684\u5934\u50CF\u3002");
     const record = {
       participantId,
@@ -1966,6 +2565,7 @@ var ChatroomRuntime = class {
         avatarId: record.avatarId ?? fallbackAvatarId(record.participantId),
         lastSeenAt: record.lastSeenAt
       });
+      this.requireArchive().upsertMember(member.roomId, record.participantId, record.displayName, member.joinedAt);
       const state = this.states.get(member.roomId);
       if (state !== void 0) this.broadcastPresence(state);
     }
@@ -1979,7 +2579,7 @@ var ChatroomRuntime = class {
   /** Create and activate one independent shared Harness Session. */
   async createRoom(title, identity) {
     this.assertReady();
-    const id = randomUUID2();
+    const id = randomUUID3();
     const now = Date.now();
     const record = {
       id,
@@ -1994,6 +2594,7 @@ var ChatroomRuntime = class {
       autoTriggerEnabled: false
     };
     await this.requireRoomRecords().put(id, record);
+    this.archiveRoom(record);
     const state = newRoomState(record);
     this.states.set(id, state);
     try {
@@ -2012,13 +2613,15 @@ var ChatroomRuntime = class {
     this.assertReady();
     const existing = [...this.states.values()].find((state) => state.record.sessionId === sessionId);
     if (existing !== void 0) {
-      await this.touchMember(existing.record.id, identity);
+      if (this.config.authEnabled) this.assertRoomMember(existing.record.id, identity.participantId);
+      else await this.touchMember(existing.record.id, identity);
       return this.projectRoom(existing, identity.participantId);
     }
     const pending = this.sessionRoomCreations.get(sessionId);
     if (pending !== void 0) {
       const room = await pending;
-      await this.touchMember(room.id, identity);
+      if (this.config.authEnabled) this.assertRoomMember(room.id, identity.participantId);
+      else await this.touchMember(room.id, identity);
       return room;
     }
     const creation = this.createSessionRoom(sessionId, title, identity);
@@ -2037,7 +2640,7 @@ var ChatroomRuntime = class {
     const live = this.ctx.agents.get(SessionId(normalizedSessionId));
     const persisted = live !== void 0 || (await this.ctx.sessionPersistence.list()).some((header) => String(header.id) === normalizedSessionId);
     if (!persisted) throw new ChatroomInputError("Harness \u4F1A\u8BDD\u4E0D\u5B58\u5728\u6216\u5C1A\u672A\u5C31\u7EEA\u3002");
-    const id = `session-${createHash2("sha256").update(normalizedSessionId).digest("base64url").slice(0, 24)}`;
+    const id = `session-${createHash3("sha256").update(normalizedSessionId).digest("base64url").slice(0, 24)}`;
     const now = Date.now();
     const record = {
       id,
@@ -2052,6 +2655,7 @@ var ChatroomRuntime = class {
       autoTriggerEnabled: false
     };
     await this.requireRoomRecords().put(id, record);
+    this.archiveRoom(record);
     const state = newRoomState(record);
     this.states.set(id, state);
     try {
@@ -2067,10 +2671,98 @@ var ChatroomRuntime = class {
   /** Activate an existing room and return its public metadata. */
   async selectRoom(roomId, identity) {
     this.assertReady();
+    if (identity !== void 0) {
+      if (!this.config.authEnabled || roomId === this.config.roomId && this.roomMemberCount(roomId) === 0) {
+        await this.touchMember(roomId, identity);
+      } else this.assertRoomMember(roomId, identity.participantId);
+    }
     const binding = await this.ensureRoom(roomId);
     if (identity !== void 0) this.ensureRoomTitle(binding, this.requireState(roomId).record.title);
-    if (identity !== void 0) await this.touchMember(roomId, identity);
     return this.projectRoom(this.requireState(roomId), identity?.participantId);
+  }
+  /** Stop the active Agent turn while retaining the room and queued user intake. */
+  async stopRoomSession(roomId, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    this.assertRoomMember(roomId, identity.participantId);
+    const binding = await this.ensureRoom(roomId);
+    binding.agent.cancel({ kind: "user" }, { keepInbox: true });
+    await binding.agent.whenIdle();
+    return this.projectRoom(state, identity.participantId);
+  }
+  /** Replace one room's Harness Session while retaining the room identity and roster. */
+  async renewRoomSession(roomId, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    this.assertRoomMember(roomId, identity.participantId);
+    if (state.rotation !== void 0) {
+      await state.rotation;
+      return this.projectRoom(state, identity.participantId);
+    }
+    let resolveRotation;
+    const predecessor = state.admission;
+    state.admission = new Promise((resolve3) => {
+      resolveRotation = resolve3;
+    });
+    const rotation = (async () => {
+      await predecessor;
+      const previous = await this.ensureRoom(roomId);
+      previous.agent.cancel({ kind: "user" });
+      await previous.agent.whenIdle();
+      this.archiveRoomSession(state, previous.agent.session);
+      await previous.release();
+      state.binding = void 0;
+      state.activation = void 0;
+      const sessionId = `chatroom-v1-${roomId}-${randomUUID3()}`;
+      const record = await this.requireRoomRecords().update(roomId, (current) => ({
+        ...current,
+        sessionId,
+        updatedAt: Date.now()
+      }));
+      state.record = record;
+      this.archiveRoom(record);
+      const binding = await this.ensureRoom(roomId);
+      this.ensureRoomTitle(binding, record.title);
+      this.broadcast(state, { type: "room-updated", room: this.projectRoom(state), members: this.roomMembers(state) });
+    })();
+    state.rotation = rotation;
+    try {
+      await rotation;
+      return this.projectRoom(state, identity.participantId);
+    } finally {
+      if (state.rotation === rotation) state.rotation = void 0;
+      resolveRotation();
+    }
+  }
+  /** Create an Enterprise WeChat online meeting and post it to the room as a durable card. */
+  async createQuickMeeting(roomId, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    this.assertRoomMember(roomId, identity.participantId);
+    const task = state.admission.then(async () => {
+      const whoami = await this.wecom.invoke("identity", [], "whoami", {});
+      const userid = findStringField(whoami, ["userid", "user_id", "open_userid", "open_vid"]);
+      if (userid === void 0) throw new ChatroomInputError("\u4F01\u4E1A\u5FAE\u4FE1\u8EAB\u4EFD\u4FE1\u606F\u4E2D\u7F3A\u5C11\u53EF\u7528\u7684\u7528\u6237\u6807\u8BC6\u3002");
+      const begin = new Date(Date.now() + 5 * 6e4);
+      const end = new Date(begin.getTime() + this.config.wecomQuickMeetingDurationMinutes * 6e4);
+      const parameters = {
+        subject: this.config.wecomQuickMeetingSubject,
+        begin_time: formatWecomTime(begin, this.config.wecomTimeZone),
+        end_time: formatWecomTime(end, this.config.wecomTimeZone),
+        attendees: [{ userid }],
+        timezone: {
+          timezone_id: this.config.wecomTimeZone,
+          timezone_offset: timezoneOffsetSeconds(begin, this.config.wecomTimeZone)
+        }
+      };
+      const result = await this.wecom.invoke("meeting", [], "create", parameters);
+      const inferred = inferWecomCard("meeting", "create", parameters, result);
+      if (inferred?.kind !== "meeting") throw new ChatroomInputError("\u4F01\u5FAE\u5DF2\u521B\u5EFA\u4F1A\u8BAE\uFF0C\u4F46\u8FD4\u56DE\u4FE1\u606F\u7F3A\u5C11\u4F1A\u8BAE\u6807\u9898\u3002");
+      await this.appendRoomCard(state, identity, inferred);
+      return inferred;
+    });
+    state.admission = task.then(() => void 0, () => void 0);
+    return await task;
   }
   /** Rename one room as its owner or an administrator. */
   async renameRoom(roomId, title, identity) {
@@ -2138,18 +2830,19 @@ var ChatroomRuntime = class {
         joinedAt: now,
         lastSeenAt: now
       });
+      this.requireArchive().upsertMember(roomId, account.participantId, account.displayName, now);
     }
     const members = this.roomMembers(state);
     this.broadcast(state, { type: "room-updated", room: this.projectRoom(state), members });
     return members;
   }
-  /** Append human chat and wake the Agent for an explicit mention or an enabled model decision. */
+  /** Append human chat immediately and evaluate optional automatic responses in a separate queue. */
   async submit(roomId, identity, content, mode, reply) {
     this.assertReady();
     const state = this.requireState(roomId);
     const task = state.admission.then(async () => {
       const binding = await this.ensureRoom(roomId);
-      const aiTriggered = mentionsAi(content, state.record.aiDisplayName) || await this.shouldAutoTrigger(state, binding, content);
+      const aiTriggered = mentionsAi(content, state.record.aiDisplayName) || state.record.autoTriggerEnabled === true && addressesAi(content, state.record.aiDisplayName);
       const { provider, model: modelId } = binding.agent.options;
       if (aiTriggered && provider !== void 0 && modelId !== void 0 && content.some((part) => part.type === "image")) {
         const model = await this.ctx.llm.resolveModelInfo(provider, modelId);
@@ -2158,7 +2851,7 @@ var ChatroomRuntime = class {
         }
       }
       const durable = await this.durableContent(roomId, identity, identifyPrompt(content, identity, reply));
-      const message = createUserMessage2({ content: durable, source: { kind: "user" } });
+      const message = createUserMessage3({ content: durable, source: { kind: "user" } });
       if (!aiTriggered) {
         binding.agent.session.append("user/message", message, { surfaceOp: "append" });
       } else if (mode === "steer") {
@@ -2166,10 +2859,13 @@ var ChatroomRuntime = class {
       } else {
         binding.agent.followup(message);
       }
+      if (!aiTriggered && state.record.autoTriggerEnabled === true) {
+        this.scheduleAutomaticResponse(state, binding, content);
+      }
       await this.touchMember(roomId, identity);
       await this.touchRoom(roomId);
       this.notify({
-        id: randomUUID2(),
+        id: randomUUID3(),
         roomId,
         roomTitle: state.record.title,
         participantId: identity.participantId,
@@ -2220,6 +2916,7 @@ var ChatroomRuntime = class {
     const state = this.requireState(roomId);
     const normalizedMessageId = normalizeMessageId(messageId);
     const task = state.admission.then(async () => {
+      if (state.binding !== void 0) this.archiveRoomSession(state, state.binding.agent.session);
       this.assertRecallOwner(state, normalizedMessageId, identity.participantId);
       const key = recallKey(roomId, normalizedMessageId);
       const existing = this.requireRecalls().get(key);
@@ -2231,6 +2928,10 @@ var ChatroomRuntime = class {
         createdAt: Date.now()
       };
       await this.requireRecalls().put(key, record);
+      const threadMessage = this.requireThreadMessages().get(normalizedMessageId);
+      const conversationId = threadMessage?.threadId ?? roomId;
+      const sessionId = threadMessage === void 0 ? state.record.sessionId : this.requireThreads().get(threadMessage.threadId)?.sessionId;
+      this.requireArchive().recallMessage(conversationId, normalizedMessageId, identity.participantId, record.createdAt, sessionId);
       for (const [reactionKey2, reaction] of this.requireReactions().entries()) {
         if (reaction.roomId === roomId && reaction.messageId === normalizedMessageId) {
           await this.requireReactions().delete(reactionKey2);
@@ -2287,13 +2988,13 @@ var ChatroomRuntime = class {
       };
       const identified = identifyPrompt([{ type: "text", text: identifyForwardText(bundle) }], identity);
       const durable = await this.durableContent(targetRoomId, identity, identified);
-      binding.agent.session.append("user/message", createUserMessage2({
+      binding.agent.session.append("user/message", createUserMessage3({
         content: durable,
         source: { kind: "user" }
       }), { surfaceOp: "append" });
       await this.touchMember(targetRoomId, identity);
       this.notify({
-        id: randomUUID2(),
+        id: randomUUID3(),
         roomId: targetRoomId,
         roomTitle: target.record.title,
         participantId: identity.participantId,
@@ -2353,8 +3054,11 @@ var ChatroomRuntime = class {
       if (conversation === void 0 || !conversation.participantIds.includes(identity.participantId)) {
         throw new ChatroomInputError("\u6587\u4EF6\u4E0D\u5B58\u5728\u6216\u4F60\u65E0\u6743\u8BBF\u95EE\u3002");
       }
+    } else if (identity !== void 0) {
+      this.assertRoomMember(record.roomId, identity.participantId);
     }
-    return { ref: publicFile(record), data: decodeBase64(record.data, "\u6587\u4EF6") };
+    const data = record.storageKey === void 0 ? decodeBase64(record.data ?? "", "\u6587\u4EF6") : this.requireArchive().readBlob(record.storageKey);
+    return { ref: publicFile(record), data };
   }
   /** Resolve one forwarded image only when the durable source event still owns its attachment. */
   async image(sourceRoomId, sourceSessionId, sourceSeq, ref) {
@@ -2425,13 +3129,14 @@ var ChatroomRuntime = class {
     if (record === void 0) {
       const now = Date.now();
       record = {
-        id: randomUUID2(),
+        id: randomUUID3(),
         participantIds: participants,
         createdAt: now,
         updatedAt: now,
         nextSequence: 1
       };
       await this.requireDirectConversations().put(record.id, record);
+      this.archiveDirectConversation(record);
     }
     return {
       ...this.directDirectory(identity),
@@ -2459,7 +3164,7 @@ var ChatroomRuntime = class {
       nextSequence: current.nextSequence + 1
     }));
     const message = {
-      id: randomUUID2(),
+      id: randomUUID3(),
       conversationId,
       sequence: updated.nextSequence - 1,
       senderId: identity.participantId,
@@ -2471,6 +3176,8 @@ var ChatroomRuntime = class {
       `${conversationId}:${String(message.sequence).padStart(12, "0")}:${message.id}`,
       message
     );
+    this.archiveDirectConversation(updated);
+    this.archiveDirectMessage(message);
     const event = {
       type: "direct-message",
       conversation: this.publicDirectConversation(updated, identity.participantId),
@@ -2518,7 +3225,7 @@ var ChatroomRuntime = class {
       const binding = await this.ensureThread(threadId);
       const roomState = this.requireState(state.record.roomId);
       const room = roomState.record;
-      const aiTriggered = mentionsAi(content, room.aiDisplayName) || await this.shouldAutoTrigger(roomState, binding, content, state);
+      const aiTriggered = mentionsAi(content, room.aiDisplayName) || room.autoTriggerEnabled === true && addressesAi(content, room.aiDisplayName);
       const { provider, model: modelId } = binding.agent.options;
       if (aiTriggered && provider !== void 0 && modelId !== void 0 && content.some((part) => part.type === "image")) {
         const model = await this.ctx.llm.resolveModelInfo(provider, modelId);
@@ -2534,8 +3241,12 @@ var ChatroomRuntime = class {
       const text = promptPreview(content);
       const files = durable.flatMap((block) => block.type === "text" ? projectFileText(block.text).files : []);
       const sequence = this.nextThreadSequence(threadId);
+      const message = createUserMessage3({
+        content: durable,
+        source: { kind: "user" }
+      });
       const record = {
-        id: randomUUID2(),
+        id: randomUUID3(),
         threadId,
         sequence,
         role: "human",
@@ -2547,16 +3258,17 @@ var ChatroomRuntime = class {
         ...files.length === 0 ? {} : { files },
         ...durable.some((block) => block.type === "image") ? { hasImages: true } : {},
         ...reply === void 0 ? {} : { reply },
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        modelMessageId: String(message.id)
       };
       await this.requireThreadMessages().put(record.id, record);
-      const message = createUserMessage2({
-        content: durable,
-        source: { kind: "user" }
-      });
+      this.archiveThreadMessage(state.record, record);
       if (aiTriggered && mode === "steer") binding.agent.steer(message);
       else if (aiTriggered) binding.agent.followup(message);
       else binding.agent.session.append("user/message", message, { surfaceOp: "append" });
+      if (!aiTriggered && room.autoTriggerEnabled === true) {
+        this.scheduleAutomaticResponse(roomState, binding, content, state);
+      }
       await this.touchMember(state.record.roomId, identity);
       await this.touchRoom(state.record.roomId);
       const publicMessage = publicThreadMessage(record);
@@ -2584,6 +3296,7 @@ var ChatroomRuntime = class {
   /** Project committed AI output into its parent room or branch stream. */
   handleSessionEvent(session, event) {
     if (!this.isReady) return;
+    this.archiveSessionEvent(session, event);
     if (event.type === "session/title") {
       this.acceptSessionTitle(session, event.data.title);
       return;
@@ -2594,7 +3307,7 @@ var ChatroomRuntime = class {
     if (text === "") return;
     const thread = [...this.threadStates.values()].find((state) => state.record.sessionId === String(session.id));
     if (thread !== void 0) {
-      void this.recordThreadAssistant(thread, text, event.time).catch((error) => {
+      void this.recordThreadAssistant(thread, text, event.time, String(event.data.message.id), event.seq).catch((error) => {
         this.log.warn("Branch AI projection failed: %s", String(error));
       });
       return;
@@ -2614,7 +3327,7 @@ var ChatroomRuntime = class {
     });
   }
   async createThread(roomId, identity, resolved) {
-    const id = randomUUID2();
+    const id = randomUUID3();
     const { root } = resolved;
     const record = {
       id,
@@ -2626,6 +3339,7 @@ var ChatroomRuntime = class {
       ...root.sourceSessionId === void 0 ? {} : { rootContentVersion: 1 }
     };
     await this.requireThreads().put(id, record);
+    this.archiveThread(record);
     const state = newThreadState(record);
     this.threadStates.set(id, state);
     try {
@@ -2689,19 +3403,22 @@ var ChatroomRuntime = class {
     });
     return await state.activation;
   }
-  async recordThreadAssistant(state, text, createdAt) {
+  async recordThreadAssistant(state, text, createdAt, modelMessageId, sessionSeq) {
     const room = this.requireState(state.record.roomId);
     const record = {
-      id: randomUUID2(),
+      id: randomUUID3(),
       threadId: state.record.id,
       sequence: this.nextThreadSequence(state.record.id),
       role: "ai",
       participantId: "ai",
       displayName: room.record.aiDisplayName,
       text,
-      createdAt
+      createdAt,
+      modelMessageId,
+      sessionSeq
     };
     await this.requireThreadMessages().put(record.id, record);
+    this.archiveThreadMessage(state.record, record);
     await this.touchRoom(state.record.roomId);
     const message = publicThreadMessage(record);
     this.broadcast(room, { type: "thread-message", message, preview: this.threadPreview(state.record) });
@@ -2752,6 +3469,7 @@ var ChatroomRuntime = class {
       joinedAt: existing?.joinedAt ?? now,
       lastSeenAt: now
     });
+    this.requireArchive().upsertMember(roomId, identity.participantId, identity.displayName, existing?.joinedAt ?? now);
     const state = this.states.get(roomId);
     if (state !== void 0) {
       if (state.record.ownerParticipantId === void 0) {
@@ -2866,7 +3584,7 @@ var ChatroomRuntime = class {
     this.validateFiles(prepared.filter((item) => item.part.type === "file").map((item) => item.data));
     const refs = [];
     for (const item of prepared) {
-      const record = this.fileRecord(`direct:${conversationId}`, identity, {
+      const record = await this.fileRecord(`direct:${conversationId}`, identity, {
         type: "file",
         name: item.name,
         mediaType: item.part.mediaType,
@@ -2878,8 +3596,8 @@ var ChatroomRuntime = class {
     return refs;
   }
   async seedConfiguredRoom() {
-    const records = this.requireRoomRecords();
-    const existing = records.get(this.config.roomId);
+    const records2 = this.requireRoomRecords();
+    const existing = records2.get(this.config.roomId);
     const configured = {
       id: this.config.roomId,
       title: existing?.title ?? this.config.roomTitle,
@@ -2893,7 +3611,7 @@ var ChatroomRuntime = class {
       autoTriggerEnabled: existing?.autoTriggerEnabled ?? false
     };
     if (existing === void 0 || existing.title !== configured.title || existing.aiDisplayName !== configured.aiDisplayName || existing.sessionId !== configured.sessionId || existing.updatedAt === void 0 || existing.autoTriggerEnabled === void 0) {
-      await records.put(configured.id, configured);
+      await records2.put(configured.id, configured);
     }
   }
   agentToolTarget(sessionId) {
@@ -2912,8 +3630,8 @@ var ChatroomRuntime = class {
   }
   async storeAgentFile(room, path) {
     const requested = normalizeAgentToolText(path, "\u6587\u4EF6\u8DEF\u5F84", 4096);
-    const workspace = resolve(this.config.cwd);
-    const absolute = resolve(workspace, requested);
+    const workspace = resolve2(this.config.cwd);
+    const absolute = resolve2(workspace, requested);
     const outside = relative(workspace, absolute);
     if (outside === ".." || outside.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
       throw new ChatroomInputError("\u53EA\u80FD\u53D1\u9001\u5F53\u524D\u5DE5\u4F5C\u533A\u5185\u7684\u6587\u4EF6\u3002");
@@ -2926,7 +3644,7 @@ var ChatroomRuntime = class {
     }
     this.validateFiles([data]);
     const identity = this.agentIdentity(room);
-    const record = this.fileRecord(room.record.id, identity, {
+    const record = await this.fileRecord(room.record.id, identity, {
       type: "file",
       name: basename(absolute),
       mediaType: "application/octet-stream",
@@ -2981,6 +3699,9 @@ var ChatroomRuntime = class {
     return added;
   }
   async agentMessage(target, messageId) {
+    if (this.requireRecalls().get(recallKey(target.room.record.id, messageId)) !== void 0) {
+      throw new ChatroomInputError("\u76EE\u6807\u6D88\u606F\u5DF2\u64A4\u56DE\u3002");
+    }
     if (target.thread !== void 0) {
       const message = this.messagesForThread(target.thread.record.id).find((candidate) => candidate.id === messageId);
       if (message !== void 0) {
@@ -3019,10 +3740,11 @@ var ChatroomRuntime = class {
     };
   }
   async agentRecentMessages(target) {
+    const recalled = new Set(this.recallsForRoom(target.room.record.id).map((record) => record.messageId));
     if (target.thread !== void 0) {
       return [
         target.thread.record.root,
-        ...this.messagesForThread(target.thread.record.id).map((message) => ({
+        ...this.messagesForThread(target.thread.record.id).filter((message) => !recalled.has(message.id)).map((message) => ({
           messageId: message.id,
           role: message.role,
           displayName: message.displayName,
@@ -3033,13 +3755,15 @@ var ChatroomRuntime = class {
     const binding = await this.ensureRoom(target.room.record.id);
     return binding.agent.session.events.flatMap((event) => {
       if (event.type !== "user/message" && event.type !== "assistant/message") return [];
+      const messageId = event.type === "assistant/message" ? String(event.data.message.id) : `user:${event.seq}`;
+      if (recalled.has(messageId) || event.type === "user/message" && recalled.has(`steering:${event.seq}`)) return [];
       const role = event.type === "assistant/message" ? "ai" : "human";
       const projected = projectForwardContent(
         event.type === "assistant/message" ? event.data.message.content : event.data.content,
         role
       );
       return [{
-        messageId: event.type === "assistant/message" ? String(event.data.message.id) : `user:${event.seq}`,
+        messageId,
         role,
         displayName: role === "ai" ? target.room.record.aiDisplayName : projected.displayName ?? "\u6210\u5458",
         text: projected.text
@@ -3056,6 +3780,13 @@ var ChatroomRuntime = class {
       createdAt: Date.now()
     };
     await this.requireRecalls().put(recallKey(target.room.record.id, messageId), record);
+    this.requireArchive().recallMessage(
+      target.thread?.record.id ?? target.room.record.id,
+      messageId,
+      "ai",
+      record.createdAt,
+      target.thread?.record.sessionId ?? target.room.record.sessionId
+    );
     for (const [key, reaction] of this.requireReactions().entries()) {
       if (reaction.roomId === target.room.record.id && reaction.messageId === messageId) {
         await this.requireReactions().delete(key);
@@ -3065,9 +3796,13 @@ var ChatroomRuntime = class {
   }
   async ensureRoom(roomId) {
     const state = this.requireState(roomId);
-    if (state.binding !== void 0) return state.binding;
+    if (state.binding !== void 0) {
+      this.archiveRoomSession(state, state.binding.agent.session);
+      return state.binding;
+    }
     state.activation ??= this.activateRoom(state).then((binding) => {
       state.binding = binding;
+      this.archiveRoomSession(state, binding.agent.session);
       return binding;
     }).finally(() => {
       state.activation = void 0;
@@ -3095,7 +3830,10 @@ var ChatroomRuntime = class {
   async acquireAgent(sessionId, parentSessionId) {
     const id = SessionId(sessionId);
     const live = this.ctx.agents.get(id);
-    if (live !== void 0) return borrowAgent(live);
+    if (live !== void 0) {
+      this.augmentChatroomAgentContext(live.ctx, sessionId);
+      return borrowAgent(live);
+    }
     const persisted = (await this.ctx.sessionPersistence.list()).some((header) => header.id === id);
     const model = this.ctx.agentDefaultModel.currentSelection();
     const agentOptions = { provider: model.provider, model: model.model };
@@ -3112,7 +3850,10 @@ var ChatroomRuntime = class {
         }));
       } catch (error) {
         const raced = this.ctx.agents.get(id);
-        if (raced !== void 0) return borrowAgent(raced);
+        if (raced !== void 0) {
+          this.augmentChatroomAgentContext(raced.ctx, sessionId);
+          return borrowAgent(raced);
+        }
         throw error;
       }
     }
@@ -3131,13 +3872,22 @@ var ChatroomRuntime = class {
       }));
     } catch (error) {
       const raced = this.ctx.agents.get(id);
-      if (raced !== void 0) return borrowAgent(raced);
+      if (raced !== void 0) {
+        this.augmentChatroomAgentContext(raced.ctx, sessionId);
+        return borrowAgent(raced);
+      }
       throw error;
     }
   }
   async setupAgentContext(agentCtx, agentPreset, sessionId) {
     await this.ctx.agentPresets.mount(agentCtx, agentPreset);
+    this.augmentChatroomAgentContext(agentCtx, sessionId);
+  }
+  augmentChatroomAgentContext(agentCtx, sessionId) {
+    if (this.chatroomAgentContexts.has(agentCtx)) return;
+    this.chatroomAgentContexts.add(agentCtx);
     registerChatroomAgentTools(agentCtx, this, sessionId);
+    registerWecomAgentTools(agentCtx, this.wecom);
     agentCtx.systemPrompt.section({
       name: "chatroom:main-agent",
       order: 10,
@@ -3147,6 +3897,35 @@ var ChatroomRuntime = class {
       name: "chatroom:collaboration-tools",
       order: 11,
       text: () => "\u4F60\u53EF\u4F7F\u7528 chatroom_capabilities \u67E5\u770B\u5F53\u524D\u7FA4\u804A\u80FD\u529B\u548C\u53EF\u64CD\u4F5C\u7684\u8FD1\u671F\u6D88\u606F ID\uFF0C\u5E76\u4F7F\u7528 chatroom_action \u62C9\u4EBA\u3001\u4E3B\u52A8\u53D1\u6D88\u606F\u3001\u53D1\u9001\u5DE5\u4F5C\u533A\u6587\u4EF6\u3001\u56DE\u590D\u5F15\u7528\u3001\u8D34\u8868\u60C5\u3001\u521B\u5EFA\u5206\u652F\u6216\u64A4\u56DE\u81EA\u5DF1\u7684\u6D88\u606F\u3002\u6267\u884C\u7FA4\u804A\u526F\u4F5C\u7528\u524D\u5148\u8C03\u7528\u5DE5\u5177\uFF0C\u53EA\u6709\u5DE5\u5177\u6210\u529F\u540E\u624D\u80FD\u58F0\u79F0\u64CD\u4F5C\u5B8C\u6210\u3002"
+    });
+    agentCtx.systemPrompt.section({
+      name: "chatroom:wecom-tools",
+      order: 12,
+      text: () => "\u4F60\u53EF\u4F7F\u7528 wecom_schema \u4E0E wecom_action \u64CD\u4F5C\u4F01\u4E1A\u5FAE\u4FE1\u65E5\u7A0B\u3001\u4F1A\u8BAE\u3001\u4F1A\u8BAE\u7EAA\u8981\u3001\u6587\u6863\u3001\u5728\u7EBF\u8868\u683C\u3001\u667A\u80FD\u8868\u683C\u548C\u667A\u80FD\u6587\u6863\u3002\u5199\u64CD\u4F5C\u524D\u5148\u8BFB\u53D6\u5BF9\u5E94 schema\uFF1B\u6D89\u53CA\u4EBA\u5458\u65F6\u5148\u7528 contact \u89E3\u6790\u771F\u5B9E\u8D26\u53F7\uFF1B\u4E0D\u8981\u731C\u6D4B\u6216\u5411\u7528\u6237\u5C55\u793A userid\u3001docid\u3001meeting_id \u7B49\u5185\u90E8\u6807\u8BC6\u3002\u7528\u6237\u672A\u6307\u5B9A\u6587\u6863\u7C7B\u578B\u65F6\u9ED8\u8BA4\u521B\u5EFA\u667A\u80FD\u6587\u6863\u3002"
+    });
+  }
+  async appendRoomCard(state, identity, card) {
+    const binding = await this.ensureRoom(state.record.id);
+    const durable = await this.durableContent(
+      state.record.id,
+      identity,
+      identifyPrompt([{ type: "text", text: identifyExternalCardText(card) }], identity)
+    );
+    binding.agent.session.append("user/message", createUserMessage3({
+      content: durable,
+      source: { kind: "user" }
+    }), { surfaceOp: "append" });
+    await this.touchMember(state.record.id, identity);
+    await this.touchRoom(state.record.id);
+    this.notify({
+      id: randomUUID3(),
+      roomId: state.record.id,
+      roomTitle: state.record.title,
+      participantId: identity.participantId,
+      displayName: identity.displayName,
+      role: "human",
+      text: `\u521B\u5EFA\u4E86\u4F01\u5FAE\u4F1A\u8BAE\u300C${card.title}\u300D`,
+      createdAt: Date.now()
     });
   }
   /** Ensure one shared Session uses native Workspace navigation. */
@@ -3183,7 +3962,7 @@ var ChatroomRuntime = class {
     const fileRefs = /* @__PURE__ */ new Map();
     for (const file of files) {
       if (file.part.type !== "file") continue;
-      const record = this.fileRecord(roomId, identity, file.part, file.data);
+      const record = await this.fileRecord(roomId, identity, file.part, file.data);
       await this.requireFiles().put(record.id, record);
       fileRefs.set(file.part, publicFile(record));
     }
@@ -3218,18 +3997,19 @@ var ChatroomRuntime = class {
       throw new ChatroomInputError(`\u4E00\u6761\u6D88\u606F\u7684\u6587\u4EF6\u603B\u5927\u5C0F\u4E0D\u80FD\u8D85\u8FC7 ${formatMegabytes(this.config.maxMessageFileBytes)}\u3002`);
     }
   }
-  fileRecord(roomId, identity, part, data) {
-    return {
-      id: randomUUID2(),
+  async fileRecord(roomId, identity, part, data) {
+    const base = {
+      id: randomUUID3(),
       roomId,
       participantId: identity.participantId,
       displayName: identity.displayName,
       name: normalizeFileName(part.name),
       mediaType: normalizeMediaType(part.mediaType),
       bytes: data.byteLength,
-      data: Buffer.from(data).toString("base64"),
       createdAt: Date.now()
     };
+    const blob = await this.requireArchive().putAttachment(base, data);
+    return { ...base, ...blob };
   }
   async resizeImage(data) {
     try {
@@ -3305,11 +4085,146 @@ var ChatroomRuntime = class {
     const state = this.requireState(roomId);
     const record = await this.requireRoomRecords().update(roomId, (current) => ({ ...current, updatedAt: Date.now() }));
     state.record = record;
+    this.archiveRoom(record);
     this.broadcast(state, { type: "room-updated", room: this.projectRoom(state), members: this.roomMembers(state) });
+  }
+  async syncArchive() {
+    for (const [, room] of this.requireRoomRecords().entries()) this.archiveRoom(room);
+    for (const [, member] of this.requireMembers().entries()) {
+      this.requireArchive().upsertMember(member.roomId, member.participantId, member.displayName, member.joinedAt);
+    }
+    for (const [, thread] of this.requireThreads().entries()) this.archiveThread(thread);
+    for (const [, message] of this.requireThreadMessages().entries()) {
+      const thread = this.requireThreads().get(message.threadId);
+      if (thread !== void 0) this.archiveThreadMessage(thread, message);
+    }
+    for (const [, conversation] of this.requireDirectConversations().entries()) this.archiveDirectConversation(conversation);
+    for (const [, message] of this.requireDirectMessages().entries()) this.archiveDirectMessage(message);
+    for (const [, recall] of this.requireRecalls().entries()) {
+      const threadMessage = this.requireThreadMessages().get(recall.messageId);
+      const conversationId = threadMessage?.threadId ?? recall.roomId;
+      const sessionId = threadMessage === void 0 ? this.requireRoomRecords().get(recall.roomId)?.sessionId : this.requireThreads().get(threadMessage.threadId)?.sessionId;
+      this.requireArchive().recallMessage(
+        conversationId,
+        recall.messageId,
+        recall.participantId,
+        recall.createdAt,
+        sessionId
+      );
+    }
+    for (const [key, record] of this.requireFiles().entries()) {
+      if (record.data === void 0 && record.storageKey !== void 0 && record.sha256 !== void 0) continue;
+      const data = decodeBase64(record.data ?? "", "\u6587\u4EF6");
+      const blob = await this.requireArchive().putAttachment(record, data);
+      const { data: _legacyData, ...metadata } = record;
+      await this.requireFiles().put(key, { ...metadata, ...blob });
+    }
+  }
+  archiveRoom(record) {
+    this.requireArchive().upsertConversation({
+      id: record.id,
+      kind: "room",
+      title: record.title,
+      sessionId: record.sessionId,
+      createdAt: record.createdAt,
+      updatedAt: roomUpdatedAt(record)
+    });
+  }
+  archiveThread(record) {
+    this.requireArchive().upsertConversation({
+      id: record.id,
+      kind: "thread",
+      title: `\u5206\u652F\uFF1A${record.root.text}`,
+      sessionId: record.sessionId,
+      parentId: record.roomId,
+      createdAt: record.createdAt,
+      updatedAt: record.createdAt
+    });
+  }
+  archiveDirectConversation(record) {
+    this.requireArchive().upsertConversation({
+      id: record.id,
+      kind: "direct",
+      title: record.participantIds.join(" \u2194 "),
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt
+    });
+    for (const participantId of record.participantIds) {
+      const peer = this.directoryPeer(participantId);
+      this.requireArchive().upsertMember(record.id, participantId, peer?.displayName ?? participantId, record.createdAt);
+    }
+  }
+  archiveDirectMessage(record) {
+    const sender = this.directoryPeer(record.senderId);
+    this.requireArchive().upsertMessage({
+      conversationId: record.conversationId,
+      id: record.id,
+      sequence: record.sequence,
+      role: "human",
+      senderId: record.senderId,
+      displayName: sender?.displayName ?? record.senderId,
+      text: record.text || "\u6587\u4EF6\u6D88\u606F",
+      createdAt: record.createdAt,
+      content: { text: record.text, files: record.files ?? [] }
+    });
+  }
+  archiveThreadMessage(thread, record) {
+    this.requireArchive().upsertMessage({
+      conversationId: thread.id,
+      id: record.id,
+      sequence: record.sequence,
+      role: record.role,
+      senderId: record.participantId,
+      displayName: record.displayName,
+      text: record.text,
+      createdAt: record.createdAt,
+      sessionId: thread.sessionId,
+      ...record.sessionSeq === void 0 ? {} : { sessionSeq: record.sessionSeq },
+      ...record.modelMessageId === void 0 ? {} : { modelMessageId: record.modelMessageId },
+      ...record.reply === void 0 ? {} : { replyTo: record.reply.messageId },
+      content: { text: record.text, files: record.files ?? [], hasImages: record.hasImages ?? false, reply: record.reply }
+    });
+  }
+  archiveRoomSession(state, session) {
+    for (const event of session.events) this.archiveSessionEvent(session, event);
+    for (const recall of this.recallsForRoom(state.record.id)) {
+      this.requireArchive().recallMessage(
+        state.record.id,
+        recall.messageId,
+        recall.participantId,
+        recall.createdAt,
+        state.record.sessionId
+      );
+    }
+  }
+  archiveSessionEvent(session, event) {
+    const room = [...this.states.values()].find((state) => state.record.sessionId === String(session.id));
+    if (room === void 0 || event.type !== "user/message" && event.type !== "assistant/message") return;
+    const role = event.type === "assistant/message" ? "ai" : "human";
+    const message = event.type === "assistant/message" ? event.data.message : event.data;
+    const firstText = message.content.find((block) => block.type === "text")?.text;
+    const marker = firstText === void 0 ? void 0 : participantMarker(firstText);
+    if (role === "human" && marker === void 0) return;
+    const projected = projectForwardContent(message.content, role);
+    this.requireArchive().upsertMessage({
+      conversationId: room.record.id,
+      id: role === "ai" ? String(message.id) : `user:${event.seq}`,
+      sequence: event.seq,
+      role,
+      ...role === "ai" ? { senderId: "ai" } : marker === void 0 ? {} : { senderId: marker.participantId },
+      displayName: role === "ai" ? room.record.aiDisplayName : projected.displayName ?? "\u6210\u5458",
+      text: projected.text,
+      createdAt: event.time,
+      sessionId: String(session.id),
+      sessionSeq: event.seq,
+      modelMessageId: String(message.id),
+      ...projected.reply === void 0 ? {} : { replyTo: projected.reply.messageId },
+      content: projected
+    });
   }
   appendThreadRoot(binding, root, content) {
     if (root.role === "human") {
-      binding.agent.session.append("user/message", createUserMessage2({ content, source: { kind: "user" } }), { surfaceOp: "append" });
+      binding.agent.session.append("user/message", createUserMessage3({ content, source: { kind: "user" } }), { surfaceOp: "append" });
       return;
     }
     const selection = binding.agent.options.provider !== void 0 && binding.agent.options.model !== void 0 ? { provider: binding.agent.options.provider, model: binding.agent.options.model } : this.ctx.agentDefaultModel.currentSelection();
@@ -3320,7 +4235,10 @@ var ChatroomRuntime = class {
   async shouldAutoTrigger(room, binding, content, thread) {
     if (room.record.autoTriggerEnabled !== true) return false;
     if (addressesAi(content, room.record.aiDisplayName)) return true;
-    const history = thread === void 0 ? recentRoomConversation(binding.agent.session.events) : recentThreadConversation(thread.record, this.messagesForThread(thread.record.id));
+    const history = thread === void 0 ? recentRoomConversation(binding.agent.session.events, this.recalledMessageIds(room.record.sessionId)) : recentThreadConversation(
+      thread.record,
+      this.messagesForThread(thread.record.id).filter((message) => !this.requireRecalls().get(recallKey(room.record.id, message.id)))
+    );
     const settings = this.resolvedAutomationSettings();
     const assembler = new BlockAssembler();
     try {
@@ -3331,7 +4249,7 @@ var ChatroomRuntime = class {
         model: settings.model,
         ...reasoningEffort === void 0 ? {} : { reasoningEffort },
         system: settings.controllerPrompt,
-        messages: [createUserMessage2({
+        messages: [createUserMessage3({
           source: { kind: "user" },
           content: [{ type: "text", text: JSON.stringify({ history, latest: promptPreview(content) }) }]
         })],
@@ -3344,6 +4262,27 @@ var ChatroomRuntime = class {
       this.log.warn("Automatic-response decision failed closed: %s", String(error));
       return false;
     }
+  }
+  scheduleAutomaticResponse(room, binding, content, thread) {
+    const owner = thread ?? room;
+    const task = owner.automation.then(async () => {
+      if (!await this.shouldAutoTrigger(room, binding, content, thread)) return;
+      binding.agent.followup(createUserMessage3({
+        content: [{
+          type: "text",
+          text: `The automatic-response controller selected this chatroom message for an AI response: ${JSON.stringify(promptPreview(content))}. Respond to that message now. Do not mention this controller notice.`
+        }],
+        source: {
+          kind: "plugin",
+          plugin: "deepseek-harness-chatroom",
+          form: "notice",
+          summary: "Automatic chatroom response"
+        }
+      }));
+    });
+    owner.automation = task.catch((error) => {
+      this.log.warn("Automatic-response wake failed: %s", String(error));
+    });
   }
   acceptSessionTitle(session, title) {
     const state = [...this.states.values()].find((candidate) => candidate.record.sessionId === String(session.id));
@@ -3393,6 +4332,10 @@ var ChatroomRuntime = class {
     if (this.automationSettings === void 0) throw new Error("chatroom automation settings are unavailable");
     return this.automationSettings;
   }
+  requireArchive() {
+    if (this.archive === void 0) throw new Error("chatroom archive is unavailable");
+    return this.archive;
+  }
   requireFiles() {
     if (this.files === void 0) throw new Error("chatroom file storage is unavailable");
     return this.files;
@@ -3424,6 +4367,11 @@ var ChatroomRuntime = class {
       if (thread?.roomId !== state.record.id || threadMessage.role !== "human" || threadMessage.participantId !== participantId) {
         throw new ChatroomInputError("\u53EA\u80FD\u64A4\u56DE\u81EA\u5DF1\u53D1\u9001\u7684\u6D88\u606F\u3002");
       }
+      return;
+    }
+    const archived = this.requireArchive().messageOwner(state.record.id, messageId, state.record.sessionId);
+    if (archived !== void 0) {
+      if (archived.senderId !== participantId) throw new ChatroomInputError("\u53EA\u80FD\u64A4\u56DE\u81EA\u5DF1\u53D1\u9001\u7684\u6D88\u606F\u3002");
       return;
     }
     const match = /^(?:user|steering):(\d+)$/u.exec(messageId);
@@ -3464,6 +4412,12 @@ var ChatroomRuntime = class {
       throw new ChatroomInputError("\u5F53\u524D\u8EAB\u4EFD\u4E0D\u662F\u7FA4\u6210\u5458\u3002");
     }
   }
+  isRoomMember(roomId, participantId) {
+    return this.requireMembers().get(`${roomId}:${participantId}`) !== void 0;
+  }
+  roomMemberCount(roomId) {
+    return [...this.requireMembers().entries()].filter(([, member]) => member.roomId === roomId).length;
+  }
 };
 function newRoomState(record) {
   return {
@@ -3471,7 +4425,9 @@ function newRoomState(record) {
     clients: /* @__PURE__ */ new Set(),
     binding: void 0,
     activation: void 0,
-    admission: Promise.resolve()
+    admission: Promise.resolve(),
+    automation: Promise.resolve(),
+    rotation: void 0
   };
 }
 function newThreadState(record) {
@@ -3479,7 +4435,8 @@ function newThreadState(record) {
     record,
     binding: void 0,
     activation: void 0,
-    admission: Promise.resolve()
+    admission: Promise.resolve(),
+    automation: Promise.resolve()
   };
 }
 function ownAgent(handle) {
@@ -3556,11 +4513,13 @@ function normalizeAgentToolText(value, label, maximumChars) {
 function assertNever(value) {
   throw new ChatroomInputError(`\u4E0D\u652F\u6301\u7684\u7FA4\u804A\u64CD\u4F5C\uFF1A${String(value)}`);
 }
-function recentRoomConversation(events) {
+function recentRoomConversation(events, recalledIds) {
   return events.flatMap((event) => {
     if (event.type !== "user/message" && event.type !== "assistant/message") return [];
+    const message = event.type === "assistant/message" ? event.data.message : event.data;
+    if (recalledIds.has(String(message.id))) return [];
     const role = event.type === "assistant/message" ? "AI" : "\u6210\u5458";
-    const content = event.type === "assistant/message" ? event.data.message.content : event.data.content;
+    const content = message.content;
     const text = assistantText(content).replace(/\u2063dsh-chatroom:[^\u2063]+\u2063/gu, "").trim();
     return text === "" ? [] : [`${role}\uFF1A${[...text].slice(0, 600).join("")}`];
   }).slice(-12);
@@ -3783,6 +4742,64 @@ function promptPreview(content) {
   if (content.some((part) => part.type === "file")) return "\u53D1\u9001\u4E86\u6587\u4EF6";
   return "\u53D1\u9001\u4E86\u56FE\u7247";
 }
+function formatWecomTime(value, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(value);
+  const field = (type) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${field("year")}-${field("month")}-${field("day")} ${field("hour")}:${field("minute")}:${field("second")}`;
+}
+function timezoneOffsetSeconds(value, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(value);
+  const numbers = Object.fromEntries(parts.flatMap((part) => part.type === "literal" ? [] : [[part.type, Number(part.value)]]));
+  return Math.round((Date.UTC(
+    numbers.year,
+    numbers.month - 1,
+    numbers.day,
+    numbers.hour,
+    numbers.minute,
+    numbers.second
+  ) - value.getTime()) / 1e3);
+}
+function findStringField(value, keys) {
+  const visit = (candidate, depth) => {
+    if (depth > 4 || candidate === null || typeof candidate !== "object") return void 0;
+    if (Array.isArray(candidate)) {
+      for (const item of candidate.slice(0, 10)) {
+        const found = visit(item, depth + 1);
+        if (found !== void 0) return found;
+      }
+      return void 0;
+    }
+    const record = candidate;
+    for (const key of keys) {
+      const field = record[key];
+      if (typeof field === "string" && field.trim() !== "") return field;
+    }
+    for (const nested of Object.values(record).slice(0, 30)) {
+      const found = visit(nested, depth + 1);
+      if (found !== void 0) return found;
+    }
+    return void 0;
+  };
+  return visit(value, 0);
+}
 function assistantText(content) {
   return content.filter((block) => block.type === "text").map((block) => block.text.trim()).filter(Boolean).join("\n").trim();
 }
@@ -3806,7 +4823,7 @@ function formatMegabytes(bytes) {
   return `${Math.ceil(bytes / 1024 / 1024)} MB`;
 }
 function tokenHash(token) {
-  return createHash2("sha256").update(token).digest("hex");
+  return createHash3("sha256").update(token).digest("hex");
 }
 function onlineCount(state) {
   return new Set([...state.clients].map((client) => client.participantId)).size;
@@ -3912,6 +4929,14 @@ var ChatroomHttpController = class {
       }
       if (route.endpoint === "/rooms/manage") {
         await this.handleRoomManagement(request, response);
+        return;
+      }
+      if (route.endpoint === "/rooms/session") {
+        await this.handleRoomSession(request, response);
+        return;
+      }
+      if (route.endpoint === "/wecom/quick-meeting") {
+        await this.handleQuickMeeting(request, response);
         return;
       }
       if (route.endpoint === "/automation") {
@@ -4406,7 +5431,7 @@ var ChatroomHttpController = class {
     if (action === "add-members") {
       const members = await this.runtime.addRoomMembers(
         roomId,
-        stringArray(body, "participantIds"),
+        stringArray2(body, "participantIds"),
         identity
       );
       json(response, 200, {
@@ -4417,6 +5442,33 @@ var ChatroomHttpController = class {
       return;
     }
     throw new ChatroomInputError("\u7FA4\u7BA1\u7406\u64CD\u4F5C\u65E0\u6548\u3002");
+  }
+  async handleRoomSession(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = await this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const body = await readJson(request, smallRequestLimit(this.config));
+    const roomId = fieldString(body, "roomId");
+    const action = fieldString(body, "action");
+    const room = action === "stop" ? await this.runtime.stopRoomSession(roomId, identity) : action === "new" ? await this.runtime.renewRoomSession(roomId, identity) : void 0;
+    if (room === void 0) throw new ChatroomInputError("\u4F1A\u8BDD\u63A7\u5236\u64CD\u4F5C\u65E0\u6548\u3002");
+    json(response, 200, { room, members: this.runtime.membersForRoom(roomId) });
+  }
+  async handleQuickMeeting(request, response) {
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = await this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const body = await readJson(request, smallRequestLimit(this.config));
+    const card = await this.runtime.createQuickMeeting(fieldString(body, "roomId"), identity);
+    json(response, 201, { accepted: true, card });
   }
   async handleAutomation(request, response) {
     const identity = await this.requireIdentity(request, response);
@@ -4839,7 +5891,7 @@ function fieldString(body, field) {
   if (typeof value !== "string") throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
   return value;
 }
-function stringArray(body, field) {
+function stringArray2(body, field) {
   const value = body[field];
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
     throw new ChatroomInputError(`\u5B57\u6BB5 ${field} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u6570\u7EC4\u3002`);
@@ -5050,15 +6102,66 @@ function textCompatibleMessages(messages) {
 function messagesContainImages(messages) {
   return messages.some((message) => contentContainsImages(message.content));
 }
-function textCompatibleStream(options, next, ownsSession, resolveModelInfo, stream) {
-  if (options.sessionId === void 0 || !ownsSession(String(options.sessionId)) || !messagesContainImages(options.messages)) return next();
+function visibleMessages(messages, recalledIds) {
+  if (recalledIds.size === 0) return [...messages];
+  return messages.filter((message) => !recalledIds.has(String(message.id)));
+}
+function protocolCompatibleMessages(messages) {
+  const compatible = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    const calls = message.content.filter((block) => block.type === "tool-call");
+    if (message.role !== "assistant" || calls.length === 0) {
+      compatible.push(message);
+      continue;
+    }
+    const pending = new Set(calls.map((call) => String(call.id)));
+    const results = [];
+    const deferred = [];
+    let cursor = index + 1;
+    while (cursor < messages.length && pending.size > 0) {
+      const candidate = messages[cursor];
+      const resultIds = candidate.content.flatMap((block) => block.type === "tool-result" ? [String(block.toolCallId)] : []);
+      if (resultIds.some((id) => pending.has(id))) {
+        results.push(candidate);
+        for (const id of resultIds) pending.delete(id);
+        cursor += 1;
+        continue;
+      }
+      if (startsNewProviderExchange(candidate)) break;
+      deferred.push(candidate);
+      cursor += 1;
+    }
+    const content = message.content.filter((block) => block.type !== "tool-call" || !pending.has(String(block.id)));
+    if (content.length > 0) {
+      compatible.push(content.length === message.content.length ? message : freezeMessage({ ...message, content }));
+    }
+    compatible.push(...results, ...deferred);
+    index = cursor - 1;
+  }
+  return compatible;
+}
+function textCompatibleStream(options, next, ownsSession, recalledMessageIds, resolveModelInfo, stream) {
+  if (options.sessionId === void 0 || !ownsSession(String(options.sessionId))) return next();
+  const messages = protocolCompatibleMessages(
+    visibleMessages(options.messages, recalledMessageIds(String(options.sessionId)))
+  );
+  const messagesChanged = messages.length !== options.messages.length || messages.some((message, index) => message !== options.messages[index]);
+  const requestMessages = messagesChanged ? messages : options.messages;
+  const hasImages = messagesContainImages(requestMessages);
+  if (!messagesChanged && !hasImages) return next();
   return (async function* () {
-    const model = await resolveModelInfo(options.provider, options.model, options.signal);
-    if (model.inputModalities === void 0 || model.inputModalities.includes("image")) {
-      yield* next();
+    if (!hasImages) {
+      yield* stream({ ...options, messages: requestMessages });
       return;
     }
-    yield* stream({ ...options, messages: textCompatibleMessages(options.messages) });
+    const model = await resolveModelInfo(options.provider, options.model, options.signal);
+    if (model.inputModalities === void 0 || model.inputModalities.includes("image")) {
+      if (!messagesChanged) yield* next();
+      else yield* stream({ ...options, messages: requestMessages });
+      return;
+    }
+    yield* stream({ ...options, messages: textCompatibleMessages(requestMessages) });
   })();
 }
 function textCompatibleContent(content) {
@@ -5078,6 +6181,10 @@ function textCompatibleContent(content) {
 }
 function contentContainsImages(content) {
   return content.some((block) => block.type === "image" || block.type === "tool-result" && contentContainsImages(block.content));
+}
+function startsNewProviderExchange(message) {
+  if (message.role === "assistant") return message.content.some((block) => block.type === "tool-call");
+  return message.source.kind === "user";
 }
 
 // src/index.ts
@@ -5127,6 +6234,7 @@ function apply(ctx, config) {
     options,
     next,
     (sessionId) => runtime.ownsSession(sessionId),
+    (sessionId) => runtime.recalledMessageIds(sessionId),
     (provider, model, signal) => ctx.llm.resolveModelInfo(provider, model, signal),
     (request) => ctx.llm.stream(request)
   )), "deepseek-harness-chatroom.model-history");

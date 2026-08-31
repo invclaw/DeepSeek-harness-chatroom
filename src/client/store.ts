@@ -20,6 +20,7 @@ import type {
   ChatroomPromptContentPart,
   ChatroomPromptRequest,
   ChatroomPromptResponse,
+  ChatroomQuickMeetingResponse,
   ChatroomReaction,
   ChatroomRecall,
   ChatroomReplyReference,
@@ -110,6 +111,10 @@ export interface ChatroomView {
   readonly reply: ChatroomReplyReference | undefined
   readonly composerBusy: boolean
   readonly composerError: string | undefined
+  readonly sessionControlBusy: boolean
+  readonly sessionControlError: string | undefined
+  readonly wecomBusy: boolean
+  readonly wecomError: string | undefined
   readonly thread: ChatroomThread | undefined
   readonly threadMessages: readonly ChatroomThreadMessage[]
   readonly threadReply: ChatroomReplyReference | undefined
@@ -176,6 +181,10 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     reply: undefined,
     composerBusy: false,
     composerError: undefined,
+    sessionControlBusy: false,
+    sessionControlError: undefined,
+    wecomBusy: false,
+    wecomError: undefined,
     thread: undefined,
     threadMessages: [],
     threadReply: undefined,
@@ -1098,6 +1107,63 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       this.selectAndOpen(response.room)
     } catch (error) {
       this.set({ phase: 'ready', error: errorMessage(error) })
+    }
+  }
+
+  /** Stop the active Agent turn for one shared room. */
+  stopRoomSession = async (roomId: string): Promise<boolean> => {
+    if (this.snapshot.sessionControlBusy) return false
+    this.set({ sessionControlBusy: true, sessionControlError: undefined })
+    try {
+      const result = await requestJson<ChatroomRoomManageResponse>(`${CHATROOM_API_PREFIX}/rooms/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, action: 'stop' }),
+      })
+      this.applyRoomManagement(result)
+      this.set({ sessionControlBusy: false })
+      return true
+    } catch (error) {
+      this.set({ sessionControlBusy: false, sessionControlError: errorMessage(error) })
+      return false
+    }
+  }
+
+  /** Start a clean native Harness Session behind an existing room. */
+  newRoomSession = async (roomId: string): Promise<boolean> => {
+    if (this.snapshot.sessionControlBusy) return false
+    this.set({ sessionControlBusy: true, sessionControlError: undefined })
+    try {
+      const result = await requestJson<ChatroomRoomManageResponse>(`${CHATROOM_API_PREFIX}/rooms/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, action: 'new' }),
+      })
+      this.applyRoomManagement(result)
+      this.set({ sessionControlBusy: false })
+      this.selectAndOpen(result.room)
+      return true
+    } catch (error) {
+      this.set({ sessionControlBusy: false, sessionControlError: errorMessage(error) })
+      return false
+    }
+  }
+
+  /** Create a default Enterprise WeChat meeting and publish its card to the room. */
+  quickMeeting = async (roomId: string): Promise<boolean> => {
+    if (this.snapshot.wecomBusy) return false
+    this.set({ wecomBusy: true, wecomError: undefined })
+    try {
+      await requestJson<ChatroomQuickMeetingResponse>(`${CHATROOM_API_PREFIX}/wecom/quick-meeting`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId }),
+      })
+      this.set({ wecomBusy: false })
+      return true
+    } catch (error) {
+      this.set({ wecomBusy: false, wecomError: errorMessage(error) })
+      return false
     }
   }
 

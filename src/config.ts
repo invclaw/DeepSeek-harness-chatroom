@@ -3,6 +3,7 @@ import z from '@deepseek-ai/schemastery'
 
 /** Deployment configuration for shared AI rooms. */
 export interface Config {
+  dataDirectory?: string
   roomId: string
   roomTitle: string
   aiDisplayName: string
@@ -37,9 +38,17 @@ export interface Config {
   authDshAuthAvatarUrlTemplate?: string
   authDshAuthAvatarAllowedOrigins?: string[]
   authDshAuthRevalidateSeconds?: number
+  wecomEnabled: boolean
+  wecomCliPath: string
+  wecomCliConfigDirectory: string
+  wecomCliTimeoutMs: number
+  wecomQuickMeetingDurationMinutes: number
+  wecomQuickMeetingSubject: string
+  wecomTimeZone: string
 }
 
 export const Config: z<Config> = z.object({
+  dataDirectory: z.string().default(''),
   roomId: z.string().min(1).max(64).pattern(/^[a-z0-9][a-z0-9_-]*$/u).default('lobby'),
   roomTitle: z.string().min(1).max(80).default('AI 聊天室'),
   aiDisplayName: z.string().min(1).max(40).default('DeepSeek'),
@@ -73,12 +82,29 @@ export const Config: z<Config> = z.object({
   authDshAuthAvatarUrlTemplate: z.string().default(''),
   authDshAuthAvatarAllowedOrigins: z.array(z.string().min(1)).default([]),
   authDshAuthRevalidateSeconds: z.number().step(1).min(5).max(3_600).default(60),
+  wecomEnabled: z.boolean().default(true),
+  wecomCliPath: z.string().default(''),
+  wecomCliConfigDirectory: z.string().default(''),
+  wecomCliTimeoutMs: z.number().step(1).min(1_000).max(120_000).default(30_000),
+  wecomQuickMeetingDurationMinutes: z.number().step(1).min(15).max(240).default(60),
+  wecomQuickMeetingSubject: z.string().min(1).max(100).default('快速会议'),
+  wecomTimeZone: z.string().min(1).max(80).default('Asia/Shanghai'),
 }) as unknown as z<Config>
 
 /** Validate relationships Schemastery cannot express by individual fields. */
 export function validateConfig(config: Config): void {
+  if (config.dataDirectory !== undefined && config.dataDirectory !== ''
+    && config.dataDirectory !== ':memory:' && !isAbsolute(config.dataDirectory)) {
+    throw new Error(`chatroom: dataDirectory must be absolute or :memory:, got ${JSON.stringify(config.dataDirectory)}`)
+  }
   if (!isAbsolute(config.cwd)) {
     throw new Error(`chatroom: cwd must be absolute, got ${JSON.stringify(config.cwd)}`)
+  }
+  if (config.wecomCliPath !== '' && !isAbsolute(config.wecomCliPath)) {
+    throw new Error('chatroom: wecomCliPath must be absolute when configured')
+  }
+  if (config.wecomCliConfigDirectory !== '' && !isAbsolute(config.wecomCliConfigDirectory)) {
+    throw new Error('chatroom: wecomCliConfigDirectory must be absolute when configured')
   }
   if (config.maxMessageFileBytes < config.maxFileBytes) {
     throw new Error('chatroom: maxMessageFileBytes must be greater than or equal to maxFileBytes')

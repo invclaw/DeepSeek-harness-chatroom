@@ -197,6 +197,42 @@ export interface ChatroomRoomManageResponse {
     readonly room: ChatroomInfo;
     readonly members: readonly ChatroomMember[];
 }
+/** Control one room's native Harness Agent without changing room membership. */
+export interface ChatroomRoomSessionRequest {
+    readonly roomId: string;
+    readonly action: 'stop' | 'new';
+}
+/** Rich Enterprise WeChat object embedded in a room transcript. */
+export type ChatroomExternalCard = ChatroomMeetingCard | ChatroomDocumentCard;
+/** Scheduled Enterprise WeChat meeting rendered as a native room card. */
+export interface ChatroomMeetingCard {
+    readonly kind: 'meeting';
+    readonly title: string;
+    readonly beginTime?: string;
+    readonly endTime?: string;
+    readonly url?: string;
+    readonly location?: string;
+    readonly status?: string;
+    readonly attendees?: readonly string[];
+}
+/** Enterprise WeChat document rendered as a native room card. */
+export interface ChatroomDocumentCard {
+    readonly kind: 'document';
+    readonly title: string;
+    readonly documentType?: string;
+    readonly url?: string;
+    readonly modifiedAt?: string;
+    readonly owner?: string;
+}
+/** Explicit request for a default Enterprise WeChat online meeting. */
+export interface ChatroomQuickMeetingRequest {
+    readonly roomId: string;
+}
+/** Result of creating and posting a quick Enterprise WeChat meeting. */
+export interface ChatroomQuickMeetingResponse {
+    readonly accepted: true;
+    readonly card: ChatroomMeetingCard;
+}
 /** Manager-only room roster plus active platform accounts that are not members yet. */
 export interface ChatroomRoomManagementResponse extends ChatroomRoomManageResponse {
     readonly candidates: readonly ChatroomRoomInviteCandidate[];

@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.2.0" src="https://img.shields.io/badge/version-1.2.0-4f6bff">
+    <img alt="Version 1.3.0" src="https://img.shields.io/badge/version-1.3.0-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -67,6 +67,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 ### Complete native Agent runtime
 
 - The native sidebar, Conversation/Trajectory tabs, composer, model and permission selectors, reasoning/tool flow, Session log, approvals, questions, slash commands, stop/queue/steer, failures, and retries remain intact.
+- The room composer adds **Stop** and **New session**. Stop cancels the active Agent turn while retaining queued input; New session rotates only the backing Harness Session and preserves room identity, membership, chat archive, and files. Concurrent requests coalesce into one rotation.
 - While an Agent is running, Think and tool rows stay visible. Once the final answer arrives, the preceding process rows collapse into one expandable summary.
 - Persistent branches open in a right-side panel and own independent Harness Sessions. Branches support Markdown, `@` candidates, images/files, quotes, reactions, forwarding, selection, and the full Agent runtime without nested chatroom branches. Gateways that reject embedded documents switch immediately to an inline compatibility view instead of waiting for a timeout, with the complete Agent available in a new tab.
 - Historical images remain durable. For text-only models, only the model request receives deterministic text markers in place of image input; the UI keeps the original media.
@@ -80,6 +81,12 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 - Merged forwarding is rebuilt from authoritative Session events and retains text/Markdown, media, quotes, nested forwards, and reaction counts.
 - The Agent receives room-scoped tools for capability discovery, proactive messages, file delivery, replies, reactions, branch creation, member invitation, and recalling its own messages. Tool actions use the same durable room records and live events as human operations.
 
+### Enterprise WeChat collaboration
+
+- The official [`@wecom/cli`](https://github.com/WecomTeam/wecom-cli) supplies calendar CRUD, attendees/free-busy/rooms, meeting lifecycle/minutes/transcripts, document search and permissions, online sheets, smart sheets, and smart documents.
+- Agents read each live operation definition with `wecom_schema` and execute it with `wecom_action`. People are resolved through contacts instead of guessed or exposed internal IDs. Missing authorization or an individual CLI failure remains isolated from plugin and Harness startup.
+- **Quick meeting** in the composer creates a default 60-minute online meeting for the current enterprise identity and posts it immediately. Meeting and document results render as native cards with titles, times, attendees, owners, and links instead of plain text.
+
 ### Accounts, SSO, and private chat
 
 - Optional local password registration, super-administrator account provisioning, roles/status, password rotation, disabled-account revocation, and one identity reused across rooms.
@@ -87,9 +94,20 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 - The chosen external provider can automatically receive unauthenticated users; `local=1` keeps a local recovery entry.
 - Durable private conversations are visible only to their two participants, support Enter-to-send, Shift+Enter newlines, emoji, images, and files, and reuse the same unread/toast/browser-notification channel. The Direct folder is also the account directory: clicking any profile starts the conversation in the main Harness conversation area.
 
+### Storage and backup
+
+- The plugin owns a SQLite chat archive at `$DSH_HOME/chatroom/chatroom.sqlite` (or `~/.dsh/chatroom/chatroom.sqlite`). It projects rooms, branches, private conversations, membership, messages, attachment metadata, and recall tombstones into queryable tables. Harness Session logs remain the authoritative Agent execution and audit history; they are not used as the only chat database.
+- File bytes are stored outside SQLite in a SHA-256 content-addressed Blob tree under `blobs/v1/objects/`. Duplicate bytes share one object, while attachment rows retain the original name, media type, sender, room, and creation time. Legacy inline Base64 records migrate on startup without changing message references.
+- Recall is non-destructive: the archive retains the original row and records who recalled it and when. Every client receives the tombstone, and the recalled model message ID is removed from future main-room or branch model requests.
+- Back up or move the complete chat archive by stopping the plugin and copying the configured data directory. Set `dataDirectory` or `DSH_CHATROOM_DATA_DIR` to place SQLite and Blobs on a dedicated volume.
+
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.3.0** — add room Stop/New-session controls, official schema-driven wecom-cli Agent tools, Quick meeting, and native meeting/document cards while keeping Enterprise WeChat authorization failures isolated from Harness startup.
+- **1.2.5** — append ordinary room and branch messages before the optional automatic-response model runs, and repair historical tool-call/result ordering from older chatroom builds before requests reach the model provider.
+- **1.2.4** — add the plugin-owned SQLite chat archive and content-addressed local Blob store, migrate legacy inline attachments, enforce membership visibility in authenticated deployments, and make recall remove the original model message from future Agent context.
+- **1.2.3** — attach the room capability and action tools when a shared Session is already running before the chatroom adopts it, so native Harness-restored Agents receive the same collaboration tools as plugin-created Agents.
 - **1.2.0** — serialize auto-reply settings with message admission, wake the Agent deterministically for direct AI addressing, add durable sender-only recall, remove the redundant private-chat Settings entry, and expose the complete room action set as model-callable Agent tools.
 - **1.1.17** — keep compact reply quotes inside the native composer card and show verified IOA/OIDC profile images in native member mention candidates, with cartoon fallbacks.
 - **1.1.16** — target DeepSeek Harness 0.1.1-rc.2, add Group/Solo/Direct navigation, native private messaging with files and emoji, streamlined new-Session mode selection, room pinning, automatic AI wake-up controls, and distinct AI/member mention groups while retaining the 1.1.15 IOA profile and native Session fixes.
@@ -149,6 +167,7 @@ Installation adds this row to the Web profile:
 - id: chatroom
   name: deepseek-harness-chatroom
   config:
+    dataDirectory: !!js process.env.DSH_CHATROOM_DATA_DIR ?? ''
     roomId: lobby
     roomTitle: AI Chatroom
     aiDisplayName: DeepSeek
@@ -167,6 +186,13 @@ Installation adds this row to the Web profile:
     authMode: !!js process.env.DSH_CHATROOM_AUTH_MODE ?? 'local'
     authDshAuthSuperAdminSubjects: !!js (process.env.DSH_CHATROOM_DSH_AUTH_SUPER_ADMINS ?? '').split(',').map(value => value.trim()).filter(Boolean)
     authDshAuthAvatarUrlTemplate: !!js process.env.DSH_CHATROOM_DSH_AUTH_AVATAR_TEMPLATE ?? ''
+    wecomEnabled: !!js process.env.DSH_CHATROOM_WECOM !== 'disabled'
+    wecomCliPath: !!js process.env.DSH_CHATROOM_WECOM_CLI_PATH ?? ''
+    wecomCliConfigDirectory: !!js process.env.WECOM_CLI_CONFIG_DIR ?? ''
+    wecomCliTimeoutMs: !!js Number(process.env.DSH_CHATROOM_WECOM_TIMEOUT_MS ?? 30000)
+    wecomQuickMeetingDurationMinutes: !!js Number(process.env.DSH_CHATROOM_WECOM_QUICK_MEETING_MINUTES ?? 60)
+    wecomQuickMeetingSubject: !!js process.env.DSH_CHATROOM_WECOM_QUICK_MEETING_SUBJECT ?? 'Quick meeting'
+    wecomTimeZone: !!js process.env.DSH_CHATROOM_WECOM_TIMEZONE ?? 'Asia/Shanghai'
     authDshAuthAvatarAllowedOrigins: !!js (process.env.DSH_CHATROOM_DSH_AUTH_AVATAR_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean)
     authDshAuthRevalidateSeconds: !!js Number(process.env.DSH_CHATROOM_DSH_AUTH_REVALIDATE_SECONDS ?? 60)
 ```
@@ -211,7 +237,18 @@ Override it in the Web profile's `cordis.patch.yml` when needed:
     authDshAuthAvatarUrlTemplate: ''
     authDshAuthAvatarAllowedOrigins: []
     authDshAuthRevalidateSeconds: 60
+    wecomEnabled: true
+    wecomCliPath: ''
+    wecomCliConfigDirectory: /persistent/wecom-cli/config
+    wecomCliTimeoutMs: 30000
+    wecomQuickMeetingDurationMinutes: 60
+    wecomQuickMeetingSubject: Quick meeting
+    wecomTimeZone: Asia/Shanghai
 ```
+
+### Enterprise WeChat authorization
+
+The dependency is installed with the plugin, so no global CLI install is required. Before first use, run `pnpm exec wecom-cli auth init` as the same operating-system user and with the same configuration directory as Harness, then scan the QR code. Container deployments should point `WECOM_CLI_CONFIG_DIR` at persistent storage. Check the state with `pnpm exec wecom-cli auth show --status`. Without authorization, only Quick meeting and Agent Enterprise WeChat operations fail; ordinary rooms and Agents continue to run.
 
 `authSecret` encrypts OIDC client secrets and hashes no passwords directly; keep it stable and outside Git. Local passwords use salted scrypt. The first password registration must present `authBootstrapToken` and becomes the initial super administrator. Later registrations follow the mutable policy in **System administration**. Login attempts are bounded in memory, disabling an account revokes all its sessions, and changing a password rotates the current session and revokes older ones. The authentication cookie is random, stored only by SHA-256 digest, `HttpOnly`, `SameSite=Strict`, root-scoped, and `Secure` whenever `authPublicOrigin` uses HTTPS.
 

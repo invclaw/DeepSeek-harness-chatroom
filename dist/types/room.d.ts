@@ -5,7 +5,7 @@ import { ChatroomAuth } from './auth.js';
 import { type ChatroomAgentAction, type ChatroomAgentActionInput } from './agent-tools.js';
 import type { Config } from './config.js';
 import { type ChatroomReactionEmoji } from './reactions.js';
-import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
+import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMeetingCard, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
 /** Runtime validation failure safe to return to a browser. */
 export declare class ChatroomInputError extends Error {
 }
@@ -15,6 +15,7 @@ export declare class ChatroomRuntime {
     readonly config: Config;
     private readonly log;
     private domain;
+    private archive;
     private identities;
     private roomRecords;
     private roomPreferences;
@@ -34,6 +35,8 @@ export declare class ChatroomRuntime {
     private readonly threadStates;
     private readonly notificationClients;
     private readonly ignoredAssistantMessageIds;
+    private readonly chatroomAgentContexts;
+    private readonly wecom;
     private ready;
     private stopping;
     constructor(ctx: Context, config: Config);
@@ -59,6 +62,8 @@ export declare class ChatroomRuntime {
     get auth(): ChatroomAuth;
     /** Whether one model request belongs to a room or branch Session owned by this runtime. */
     ownsSession(sessionId: string): boolean;
+    /** Stable model message ids omitted from future requests after a chat recall. */
+    recalledMessageIds(sessionId: string): ReadonlySet<string>;
     /** Describe the collaboration operations available to one room-scoped Agent. */
     agentCapabilities(sessionId: string): Promise<{
         readonly room: string;
@@ -101,13 +106,19 @@ export declare class ChatroomRuntime {
     private createSessionRoom;
     /** Activate an existing room and return its public metadata. */
     selectRoom(roomId: string, identity?: ChatroomIdentity): Promise<ChatroomInfo>;
+    /** Stop the active Agent turn while retaining the room and queued user intake. */
+    stopRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
+    /** Replace one room's Harness Session while retaining the room identity and roster. */
+    renewRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
+    /** Create an Enterprise WeChat online meeting and post it to the room as a durable card. */
+    createQuickMeeting(roomId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard>;
     /** Rename one room as its owner or an administrator. */
     renameRoom(roomId: string, title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Promote or demote one room member; only the owner controls administrators. */
     setMemberRole(roomId: string, participantId: string, role: 'admin' | 'member', identity: ChatroomIdentity): Promise<readonly ChatroomMember[]>;
     /** Add active platform accounts to a room as ordinary members. */
     addRoomMembers(roomId: string, participantIds: readonly string[], identity: ChatroomIdentity): Promise<readonly ChatroomMember[]>;
-    /** Append human chat and wake the Agent for an explicit mention or an enabled model decision. */
+    /** Append human chat immediately and evaluate optional automatic responses in a separate queue. */
     submit(roomId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
     /** Persist one participant's personal sidebar pin for a room. */
     setRoomPinned(roomId: string, pinned: boolean, identity: ChatroomIdentity): Promise<ChatroomInfo>;
@@ -146,7 +157,7 @@ export declare class ChatroomRuntime {
     }>;
     /** Create or reopen a branch rooted at one native room message. */
     openThread(roomId: string, identity: ChatroomIdentity, root: ChatroomThreadRoot): Promise<ChatroomThreadResponse>;
-    /** Append one branch message and apply the parent room's AI wake policy. */
+    /** Append one branch message immediately and evaluate optional automatic responses separately. */
     submitThread(threadId: string, identity: ChatroomIdentity, text: string, reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
     submitThread(threadId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
     /** Project committed AI output into its parent room or branch stream. */
@@ -185,6 +196,8 @@ export declare class ChatroomRuntime {
     private ensureRoomTitle;
     private acquireAgent;
     private setupAgentContext;
+    private augmentChatroomAgentContext;
+    private appendRoomCard;
     /** Ensure one shared Session uses native Workspace navigation. */
     private attachWorkspace;
     private durableContent;
@@ -200,14 +213,24 @@ export declare class ChatroomRuntime {
     private defaultAutomationSettings;
     private resolvedAutomationSettings;
     private touchRoom;
+    private syncArchive;
+    private archiveRoom;
+    private archiveThread;
+    private archiveDirectConversation;
+    private archiveDirectMessage;
+    private archiveThreadMessage;
+    private archiveRoomSession;
+    private archiveSessionEvent;
     private appendThreadRoot;
     private shouldAutoTrigger;
+    private scheduleAutomaticResponse;
     private acceptSessionTitle;
     private requireState;
     private requireIdentities;
     private requireRoomRecords;
     private requireRoomPreferences;
     private requireAutomationSettings;
+    private requireArchive;
     private requireFiles;
     private requireMembers;
     private requireThreads;
@@ -222,5 +245,7 @@ export declare class ChatroomRuntime {
     private assertRoomManager;
     private assertRoomInviter;
     private assertRoomMember;
+    private isRoomMember;
+    private roomMemberCount;
 }
 //# sourceMappingURL=room.d.ts.map

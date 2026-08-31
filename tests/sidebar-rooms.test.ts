@@ -309,6 +309,12 @@ describe('native sidebar room rows', () => {
     expect(rows[0]!.dataset.dshChatroomBranchCount).toBe('1')
     expect(rows[0]!.querySelector('[data-dsh-chatroom-branch-count]')?.textContent).toBe('分支 1')
     expect(branchRow.querySelector('[data-dsh-chatroom-native-branch-title]')).toBeTruthy()
+
+    const observer = new MutationObserver(() => undefined)
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    reconcileSidebarRoomRows(document, snapshot, branch as never, undefined, undefined, undefined, sessionList)
+    expect(observer.takeRecords().filter(record => record.type === 'childList')).toHaveLength(0)
+    observer.disconnect()
   })
 
   it('does not bind a selected branch row to the active parent room', () => {
@@ -470,6 +476,10 @@ describe('native sidebar room rows', () => {
     const workspace = document.querySelector<HTMLElement>('[data-workspace] [role="treeitem"]')!
     const expand = vi.fn()
     workspace.addEventListener('click', expand)
+
+    reconcileSidebarRoomRows(document, {
+      rooms: [], members: [], directPeers: [], directConversations: [],
+    } as unknown as ChatroomView)
 
     reconcileSidebarRoomRows(document, {
       rooms: [], members: [], directPeers: [], directConversations: [],

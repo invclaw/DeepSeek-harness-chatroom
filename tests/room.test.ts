@@ -36,11 +36,62 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
+  it('stops the current turn and coalesces concurrent Session rotations', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', identity)
+
+    await runtime.stopRoomSession('lobby', identity)
+    expect(harness.agents[0]?.cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: true })
+    expect(harness.agents[0]?.whenIdle).toHaveBeenCalledOnce()
+
+    const [first, second] = await Promise.all([
+      runtime.renewRoomSession('lobby', identity),
+      runtime.renewRoomSession('lobby', identity),
+    ])
+    expect(first.sessionId).toBe(second.sessionId)
+    expect(first.sessionId).not.toBe('chatroom-v1-lobby')
+    expect(harness.agents).toHaveLength(2)
+    expect(harness.agents[0]?.cancel).toHaveBeenLastCalledWith({ kind: 'user' })
+    await runtime.stop()
+  })
+
+  it('creates a quick Enterprise WeChat meeting and appends its durable card', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', identity)
+    const wecom = (runtime as unknown as {
+      wecom: { invoke: ReturnType<typeof vi.fn> }
+    }).wecom
+    wecom.invoke = vi.fn()
+      .mockResolvedValueOnce({ userid: 'alice-wecom' })
+      .mockResolvedValueOnce({
+        subject: '快速会议', begin_time: '2026-09-01 10:00:00', end_time: '2026-09-01 11:00:00',
+        meeting_url: 'https://meeting.example.com/join',
+      })
+
+    await expect(runtime.createQuickMeeting('lobby', identity)).resolves.toMatchObject({
+      kind: 'meeting', title: '快速会议', url: 'https://meeting.example.com/join',
+    })
+    expect(wecom.invoke).toHaveBeenNthCalledWith(1, 'identity', [], 'whoami', {})
+    expect(wecom.invoke).toHaveBeenNthCalledWith(2, 'meeting', [], 'create', expect.objectContaining({
+      subject: '快速会议', attendees: [{ userid: 'alice-wecom' }],
+    }))
+    const message = harness.agents[0]?.session.append.mock.calls.at(-1)?.[1]
+    expect(JSON.stringify(message)).toContain('dsh-chatroom-card:')
+    expect(harness.agents[0]?.followup).not.toHaveBeenCalled()
+    await runtime.stop()
+  })
+
   it('uses the configured controller model only when automatic responses are enabled', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
     await runtime.start()
-    expect(harness.promptSections).toHaveLength(2)
+    expect(harness.promptSections).toHaveLength(3)
     expect(promptSectionText(harness.promptSections[0]!)).toContain('多人群聊')
     await runtime.updateAutomationSettings('deepseek', 'chat', '主 Agent 自定义提示词', '判断 Agent 自定义提示词')
     expect(promptSectionText(harness.promptSections[0]!)).toBe('主 Agent 自定义提示词')
@@ -54,6 +105,7 @@ describe('ChatroomRuntime', () => {
     })
 
     await runtime.submit('lobby', identity, [{ type: 'text', text: '请总结刚才的结论' }], 'queue')
+    await vi.waitFor(() => expect(harness.agents[0]?.followup).toHaveBeenCalledOnce())
 
     expect(harness.llmStream).toHaveBeenCalledOnce()
     expect(harness.llmStream.mock.calls[0]?.[0]).toMatchObject({
@@ -67,9 +119,35 @@ describe('ChatroomRuntime', () => {
     })
 
     await runtime.submit('lobby', identity, [{ type: 'text', text: '大家下午好' }], 'queue')
+    await vi.waitFor(() => expect(harness.llmStream).toHaveBeenCalledTimes(2))
 
     expect(harness.agents[0]?.followup).toHaveBeenCalledOnce()
+    expect(harness.agents[0]?.session.append).toHaveBeenCalledTimes(2)
+    await runtime.stop()
+  })
+
+  it('accepts and appends ordinary chat before the automatic-response controller finishes', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', identity)
+    await runtime.setRoomAutoTrigger('lobby', true, identity)
+    let releaseController!: () => void
+    const controller = new Promise<void>((resolve) => { releaseController = resolve })
+    harness.llmStream.mockImplementationOnce(async function* () {
+      await controller
+      yield { type: 'text-delta', index: 0, text: '{"wake":false}' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+
+    await expect(runtime.submit(
+      'lobby', identity, [{ type: 'text', text: '这条消息必须立即显示' }], 'queue',
+    )).resolves.toEqual({ accepted: true, aiTriggered: false })
     expect(harness.agents[0]?.session.append).toHaveBeenCalledOnce()
+    expect(harness.agents[0]?.followup).not.toHaveBeenCalled()
+
+    releaseController()
     await runtime.stop()
   })
 
@@ -137,6 +215,7 @@ describe('ChatroomRuntime', () => {
       id: 'native-session-1',
       options: { provider: 'deepseek', model: 'chat' },
       session: { events: [], append: vi.fn() },
+      ctx: harness.makeAgentContext(),
       followup: vi.fn(),
       steer: vi.fn(),
     } as never)
@@ -171,6 +250,39 @@ describe('ChatroomRuntime', () => {
     )
     expect(harness.agents).toHaveLength(2)
     expect(harness.agents[1]?.session.append).not.toHaveBeenCalled()
+    await runtime.stop()
+  })
+
+  it('adds chatroom tools to a live Agent restored by Harness before room adoption', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    harness.registeredTools.length = 0
+    harness.promptSections.length = 0
+    const presetMounts = vi.mocked(harness.ctx.agentPresets.mount).mock.calls.length
+    const agentCtx = harness.makeAgentContext()
+    harness.agents.push({
+      id: 'native-live-session',
+      options: { provider: 'deepseek', model: 'chat' },
+      session: { id: 'native-live-session', events: [], append: vi.fn() },
+      ctx: agentCtx,
+      followup: vi.fn(),
+      steer: vi.fn(),
+    } as never)
+    vi.mocked(harness.ctx.agents.get).mockImplementation(id =>
+      harness.agents.find(agent => String(agent.id) === String(id)))
+
+    await runtime.ensureSessionRoom('native-live-session', '原生会话', {
+      participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale',
+    })
+
+    expect(harness.registeredTools.map(tool => tool.name)).toEqual([
+      'chatroom_capabilities', 'chatroom_action', 'wecom_schema', 'wecom_action',
+    ])
+    expect(harness.promptSections.map(section => section.name)).toEqual([
+      'chatroom:main-agent', 'chatroom:collaboration-tools', 'chatroom:wecom-tools',
+    ])
+    expect(harness.ctx.agentPresets.mount).toHaveBeenCalledTimes(presetMounts)
     await runtime.stop()
   })
 
@@ -372,6 +484,12 @@ describe('ChatroomRuntime', () => {
     expect(projected.files).toMatchObject([{ name: 'note.txt', mediaType: 'text/plain', bytes: 5 }])
     const stored = runtime.file(projected.files[0]!.id)
     expect(new TextDecoder().decode(stored.data)).toBe('hello')
+    const persisted = [...(harness.tables.get('files')?.entries() ?? [])][0]?.[1] as Record<string, unknown> | undefined
+    expect(persisted).toMatchObject({
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      storageKey: expect.stringMatching(/^objects\/[a-f0-9]{2}\/[a-f0-9]{64}$/u),
+    })
+    expect(persisted).not.toHaveProperty('data')
     await runtime.stop()
   })
 
@@ -568,6 +686,7 @@ describe('ChatroomRuntime', () => {
     }
     expect(snapshot.recalls).toEqual([expect.objectContaining({ messageId: 'user:7' })])
     expect(snapshot.reactions).toEqual([])
+    expect(runtime.recalledMessageIds(String(harness.agents[0]!.session.id)).has(String(payload.id))).toBe(true)
     await runtime.stop()
   })
 
@@ -832,6 +951,7 @@ function fakeHarness(): {
   llmStream: ReturnType<typeof vi.fn>
   promptSections: Array<{ name: string; order: number; text: string | (() => string) }>
   registeredTools: ToolDefinition[]
+  makeAgentContext(): Context
 } {
   const tables = new Map<string, MemoryTable<string, unknown>>()
   const agents: Array<Agent & {
@@ -842,6 +962,20 @@ function fakeHarness(): {
   const attached: string[] = []
   const promptSections: Array<{ name: string; order: number; text: string | (() => string) }> = []
   const registeredTools: ToolDefinition[] = []
+  const makeAgentContext = (): Context => ({
+    tools: {
+      register: vi.fn((definition: ToolDefinition) => {
+        registeredTools.push(definition)
+        return () => undefined
+      }),
+    },
+    systemPrompt: {
+      section: vi.fn((section: { name: string; order: number; text: string | (() => string) }) => {
+        promptSections.push(section)
+        return () => undefined
+      }),
+    },
+  }) as unknown as Context
   const savedImages = vi.fn(async (inputs: Array<{ data: Uint8Array; mediaType: string; name?: string }>) =>
     inputs.map((input, index) => ({
       attachmentId: `attachment-${index}`,
@@ -873,20 +1007,7 @@ function fakeHarness(): {
     agents: {
       get: vi.fn(() => undefined),
       create: vi.fn(async ({ sessionId, setup }: { sessionId: string; setup?: (ctx: Context) => Promise<void> }) => {
-        const agentCtx = {
-          tools: {
-            register: vi.fn((definition: ToolDefinition) => {
-              registeredTools.push(definition)
-              return () => undefined
-            }),
-          },
-          systemPrompt: {
-            section: vi.fn((section: { name: string; order: number; text: string | (() => string) }) => {
-              promptSections.push(section)
-              return () => undefined
-            }),
-          },
-        } as unknown as Context
+        const agentCtx = makeAgentContext()
         await setup?.(agentCtx)
         const agent = {
           id: sessionId,
@@ -895,6 +1016,8 @@ function fakeHarness(): {
           ctx: agentCtx,
           followup: vi.fn(),
           steer: vi.fn(),
+          cancel: vi.fn(),
+          whenIdle: vi.fn(async () => undefined),
         } as unknown as (typeof agents)[number]
         agents.push(agent)
         return { agent, dispose: vi.fn(async () => undefined) }
@@ -934,7 +1057,7 @@ function fakeHarness(): {
       listModels: vi.fn(async () => [{ id: 'chat', name: 'Chat' }]),
     },
   } as unknown as Context
-  return { ctx, agents, attached, savedImages, tables, llmStream, promptSections, registeredTools }
+  return { ctx, agents, attached, savedImages, tables, llmStream, promptSections, registeredTools, makeAgentContext }
 }
 
 function promptSectionText(section: { text: string | (() => string) }): string {
@@ -989,5 +1112,13 @@ function config(): Config {
     authDshAuthHeaders: false,
     authDshAuthVerifyUrl: '',
     authDshAuthLoginPath: '/auth/login',
+    wecomEnabled: true,
+    wecomCliPath: '',
+    wecomCliConfigDirectory: '',
+    wecomCliTimeoutMs: 30_000,
+    wecomQuickMeetingDurationMinutes: 60,
+    wecomQuickMeetingSubject: '快速会议',
+    wecomTimeZone: 'Asia/Shanghai',
+    dataDirectory: ':memory:',
   }
 }

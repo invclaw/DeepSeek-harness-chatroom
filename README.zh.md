@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.2.0" src="https://img.shields.io/badge/version-1.2.0-4f6bff">
+    <img alt="版本 1.3.0" src="https://img.shields.io/badge/version-1.3.0-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -67,6 +67,7 @@
 ### 完整复用原生 Agent
 
 - 原生侧栏、对话/轨迹页签、输入框、模型与权限选择、思考/工具过程、Session log、审批、问答、斜杠命令、停止/排队/转向、失败详情和重试全部保留。
+- 群聊输入框右侧提供“停止”和“新会话”：停止会取消当前 Agent 回合并保留排队消息；新会话只轮换底层 Harness Session，群名、成员、聊天档案和文件保持不变。多个成员同时触发时只执行一次轮换。
 - Agent 运行期间保持 Think 与工具行可见；最终答案输出完成后，前面的执行过程自动合并成一个可展开的摘要。
 - 持久分支从右侧分栏打开，每个分支拥有独立 Harness Session；支持 Markdown、`@` 候选、图片/文件、引用、贴表情、转发、多选及完整 Agent 能力，但不会继续创建嵌套群聊分支。访问网关拒绝嵌入页面时立即切换到分支兼容视图，不再等待超时；完整 Agent 仍可在新标签打开。
 - 历史图片持久保存。选用纯文本模型时，只有本次模型请求会把图片替换为确定性的说明文字，界面仍显示原图。
@@ -80,6 +81,12 @@
 - 合并转发由服务端从权威 Session 事件重建，保留文本/Markdown、图片、文件、引用、嵌套转发和表情计数。
 - Agent 获得群聊范围内的能力查询、主动消息、文件、引用回复、贴表情、创建分支、邀请成员和撤回自身消息工具；所有操作与人类使用同一套持久记录和实时事件。
 
+### 企业微信协作
+
+- 集成官方 [`@wecom/cli`](https://github.com/WecomTeam/wecom-cli)，覆盖日程增删改查、参与人/闲忙/会议室，会议创建取消更新、列表详情、纪要与转写，文档搜索与权限，以及在线表格、智能表格和智能文档能力。
+- Agent 使用 `wecom_schema` 读取官方运行时参数定义，再通过 `wecom_action` 执行动作；人员先通过通讯录解析，不猜测或展示企业内部 ID。CLI 未授权或单次调用失败只影响对应操作，不影响插件和 Harness 启动。
+- 输入框提供“快速会议”，用当前企业身份创建默认 60 分钟在线会议并立即发到群内。会议与文档结果以原生卡片展示标题、时间、参与人、创建者和打开链接，而不是退化成纯文本。
+
 ### 账号、SSO 与私聊
 
 - 可选本地账号密码注册、超级管理员统一建号、角色与启停、密码轮换和会话撤销；同一身份在所有群聊中复用。
@@ -87,9 +94,20 @@
 - 可让未登录用户自动跳转到指定外部认证；`local=1` 始终保留本地账号应急入口。
 - 账号之间支持持久私聊，只有双方可见，包含 Enter 发送、Shift+Enter 换行、表情、图片和文件，并复用未读数、页内提示和浏览器通知；私聊文件夹同时承担通讯录能力，首次点击任意用户头像即可在 Harness 主会话区开始聊天。
 
+### 存储与备份
+
+- 插件在 `$DSH_HOME/chatroom/chatroom.sqlite`（未设置 `DSH_HOME` 时为 `~/.dsh/chatroom/chatroom.sqlite`）维护独立 SQLite 聊天档案，将群聊、分支、私聊、成员关系、消息、附件元数据和撤回墓碑投影成可查询的数据表。Harness Session log 继续作为 Agent 执行与审计记录，但不再是唯一的聊天数据库。
+- 文件正文不写进 SQLite，也不再塞进 KV 的 Base64 字段，而是按 SHA-256 写入 `blobs/v1/objects/` 内容寻址目录。相同文件只保存一份，附件表仍保留原文件名、类型、发送者、群聊和时间；旧版内联附件会在启动时无损迁移。
+- 撤回采用非破坏式墓碑：原始记录继续用于审计，同时记录撤回人和撤回时间；所有在线端同步显示“消息已撤回”，后续主群或分支模型请求会排除对应的原始模型消息 ID。
+- 备份或迁移时先停止插件，再整体复制数据目录即可。可以通过 `dataDirectory` 或 `DSH_CHATROOM_DATA_DIR` 把 SQLite 和 Blob 放到独立数据盘。
+
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.3.0** — 加入群聊“停止 / 新会话”控制，接入官方 wecom-cli 的完整 schema 驱动 Agent 工具、快速会议，以及会议/文档原生卡片；企微鉴权和调用失败继续与 Harness 启动隔离。
+- **1.2.5** — 普通群聊和分支消息先落库显示，再异步运行可选的自动回复判断模型；发送不再等待判断延迟。请求模型前同时修复旧版插件遗留的工具调用/结果乱序，避免坏历史持续阻断后续对话。
+- **1.2.4** — 加入插件自有的 SQLite 聊天档案与内容寻址本地 Blob，迁移旧版内联附件，在启用认证的部署中按群成员控制可见性，并让撤回后的原始消息不再进入后续 Agent 上下文。
+- **1.2.3** — 共享 Session 先由 Harness 恢复、后被聊天室接管时，也会补挂群聊能力查询与操作工具，使原生恢复的 Agent 和插件新建的 Agent 拥有相同的协作能力。
 - **1.2.0** — 把自动回复设置与消息接纳串行化，直接称呼 AI 时确定性唤起 Agent，加入仅发送者可用的持久撤回，移除设置页重复的私聊入口，并把完整群聊操作集开放为 Agent 可调用工具。
 - **1.1.17** — 把紧凑回复引用收进 Harness 原生输入框，并在原生成员提及候选中显示 IOA/OIDC 企业头像；图片缺失或加载失败时继续降级为卡通头像。
 - **1.1.16** — 以 DeepSeek Harness 0.1.1-rc.2 为主要兼容基线，新增群聊、Solo、私聊分类导航，支持带文件和表情的原生私聊、新会话模式切换、群聊置顶、AI 自动唤起设置与 AI/成员分组提及，并保留 1.1.15 的 IOA 头像和原生 Session 绑定修复。
@@ -149,6 +167,7 @@ pnpm dsh --profile web
 - id: chatroom
   name: deepseek-harness-chatroom
   config:
+    dataDirectory: !!js process.env.DSH_CHATROOM_DATA_DIR ?? ''
     roomId: lobby
     roomTitle: AI 聊天室
     aiDisplayName: DeepSeek
@@ -169,6 +188,13 @@ pnpm dsh --profile web
     authDshAuthAvatarUrlTemplate: !!js process.env.DSH_CHATROOM_DSH_AUTH_AVATAR_TEMPLATE ?? ''
     authDshAuthAvatarAllowedOrigins: !!js (process.env.DSH_CHATROOM_DSH_AUTH_AVATAR_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean)
     authDshAuthRevalidateSeconds: !!js Number(process.env.DSH_CHATROOM_DSH_AUTH_REVALIDATE_SECONDS ?? 60)
+    wecomEnabled: !!js process.env.DSH_CHATROOM_WECOM !== 'disabled'
+    wecomCliPath: !!js process.env.DSH_CHATROOM_WECOM_CLI_PATH ?? ''
+    wecomCliConfigDirectory: !!js process.env.WECOM_CLI_CONFIG_DIR ?? ''
+    wecomCliTimeoutMs: !!js Number(process.env.DSH_CHATROOM_WECOM_TIMEOUT_MS ?? 30000)
+    wecomQuickMeetingDurationMinutes: !!js Number(process.env.DSH_CHATROOM_WECOM_QUICK_MEETING_MINUTES ?? 60)
+    wecomQuickMeetingSubject: !!js process.env.DSH_CHATROOM_WECOM_QUICK_MEETING_SUBJECT ?? '快速会议'
+    wecomTimeZone: !!js process.env.DSH_CHATROOM_WECOM_TIMEZONE ?? 'Asia/Shanghai'
 ```
 
 需要调整时，在 Web profile 的 `cordis.patch.yml` 覆盖配置：
@@ -211,7 +237,18 @@ pnpm dsh --profile web
     authDshAuthAvatarUrlTemplate: ''
     authDshAuthAvatarAllowedOrigins: []
     authDshAuthRevalidateSeconds: 60
+    wecomEnabled: true
+    wecomCliPath: ''
+    wecomCliConfigDirectory: /持久化的/wecom-cli配置目录
+    wecomCliTimeoutMs: 30000
+    wecomQuickMeetingDurationMinutes: 60
+    wecomQuickMeetingSubject: 快速会议
+    wecomTimeZone: Asia/Shanghai
 ```
+
+### 企业微信授权
+
+依赖会随插件一起安装，不需要全局安装 CLI。第一次使用前，在与 Harness 相同的运行用户和配置目录下执行 `pnpm exec wecom-cli auth init` 完成扫码；容器部署应把 `WECOM_CLI_CONFIG_DIR` 指向持久卷。可用 `pnpm exec wecom-cli auth show --status` 检查状态。未授权时，只有“快速会议”或 Agent 的企微工具返回授权提示，普通群聊和 Agent 功能继续运行。
 
 `authSecret` 用于加密 OIDC Client Secret，必须稳定保存在 Git 之外。本地密码使用带随机盐的 scrypt。第一次密码注册必须填写 `authBootstrapToken`，该账号会成为初始超级管理员；后续注册遵循“系统管理”里的动态策略。登录失败有内存限流，停用账号会撤销其全部会话，修改密码会轮换当前会话并撤销旧会话。认证 Cookie 是随机值，服务端只保存 SHA-256 摘要，使用 `HttpOnly`、`SameSite=Strict`、根路径，并在 `authPublicOrigin` 为 HTTPS 时加上 `Secure`。
 

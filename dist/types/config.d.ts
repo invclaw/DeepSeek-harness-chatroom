@@ -1,6 +1,7 @@
 import z from '@deepseek-ai/schemastery';
 /** Deployment configuration for shared AI rooms. */
 export interface Config {
+    dataDirectory?: string;
     roomId: string;
     roomTitle: string;
     aiDisplayName: string;
@@ -35,6 +36,13 @@ export interface Config {
     authDshAuthAvatarUrlTemplate?: string;
     authDshAuthAvatarAllowedOrigins?: string[];
     authDshAuthRevalidateSeconds?: number;
+    wecomEnabled: boolean;
+    wecomCliPath: string;
+    wecomCliConfigDirectory: string;
+    wecomCliTimeoutMs: number;
+    wecomQuickMeetingDurationMinutes: number;
+    wecomQuickMeetingSubject: string;
+    wecomTimeZone: string;
 }
 export declare const Config: z<Config>;
 /** Validate relationships Schemastery cannot express by individual fields. */

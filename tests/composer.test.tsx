@@ -2,9 +2,11 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ComponentProps } from 'react'
 import type { ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
   ChatroomComposerAttachments,
+  ChatroomSessionControls,
   type ChatroomComposerAttachmentsProps,
 } from '../src/client/ChatroomComposer.js'
 import type { ChatroomView } from '../src/client/store.js'
@@ -37,5 +39,32 @@ describe('chatroom composer attachments', () => {
     expect(screen.getByTestId('native-attachments')).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '取消回复' }))
     expect(clearReply).toHaveBeenCalledWith('room')
+  })
+
+  it('offers native stop, new Session, and quick-meeting actions for rooms', () => {
+    const stopRoomSession = vi.fn(async () => true)
+    const newRoomSession = vi.fn(async () => true)
+    const quickMeeting = vi.fn(async () => true)
+    const props = {
+      sessionId: 'chatroom-v1-lobby',
+      session: { running: true },
+      useChatroom: (selector: (snapshot: ChatroomView) => unknown) => selector({
+        sessionControlBusy: false,
+        sessionControlError: undefined,
+        wecomBusy: false,
+        wecomError: undefined,
+      } as unknown as ChatroomView),
+      resolveTarget: () => ({ kind: 'room', room: { id: 'lobby' } }),
+      stopRoomSession,
+      newRoomSession,
+      quickMeeting,
+    }
+    render(<ChatroomSessionControls {...props as unknown as ComponentProps<typeof ChatroomSessionControls>} />)
+    fireEvent.click(screen.getByRole('button', { name: '■ 停止' }))
+    fireEvent.click(screen.getByRole('button', { name: '＋ 新会话' }))
+    fireEvent.click(screen.getByRole('button', { name: '⚡ 快速会议' }))
+    expect(stopRoomSession).toHaveBeenCalledWith('lobby')
+    expect(newRoomSession).toHaveBeenCalledWith('lobby')
+    expect(quickMeeting).toHaveBeenCalledWith('lobby')
   })
 })

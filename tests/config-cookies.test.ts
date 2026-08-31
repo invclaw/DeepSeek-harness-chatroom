@@ -21,6 +21,8 @@ describe('chatroom configuration and identity cookie', () => {
   it('rejects a relative working directory', () => {
     const config = validConfig()
     expect(() => validateConfig({ ...config, cwd: 'relative' })).toThrow('cwd must be absolute')
+    expect(() => validateConfig({ ...config, dataDirectory: 'relative' })).toThrow('dataDirectory must be absolute')
+    expect(() => validateConfig({ ...config, dataDirectory: ':memory:' })).not.toThrow()
     expect(() => validateConfig(config)).not.toThrow()
   })
 
@@ -99,5 +101,12 @@ function validConfig(): Config {
     authDshAuthHeaders: false,
     authDshAuthVerifyUrl: '',
     authDshAuthLoginPath: '/auth/login',
+    wecomEnabled: true,
+    wecomCliPath: '',
+    wecomCliConfigDirectory: '',
+    wecomCliTimeoutMs: 30_000,
+    wecomQuickMeetingDurationMinutes: 60,
+    wecomQuickMeetingSubject: '快速会议',
+    wecomTimeZone: 'Asia/Shanghai',
   }
 }

@@ -18,6 +18,7 @@ import type {
   ChatroomForwardItem,
   ChatroomForwardImageRequest,
   ChatroomImageReference,
+  ChatroomQuickMeetingResponse,
   ChatroomRoomResponse,
   ChatroomRoomManageResponse,
   ChatroomRoomManagementResponse,
@@ -96,6 +97,14 @@ export class ChatroomHttpController {
       }
       if (route.endpoint === '/rooms/manage') {
         await this.handleRoomManagement(request, response)
+        return
+      }
+      if (route.endpoint === '/rooms/session') {
+        await this.handleRoomSession(request, response)
+        return
+      }
+      if (route.endpoint === '/wecom/quick-meeting') {
+        await this.handleQuickMeeting(request, response)
         return
       }
       if (route.endpoint === '/automation') {
@@ -623,6 +632,39 @@ export class ChatroomHttpController {
       return
     }
     throw new ChatroomInputError('群管理操作无效。')
+  }
+
+  private async handleRoomSession(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, smallRequestLimit(this.config))
+    const roomId = fieldString(body, 'roomId')
+    const action = fieldString(body, 'action')
+    const room = action === 'stop'
+      ? await this.runtime.stopRoomSession(roomId, identity)
+      : action === 'new'
+        ? await this.runtime.renewRoomSession(roomId, identity)
+        : undefined
+    if (room === undefined) throw new ChatroomInputError('会话控制操作无效。')
+    json(response, 200, { room, members: this.runtime.membersForRoom(roomId) } satisfies ChatroomRoomManageResponse)
+  }
+
+  private async handleQuickMeeting(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, smallRequestLimit(this.config))
+    const card = await this.runtime.createQuickMeeting(fieldString(body, 'roomId'), identity)
+    json(response, 201, { accepted: true, card } satisfies ChatroomQuickMeetingResponse)
   }
 
   private async handleAutomation(request: IncomingMessage, response: ServerResponse): Promise<void> {
