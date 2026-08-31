@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.3.0" src="https://img.shields.io/badge/version-1.3.0-4f6bff">
+    <img alt="Version 1.3.1" src="https://img.shields.io/badge/version-1.3.1-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -67,7 +67,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 ### Complete native Agent runtime
 
 - The native sidebar, Conversation/Trajectory tabs, composer, model and permission selectors, reasoning/tool flow, Session log, approvals, questions, slash commands, stop/queue/steer, failures, and retries remain intact.
-- The room composer adds **Stop** and **New session**. Stop cancels the active Agent turn while retaining queued input; New session rotates only the backing Harness Session and preserves room identity, membership, chat archive, and files. Concurrent requests coalesce into one rotation.
+- The room composer adds **Stop** and **New session**. Stop cancels the active Agent turn while retaining queued input. New session keeps the room's visible Session and complete transcript, but persists a new context boundary so later AI requests contain only messages sent after that point. Concurrent requests coalesce into one reset.
 - While an Agent is running, Think and tool rows stay visible. Once the final answer arrives, the preceding process rows collapse into one expandable summary.
 - Persistent branches open in a right-side panel and own independent Harness Sessions. Branches support Markdown, `@` candidates, images/files, quotes, reactions, forwarding, selection, and the full Agent runtime without nested chatroom branches. Gateways that reject embedded documents switch immediately to an inline compatibility view instead of waiting for a timeout, with the complete Agent available in a new tab.
 - Historical images remain durable. For text-only models, only the model request receives deterministic text markers in place of image input; the UI keeps the original media.
@@ -104,6 +104,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.3.1** — retain the complete room transcript when starting a new AI conversation and exclude every earlier user, assistant, and tool-result message from later model requests.
 - **1.3.0** — add room Stop/New-session controls, official schema-driven wecom-cli Agent tools, Quick meeting, and native meeting/document cards while keeping Enterprise WeChat authorization failures isolated from Harness startup.
 - **1.2.5** — append ordinary room and branch messages before the optional automatic-response model runs, and repair historical tool-call/result ordering from older chatroom builds before requests reach the model provider.
 - **1.2.4** — add the plugin-owned SQLite chat archive and content-addressed local Blob store, migrate legacy inline attachments, enforce membership visibility in authenticated deployments, and make recall remove the original model message from future Agent context.

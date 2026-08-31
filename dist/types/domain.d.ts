@@ -45,6 +45,8 @@ export interface RoomRecord {
     readonly ownerParticipantId?: string;
     readonly adminParticipantIds?: readonly string[];
     readonly autoTriggerEnabled?: boolean;
+    /** Last Session event excluded from later AI requests after starting a new AI conversation. */
+    readonly aiContextResetSeq?: number;
 }
 export interface RoomPreferenceRecord {
     readonly roomId: string;

@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.3.0" src="https://img.shields.io/badge/version-1.3.0-4f6bff">
+    <img alt="版本 1.3.1" src="https://img.shields.io/badge/version-1.3.1-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -67,7 +67,7 @@
 ### 完整复用原生 Agent
 
 - 原生侧栏、对话/轨迹页签、输入框、模型与权限选择、思考/工具过程、Session log、审批、问答、斜杠命令、停止/排队/转向、失败详情和重试全部保留。
-- 群聊输入框右侧提供“停止”和“新会话”：停止会取消当前 Agent 回合并保留排队消息；新会话只轮换底层 Harness Session，群名、成员、聊天档案和文件保持不变。多个成员同时触发时只执行一次轮换。
+- 群聊输入框右侧提供“停止”和“新会话”：停止会取消当前 Agent 回合并保留排队消息；新会话保留群聊当前 Session 和完整可见历史，只持久化一个新的 AI 上下文分界点，后续模型请求仅包含分界点之后的消息。多个成员同时触发时只执行一次重置。
 - Agent 运行期间保持 Think 与工具行可见；最终答案输出完成后，前面的执行过程自动合并成一个可展开的摘要。
 - 持久分支从右侧分栏打开，每个分支拥有独立 Harness Session；支持 Markdown、`@` 候选、图片/文件、引用、贴表情、转发、多选及完整 Agent 能力，但不会继续创建嵌套群聊分支。访问网关拒绝嵌入页面时立即切换到分支兼容视图，不再等待超时；完整 Agent 仍可在新标签打开。
 - 历史图片持久保存。选用纯文本模型时，只有本次模型请求会把图片替换为确定性的说明文字，界面仍显示原图。
@@ -104,6 +104,7 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.3.1** — 开启新的 AI 会话时保留群聊完整历史，并从后续模型请求中排除分界点之前的用户、助手和工具结果消息。
 - **1.3.0** — 加入群聊“停止 / 新会话”控制，接入官方 wecom-cli 的完整 schema 驱动 Agent 工具、快速会议，以及会议/文档原生卡片；企微鉴权和调用失败继续与 Harness 启动隔离。
 - **1.2.5** — 普通群聊和分支消息先落库显示，再异步运行可选的自动回复判断模型；发送不再等待判断延迟。请求模型前同时修复旧版插件遗留的工具调用/结果乱序，避免坏历史持续阻断后续对话。
 - **1.2.4** — 加入插件自有的 SQLite 聊天档案与内容寻址本地 Blob，迁移旧版内联附件，在启用认证的部署中按群成员控制可见性，并让撤回后的原始消息不再进入后续 Agent 上下文。

@@ -71,7 +71,7 @@ export function apply(ctx: Context, config: ChatroomConfig): void {
     options,
     next,
     sessionId => runtime.ownsSession(sessionId),
-    sessionId => runtime.recalledMessageIds(sessionId),
+    sessionId => runtime.hiddenModelMessageIds(sessionId),
     (provider, model, signal) => ctx.llm.resolveModelInfo(provider, model, signal),
     request => ctx.llm.stream(request),
   )), 'deepseek-harness-chatroom.model-history')

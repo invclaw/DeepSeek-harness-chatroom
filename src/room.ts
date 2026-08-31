@@ -282,6 +282,23 @@ export class ChatroomRuntime {
       || [...this.threadStates.values()].some(state => state.record.sessionId === sessionId)
   }
 
+  /** Stable model message ids omitted after recalls or an AI-context reset. */
+  hiddenModelMessageIds(sessionId: string): ReadonlySet<string> {
+    const hidden = new Set(this.archive?.recalledMessageIds(sessionId) ?? [])
+    const state = [...this.states.values()].find(candidate => candidate.record.sessionId === sessionId)
+    const resetSeq = state?.record.aiContextResetSeq
+    const events = state?.binding?.agent.session.events
+    if (resetSeq === undefined || events === undefined) return hidden
+    for (const event of events) {
+      if (event.seq > resetSeq) break
+      if (event.type === 'user/message') hidden.add(String(event.data.id))
+      else if (event.type === 'assistant/message' || event.type === 'tool/result') {
+        hidden.add(String(event.data.message.id))
+      }
+    }
+    return hidden
+  }
+
   /** Stable model message ids omitted from future requests after a chat recall. */
   recalledMessageIds(sessionId: string): ReadonlySet<string> {
     return this.archive?.recalledMessageIds(sessionId) ?? new Set()
@@ -662,7 +679,7 @@ export class ChatroomRuntime {
     return this.projectRoom(state, identity.participantId)
   }
 
-  /** Replace one room's Harness Session while retaining the room identity and roster. */
+  /** Start a fresh AI context while retaining the room Session, transcript, and roster. */
   async renewRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo> {
     this.assertReady()
     const state = this.requireState(roomId)
@@ -680,19 +697,14 @@ export class ChatroomRuntime {
       previous.agent.cancel({ kind: 'user' })
       await previous.agent.whenIdle()
       this.archiveRoomSession(state, previous.agent.session)
-      await previous.release()
-      state.binding = undefined
-      state.activation = undefined
-      const sessionId = `chatroom-v1-${roomId}-${randomUUID()}`
+      const resetSeq = previous.agent.session.events.at(-1)?.seq
       const record = await this.requireRoomRecords().update(roomId, current => ({
         ...current,
-        sessionId,
+        ...(resetSeq === undefined ? {} : { aiContextResetSeq: resetSeq }),
         updatedAt: Date.now(),
       }))
       state.record = record
       this.archiveRoom(record)
-      const binding = await this.ensureRoom(roomId)
-      this.ensureRoomTitle(binding, record.title)
       this.broadcast(state, { type: 'room-updated', room: this.projectRoom(state), members: this.roomMembers(state) })
     })()
     state.rotation = rotation
@@ -2473,7 +2485,7 @@ export class ChatroomRuntime {
     if (room.record.autoTriggerEnabled !== true) return false
     if (addressesAi(content, room.record.aiDisplayName)) return true
     const history = thread === undefined
-      ? recentRoomConversation(binding.agent.session.events, this.recalledMessageIds(room.record.sessionId))
+      ? recentRoomConversation(binding.agent.session.events, this.hiddenModelMessageIds(room.record.sessionId))
       : recentThreadConversation(
           thread.record,
           this.messagesForThread(thread.record.id).filter(message =>

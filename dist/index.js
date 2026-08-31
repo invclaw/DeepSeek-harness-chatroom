@@ -1581,7 +1581,8 @@ var roomSchema = z2.object({
   createdBy: z2.string().min(1),
   ownerParticipantId: z2.string().min(1).optional(),
   adminParticipantIds: z2.array(z2.string().min(1)).optional(),
-  autoTriggerEnabled: z2.boolean().optional()
+  autoTriggerEnabled: z2.boolean().optional(),
+  aiContextResetSeq: nonNegativeSafeInteger.optional()
 });
 var roomPreferenceSchema = z2.object({
   roomId: z2.string().min(1),
@@ -2353,6 +2354,22 @@ var ChatroomRuntime = class {
   ownsSession(sessionId) {
     return [...this.states.values()].some((state) => state.record.sessionId === sessionId) || [...this.threadStates.values()].some((state) => state.record.sessionId === sessionId);
   }
+  /** Stable model message ids omitted after recalls or an AI-context reset. */
+  hiddenModelMessageIds(sessionId) {
+    const hidden = new Set(this.archive?.recalledMessageIds(sessionId) ?? []);
+    const state = [...this.states.values()].find((candidate) => candidate.record.sessionId === sessionId);
+    const resetSeq = state?.record.aiContextResetSeq;
+    const events = state?.binding?.agent.session.events;
+    if (resetSeq === void 0 || events === void 0) return hidden;
+    for (const event of events) {
+      if (event.seq > resetSeq) break;
+      if (event.type === "user/message") hidden.add(String(event.data.id));
+      else if (event.type === "assistant/message" || event.type === "tool/result") {
+        hidden.add(String(event.data.message.id));
+      }
+    }
+    return hidden;
+  }
   /** Stable model message ids omitted from future requests after a chat recall. */
   recalledMessageIds(sessionId) {
     return this.archive?.recalledMessageIds(sessionId) ?? /* @__PURE__ */ new Set();
@@ -2690,7 +2707,7 @@ var ChatroomRuntime = class {
     await binding.agent.whenIdle();
     return this.projectRoom(state, identity.participantId);
   }
-  /** Replace one room's Harness Session while retaining the room identity and roster. */
+  /** Start a fresh AI context while retaining the room Session, transcript, and roster. */
   async renewRoomSession(roomId, identity) {
     this.assertReady();
     const state = this.requireState(roomId);
@@ -2710,19 +2727,14 @@ var ChatroomRuntime = class {
       previous.agent.cancel({ kind: "user" });
       await previous.agent.whenIdle();
       this.archiveRoomSession(state, previous.agent.session);
-      await previous.release();
-      state.binding = void 0;
-      state.activation = void 0;
-      const sessionId = `chatroom-v1-${roomId}-${randomUUID3()}`;
+      const resetSeq = previous.agent.session.events.at(-1)?.seq;
       const record = await this.requireRoomRecords().update(roomId, (current) => ({
         ...current,
-        sessionId,
+        ...resetSeq === void 0 ? {} : { aiContextResetSeq: resetSeq },
         updatedAt: Date.now()
       }));
       state.record = record;
       this.archiveRoom(record);
-      const binding = await this.ensureRoom(roomId);
-      this.ensureRoomTitle(binding, record.title);
       this.broadcast(state, { type: "room-updated", room: this.projectRoom(state), members: this.roomMembers(state) });
     })();
     state.rotation = rotation;
@@ -4235,7 +4247,7 @@ var ChatroomRuntime = class {
   async shouldAutoTrigger(room, binding, content, thread) {
     if (room.record.autoTriggerEnabled !== true) return false;
     if (addressesAi(content, room.record.aiDisplayName)) return true;
-    const history = thread === void 0 ? recentRoomConversation(binding.agent.session.events, this.recalledMessageIds(room.record.sessionId)) : recentThreadConversation(
+    const history = thread === void 0 ? recentRoomConversation(binding.agent.session.events, this.hiddenModelMessageIds(room.record.sessionId)) : recentThreadConversation(
       thread.record,
       this.messagesForThread(thread.record.id).filter((message) => !this.requireRecalls().get(recallKey(room.record.id, message.id)))
     );
@@ -6234,7 +6246,7 @@ function apply(ctx, config) {
     options,
     next,
     (sessionId) => runtime.ownsSession(sessionId),
-    (sessionId) => runtime.recalledMessageIds(sessionId),
+    (sessionId) => runtime.hiddenModelMessageIds(sessionId),
     (provider, model, signal) => ctx.llm.resolveModelInfo(provider, model, signal),
     (request) => ctx.llm.stream(request)
   )), "deepseek-harness-chatroom.model-history");

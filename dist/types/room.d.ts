@@ -62,6 +62,8 @@ export declare class ChatroomRuntime {
     get auth(): ChatroomAuth;
     /** Whether one model request belongs to a room or branch Session owned by this runtime. */
     ownsSession(sessionId: string): boolean;
+    /** Stable model message ids omitted after recalls or an AI-context reset. */
+    hiddenModelMessageIds(sessionId: string): ReadonlySet<string>;
     /** Stable model message ids omitted from future requests after a chat recall. */
     recalledMessageIds(sessionId: string): ReadonlySet<string>;
     /** Describe the collaboration operations available to one room-scoped Agent. */
@@ -108,7 +110,7 @@ export declare class ChatroomRuntime {
     selectRoom(roomId: string, identity?: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Stop the active Agent turn while retaining the room and queued user intake. */
     stopRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
-    /** Replace one room's Harness Session while retaining the room identity and roster. */
+    /** Start a fresh AI context while retaining the room Session, transcript, and roster. */
     renewRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Create an Enterprise WeChat online meeting and post it to the room as a durable card. */
     createQuickMeeting(roomId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard>;

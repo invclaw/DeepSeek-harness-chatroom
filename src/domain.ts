@@ -66,6 +66,8 @@ export interface RoomRecord {
   readonly ownerParticipantId?: string
   readonly adminParticipantIds?: readonly string[]
   readonly autoTriggerEnabled?: boolean
+  /** Last Session event excluded from later AI requests after starting a new AI conversation. */
+  readonly aiContextResetSeq?: number
 }
 
 export interface RoomPreferenceRecord {
@@ -268,6 +270,7 @@ const roomSchema = z.object({
   ownerParticipantId: z.string().min(1).optional(),
   adminParticipantIds: z.array(z.string().min(1)).optional(),
   autoTriggerEnabled: z.boolean().optional(),
+  aiContextResetSeq: nonNegativeSafeInteger.optional(),
 }) as z.ZodType<RoomRecord>
 
 const roomPreferenceSchema = z.object({

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
+import { CallId, createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
@@ -36,7 +36,7 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
-  it('stops the current turn and coalesces concurrent Session rotations', async () => {
+  it('stops the current turn and coalesces AI-context resets without replacing room history', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
     await runtime.start()
@@ -47,14 +47,54 @@ describe('ChatroomRuntime', () => {
     expect(harness.agents[0]?.cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: true })
     expect(harness.agents[0]?.whenIdle).toHaveBeenCalledOnce()
 
+    const userMessage = createUserMessage({
+      content: [{ type: 'text', text: '需要保留的群聊历史' }],
+      source: { kind: 'user' },
+    })
+    const assistantMessage = createAssistantMessage({
+      content: [{ type: 'text', text: '需要保留的 AI 回复' }],
+      source: { provider: 'deepseek', model: 'chat' },
+    })
+    const toolMessage = createToolResultMessage({
+      callId: CallId('call-before-reset'),
+      content: [{ type: 'text', text: '需要从新上下文排除的工具结果' }],
+      isError: false,
+    })
+    const events: SessionEvent[] = [
+      { type: 'user/message', seq: 0, time: 1, data: userMessage, surfaceOp: 'append' },
+      {
+        type: 'assistant/message', seq: 1, time: 2,
+        data: { turn: 1, step: 1, message: assistantMessage }, surfaceOp: 'append',
+      },
+      {
+        type: 'tool/result', seq: 2, time: 3,
+        data: { turn: 1, step: 1, message: toolMessage }, surfaceOp: 'append',
+      },
+    ]
+    ;(harness.agents[0]!.session as unknown as { events: SessionEvent[] }).events = events
+
     const [first, second] = await Promise.all([
       runtime.renewRoomSession('lobby', identity),
       runtime.renewRoomSession('lobby', identity),
     ])
     expect(first.sessionId).toBe(second.sessionId)
-    expect(first.sessionId).not.toBe('chatroom-v1-lobby')
-    expect(harness.agents).toHaveLength(2)
+    expect(first.sessionId).toBe('chatroom-v1-lobby')
+    expect(harness.agents).toHaveLength(1)
     expect(harness.agents[0]?.cancel).toHaveBeenLastCalledWith({ kind: 'user' })
+    expect(harness.agents[0]?.session.events).toEqual(events)
+    expect(runtime.hiddenModelMessageIds(first.sessionId)).toEqual(new Set([
+      String(userMessage.id), String(assistantMessage.id), String(toolMessage.id),
+    ]))
+    expect(harness.tables.get('rooms')?.get('lobby')).toMatchObject({
+      sessionId: 'chatroom-v1-lobby', aiContextResetSeq: 2,
+    })
+
+    const currentMessage = createUserMessage({
+      content: [{ type: 'text', text: '新 AI 会话中的第一条消息' }],
+      source: { kind: 'user' },
+    })
+    events.push({ type: 'user/message', seq: 3, time: 4, data: currentMessage, surfaceOp: 'append' })
+    expect(runtime.hiddenModelMessageIds(first.sessionId)).not.toContain(String(currentMessage.id))
     await runtime.stop()
   })
 

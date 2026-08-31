@@ -197,7 +197,7 @@ export interface ChatroomRoomManageResponse {
     readonly room: ChatroomInfo;
     readonly members: readonly ChatroomMember[];
 }
-/** Control one room's native Harness Agent without changing room membership. */
+/** Stop one room's Agent turn or reset its AI context without replacing the visible transcript. */
 export interface ChatroomRoomSessionRequest {
     readonly roomId: string;
     readonly action: 'stop' | 'new';
