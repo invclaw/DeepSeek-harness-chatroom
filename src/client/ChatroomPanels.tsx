@@ -381,7 +381,7 @@ function ThreadPanel(props: ChatroomPanelsProps & {
             />}
             {!ready && <div className="dsh-chatroom-thread-frame-status" role="status">
               <span>{attempt === 0 ? '正在加载分支…' : '正在重新加载分支…'}</span>
-              <small>正在初始化原生 Harness 分支会话</small>
+              <small>正在打开分支。</small>
             </div>}
           </div>}
       {props.room.threadError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.threadError}</div>}
@@ -433,8 +433,8 @@ function ThreadCompatibilityPanel(props: ChatroomPanelsProps & {
   }
   return <div className="dsh-chatroom-thread-compatibility">
     <div className="dsh-chatroom-thread-compatibility-notice" role="status">
-      <span>当前访问入口不允许嵌入完整 Agent，已切换到分支兼容模式。</span>
-      <span><a href={props.frameUrl} target="_blank" rel="noreferrer">在新标签打开完整 Agent</a><button type="button" onClick={props.retry}>重试嵌入</button></span>
+      <span>分支无法在当前页面完整显示，请在新标签中打开。</span>
+      <span><a href={props.frameUrl} target="_blank" rel="noreferrer">在新标签打开分支</a><button type="button" onClick={props.retry}>重试</button></span>
     </div>
     <div className="dsh-chatroom-thread-root">
       <strong>{props.thread.root.displayName}</strong>

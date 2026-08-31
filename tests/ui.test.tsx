@@ -159,6 +159,25 @@ describe('native chatroom integration', () => {
     expect(sendDirect).toHaveBeenCalledWith('收到🎉', [attachment])
   })
 
+  it('describes settings scope by role and offers a next step when WeCom is unavailable', () => {
+    renderSettings(view({ wecomAuthorization: { enabled: false, status: 'unauthorized' } } as never))
+    expect(screen.getByText('管理你的账号与协作服务。')).toBeTruthy()
+    expect(screen.getByText('企业微信功能当前不可用，请联系管理员。')).toBeTruthy()
+    cleanup()
+
+    const owner = {
+      participantId: 'alice-id', username: 'alice', displayName: 'Alice', avatarId: 'whale' as const,
+      role: 'super-admin' as const, status: 'active' as const, createdAt: 1,
+    }
+    renderSettings(view({
+      auth: {
+        enabled: true, authenticated: true, account: owner, providers: [],
+        allowSelfRegistration: true, bootstrapRequired: false,
+      },
+    }))
+    expect(screen.getByText('管理账号、平台成员与企业登录。')).toBeTruthy()
+  })
+
   it('edits the main and controller system prompts in native settings', () => {
     const saveAutomation = vi.fn(async () => true)
     renderSettings(view({
@@ -386,10 +405,10 @@ describe('native chatroom integration', () => {
     Object.defineProperty(frame, 'contentDocument', { configurable: true, value: null })
     fireEvent.load(frame)
 
-    expect(screen.getByText('当前访问入口不允许嵌入完整 Agent，已切换到分支兼容模式。')).toBeTruthy()
+    expect(screen.getByText('分支无法在当前页面完整显示，请在新标签中打开。')).toBeTruthy()
     expect(sessionStorage.getItem('dsh-chatroom:branch-frame-compatibility')).toBe('1')
     expect(screen.getByText('兼容模式消息')).toBeTruthy()
-    const fullAgent = screen.getByRole('link', { name: '在新标签打开完整 Agent' }) as HTMLAnchorElement
+    const fullAgent = screen.getByRole('link', { name: '在新标签打开分支' }) as HTMLAnchorElement
     expect(new URL(fullAgent.href).searchParams.get('dsh-chatroom-thread')).toBe('thread')
     fireEvent.change(screen.getByPlaceholderText('回复分支；输入 @AI 让 AI 在本分支回答'), { target: { value: '@AI 你好' } })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
@@ -406,7 +425,7 @@ describe('native chatroom integration', () => {
     }))
 
     expect(screen.queryByTitle('分支回复：后续分支')).toBeNull()
-    expect(screen.getByText('当前访问入口不允许嵌入完整 Agent，已切换到分支兼容模式。')).toBeTruthy()
+    expect(screen.getByText('分支无法在当前页面完整显示，请在新标签中打开。')).toBeTruthy()
   })
 
   it('opens a target chooser for a merged multi-message forward', () => {

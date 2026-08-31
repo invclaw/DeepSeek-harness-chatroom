@@ -104,6 +104,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.3.5** — keep implementation detail out of member-facing copy: the identity dialog no longer explains the embedded chat interface, the unavailable Enterprise WeChat row states a next step instead of naming the CLI, the branch loading and fallback notices describe the branch rather than the embedding strategy, the settings subtitle follows the signed-in role, and the system-prompt hint drops its self-referential wording.
 - **1.3.4** — expand the native per-Workspace session truncation and give each sidebar category a single show-more control whose count matches its folder count, instead of several native buttons stranded mid-list by the flattened categories.
 - **1.3.3** — unify the full-width Group, Solo, and Direct composer experience, persist the AI-context reset divider at its exact transcript position, and add per-platform-account Enterprise WeChat QR authorization with Quick-meeting compatibility for identity responses that omit a structured human user id.
 - **1.3.2** — retain the complete room transcript when starting a new AI conversation and exclude every earlier user, assistant, and tool-result message from later model requests.
