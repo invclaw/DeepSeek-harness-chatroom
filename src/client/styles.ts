@@ -243,7 +243,6 @@ export const CHATROOM_STYLES = `
 [data-dsh-chatroom-workspace-categories] > [data-dsh-chatroom-native-group-section] { display: contents !important; }
 [data-dsh-chatroom-native-folder-wrapper][data-hidden="true"] { display: none !important; }
 [data-dsh-chatroom-sidebar-category] { padding-left: 22px !important; }
-[data-dsh-chatroom-branch-row] { padding-left: 60px !important; }
 [data-dsh-chatroom-category-header] {
   box-sizing: border-box;
   width: 100%;
@@ -400,7 +399,10 @@ export const CHATROOM_STYLES = `
   width: auto !important;
   min-height: 46px !important;
   height: 46px !important;
-  margin: 2px 8px 2px 30px !important;
+  /* Keep the branch content aligned just after its parent title. The native
+     row already supplies the workspace gutter, so an extra 30px made the
+     marker look detached from the room it belongs to. */
+  margin: 2px 8px 2px 18px !important;
   border: 1px solid transparent;
   border-radius: 10px !important;
   padding: 4px 8px !important;
@@ -501,8 +503,22 @@ export const CHATROOM_STYLES = `
 
 [data-dsh-chatroom-native-branch-title] { display: none !important; }
 
-[data-dsh-chatroom-has-branches] {
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--dsw-alias-state-business-primary, var(--brand-primary, #4f7cff)) 35%, transparent);
+/* The branch count is enough parent context; an inset stripe reads like a
+   selected-row border and makes the sidebar edge visually heavier. */
+[data-dsh-chatroom-has-branches] { box-shadow: none !important; }
+
+/* DSH 0.1.x chooses a generic gear for external settings sections. The
+   settings-nav helper marks this plugin's row after the dialog mounts, so the
+   shell icon can be replaced without reaching into its React tree. */
+[data-dsh-chatroom-settings-nav] > svg:first-child { display: none !important; }
+[data-dsh-chatroom-settings-nav]::before {
+  content: '';
+  flex: none;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/%3E%3Ccircle cx='9' cy='7' r='4'/%3E%3Cpath d='M22 21v-2a4 4 0 0 0-3-3.87'/%3E%3Cpath d='M16 3.13a4 4 0 0 1 0 7.75'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/%3E%3Ccircle cx='9' cy='7' r='4'/%3E%3Cpath d='M22 21v-2a4 4 0 0 0-3-3.87'/%3E%3Cpath d='M16 3.13a4 4 0 0 1 0 7.75'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 [data-dsh-chatroom-branch-count] {
@@ -1792,7 +1808,7 @@ html[data-dsh-chatroom-branch-frame] [data-dsh-chatroom-branch-shell] > :nth-chi
   [data-dsh-chatroom-branch-row] {
     min-height: 44px !important;
     height: 44px !important;
-    margin-inline-start: 18px !important;
+    margin-inline-start: 14px !important;
   }
   [data-dsh-chatroom-branch-marker] {
     flex-basis: 20px;
