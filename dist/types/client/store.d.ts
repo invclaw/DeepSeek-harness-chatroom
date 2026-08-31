@@ -1,5 +1,5 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomAutomationOverview, ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot } from '../types.js';
+import type { ChatroomAutomationOverview, ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot, ChatroomWecomAuthorizationState } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 export type ChatroomPhase = 'loading' | 'auth-required' | 'identity-required' | 'ready' | 'error';
 export type ChatroomConnection = 'offline' | 'connecting' | 'online';
@@ -64,6 +64,8 @@ export interface ChatroomView {
     readonly sessionControlError: string | undefined;
     readonly wecomBusy: boolean;
     readonly wecomError: string | undefined;
+    readonly wecomAuthorization?: ChatroomWecomAuthorizationState | undefined;
+    readonly wecomAuthorizationOpen?: boolean;
     readonly thread: ChatroomThread | undefined;
     readonly threadMessages: readonly ChatroomThreadMessage[];
     readonly threadReply: ChatroomReplyReference | undefined;
@@ -112,6 +114,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private activeNativeSession;
     private roomEnsure;
     private readonly pendingAutoTriggerWrites;
+    private pendingQuickMeetingTarget;
     constructor(openSession?: (sessionId: string) => boolean, branchFrame?: ChatroomBranchFrame);
     /** Current immutable room projection. */
     getSnapshot: () => ChatroomView;
@@ -267,6 +270,16 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     newRoomSession: (roomId: string) => Promise<boolean>;
     /** Create a default Enterprise WeChat meeting and publish its card to the room. */
     quickMeeting: (roomId: string) => Promise<boolean>;
+    /** Create a default Enterprise WeChat meeting and publish its card to a direct conversation. */
+    quickDirectMeeting: (directConversationId: string) => Promise<boolean>;
+    /** Refresh authorization for the current platform account. */
+    loadWecomAuthorization: () => Promise<ChatroomWecomAuthorizationState | undefined>;
+    /** Start the current account's device-local Enterprise WeChat QR authorization. */
+    startWecomAuthorization: () => Promise<boolean>;
+    /** Dismiss the Enterprise WeChat authorization dialog without cancelling the CLI login. */
+    closeWecomAuthorization: () => void;
+    private createQuickMeeting;
+    private publishQuickMeeting;
     /** Create or reopen a branch rooted at one main-room message. */
     openThread: (roomId: string, root: ChatroomThreadRoot) => Promise<void>;
     /** Close the right-side branch panel. */

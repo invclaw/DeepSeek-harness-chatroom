@@ -30,6 +30,8 @@ export declare function ChatroomFileAction(props: FileActionProps): JSX.Element 
 export declare function ChatroomSessionControls(props: ComposerRightProps): JSX.Element | null;
 /** Pending file rail above the native composer. */
 export declare function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | null;
+/** Persistent visual boundary between retained room history and a fresh AI context. */
+export declare function ChatroomContextResetDivider(): JSX.Element;
 /** Native attachment renderer plus an in-card reply preview for shared sessions. */
 export declare function ChatroomComposerAttachments(props: ChatroomComposerAttachmentsProps): JSX.Element;
 export type { ChatroomClientStore };

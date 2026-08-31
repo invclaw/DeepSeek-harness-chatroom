@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
-import type { ChatroomFileReference, ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js'
+import type { ChatroomExternalCard, ChatroomFileReference, ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js'
 import type { ChatroomReactionEmoji } from './reactions.js'
 import { isChatroomReactionEmoji } from './reactions.js'
 import type { ChatroomAvatarId } from './avatars.js'
@@ -68,6 +68,8 @@ export interface RoomRecord {
   readonly autoTriggerEnabled?: boolean
   /** Last Session event excluded from later AI requests after starting a new AI conversation. */
   readonly aiContextResetSeq?: number
+  /** First participant message displayed after the latest AI-context reset. */
+  readonly aiContextStartSeq?: number
 }
 
 export interface RoomPreferenceRecord {
@@ -216,6 +218,7 @@ export interface DirectMessageRecord {
   readonly senderId: string
   readonly text: string
   readonly files?: readonly ChatroomFileReference[]
+  readonly card?: ChatroomExternalCard
   readonly createdAt: number
 }
 
@@ -271,6 +274,7 @@ const roomSchema = z.object({
   adminParticipantIds: z.array(z.string().min(1)).optional(),
   autoTriggerEnabled: z.boolean().optional(),
   aiContextResetSeq: nonNegativeSafeInteger.optional(),
+  aiContextStartSeq: nonNegativeSafeInteger.optional(),
 }) as z.ZodType<RoomRecord>
 
 const roomPreferenceSchema = z.object({
@@ -438,10 +442,30 @@ const directMessageSchema = z.object({
     mediaType: z.string().min(1),
     bytes: nonNegativeSafeInteger,
   })).optional(),
+  card: z.union([
+    z.object({
+      kind: z.literal('meeting'),
+      title: z.string().min(1),
+      beginTime: z.string().optional(),
+      endTime: z.string().optional(),
+      url: z.string().optional(),
+      location: z.string().optional(),
+      status: z.string().optional(),
+      attendees: z.array(z.string()).optional(),
+    }),
+    z.object({
+      kind: z.literal('document'),
+      title: z.string().min(1),
+      documentType: z.string().optional(),
+      url: z.string().optional(),
+      modifiedAt: z.string().optional(),
+      owner: z.string().optional(),
+    }),
+  ]).optional(),
   createdAt: nonNegativeSafeInteger,
-}).refine(record => record.text.trim() !== '' || (record.files?.length ?? 0) > 0, {
-  message: 'direct message must include text or files',
-}) as z.ZodType<DirectMessageRecord>
+}).refine(record => record.text.trim() !== '' || (record.files?.length ?? 0) > 0 || record.card !== undefined, {
+  message: 'direct message must include text, files, or a card',
+}) as unknown as z.ZodType<DirectMessageRecord>
 
 /** Durable identities, rooms, and the version-zero message table retained for on-disk compatibility. */
 export const chatroomDomainSpec = defineDomain({

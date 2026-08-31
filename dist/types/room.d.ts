@@ -5,6 +5,7 @@ import { ChatroomAuth } from './auth.js';
 import { type ChatroomAgentAction, type ChatroomAgentActionInput } from './agent-tools.js';
 import type { Config } from './config.js';
 import { type ChatroomReactionEmoji } from './reactions.js';
+import { type WecomAuthorizationState } from './wecom.js';
 import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMeetingCard, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
 /** Runtime validation failure safe to return to a browser. */
 export declare class ChatroomInputError extends Error {
@@ -35,8 +36,10 @@ export declare class ChatroomRuntime {
     private readonly threadStates;
     private readonly notificationClients;
     private readonly ignoredAssistantMessageIds;
+    private readonly aiContextStartWrites;
     private readonly chatroomAgentContexts;
     private readonly wecom;
+    private readonly sessionWecomParticipants;
     private ready;
     private stopping;
     constructor(ctx: Context, config: Config);
@@ -114,6 +117,14 @@ export declare class ChatroomRuntime {
     renewRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Create an Enterprise WeChat online meeting and post it to the room as a durable card. */
     createQuickMeeting(roomId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard>;
+    /** Create an Enterprise WeChat online meeting and post it to one private conversation. */
+    createDirectQuickMeeting(conversationId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard>;
+    /** Read the current account's isolated Enterprise WeChat authorization state. */
+    wecomAuthorizationState(identity: ChatroomIdentity): Promise<WecomAuthorizationState>;
+    /** Start the current account's Enterprise WeChat QR authorization. */
+    startWecomAuthorization(identity: ChatroomIdentity): Promise<WecomAuthorizationState>;
+    /** Read the current account's Enterprise WeChat authorization QR image. */
+    wecomAuthorizationQr(identity: ChatroomIdentity): Promise<Buffer>;
     /** Rename one room as its owner or an administrator. */
     renameRoom(roomId: string, title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Promote or demote one room member; only the owner controls administrators. */
@@ -157,6 +168,7 @@ export declare class ChatroomRuntime {
         conversation: ChatroomDirectConversation;
         message: ChatroomDirectMessage;
     }>;
+    private publishDirectMessage;
     /** Create or reopen a branch rooted at one native room message. */
     openThread(roomId: string, identity: ChatroomIdentity, root: ChatroomThreadRoot): Promise<ChatroomThreadResponse>;
     /** Append one branch message immediately and evaluate optional automatic responses separately. */
@@ -199,6 +211,8 @@ export declare class ChatroomRuntime {
     private acquireAgent;
     private setupAgentContext;
     private augmentChatroomAgentContext;
+    private createMeetingCard;
+    private appendDirectCard;
     private appendRoomCard;
     /** Ensure one shared Session uses native Workspace navigation. */
     private attachWorkspace;
@@ -215,6 +229,7 @@ export declare class ChatroomRuntime {
     private defaultAutomationSettings;
     private resolvedAutomationSettings;
     private touchRoom;
+    private captureAiContextStart;
     private syncArchive;
     private archiveRoom;
     private archiveThread;

@@ -36,6 +36,7 @@ import type {
   ChatroomThreadResponse,
   ChatroomThreadPromptRequest,
   ChatroomThreadRoot,
+  ChatroomWecomAuthorizationState,
 } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
 import { mentionsName } from '../message.js'
@@ -115,6 +116,8 @@ export interface ChatroomView {
   readonly sessionControlError: string | undefined
   readonly wecomBusy: boolean
   readonly wecomError: string | undefined
+  readonly wecomAuthorization?: ChatroomWecomAuthorizationState | undefined
+  readonly wecomAuthorizationOpen?: boolean
   readonly thread: ChatroomThread | undefined
   readonly threadMessages: readonly ChatroomThreadMessage[]
   readonly threadReply: ChatroomReplyReference | undefined
@@ -185,6 +188,8 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     sessionControlError: undefined,
     wecomBusy: false,
     wecomError: undefined,
+    wecomAuthorization: undefined,
+    wecomAuthorizationOpen: false,
     thread: undefined,
     threadMessages: [],
     threadReply: undefined,
@@ -229,6 +234,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private activeNativeSession: { readonly id: string; readonly title: string; readonly shareable: boolean } | undefined
   private roomEnsure: { readonly sessionId: string; readonly promise: Promise<void> } | undefined
   private readonly pendingAutoTriggerWrites = new Map<string, Promise<boolean>>()
+  private pendingQuickMeetingTarget: { roomId: string } | { directConversationId: string } | undefined
 
   constructor(
     private readonly openSession: (sessionId: string) => boolean = () => false,
@@ -1141,7 +1147,6 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       })
       this.applyRoomManagement(result)
       this.set({ sessionControlBusy: false })
-      this.selectAndOpen(result.room)
       return true
     } catch (error) {
       this.set({ sessionControlBusy: false, sessionControlError: errorMessage(error) })
@@ -1151,13 +1156,75 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   /** Create a default Enterprise WeChat meeting and publish its card to the room. */
   quickMeeting = async (roomId: string): Promise<boolean> => {
+    return this.createQuickMeeting({ roomId })
+  }
+
+  /** Create a default Enterprise WeChat meeting and publish its card to a direct conversation. */
+  quickDirectMeeting = async (directConversationId: string): Promise<boolean> => {
+    return this.createQuickMeeting({ directConversationId })
+  }
+
+  /** Refresh authorization for the current platform account. */
+  loadWecomAuthorization = async (): Promise<ChatroomWecomAuthorizationState | undefined> => {
+    try {
+      const state = await requestJson<ChatroomWecomAuthorizationState>(`${CHATROOM_API_PREFIX}/wecom/auth`)
+      this.set({ wecomAuthorization: state, wecomError: state.error })
+      const target = state.status === 'authorized' ? this.pendingQuickMeetingTarget : undefined
+      if (target !== undefined) {
+        this.pendingQuickMeetingTarget = undefined
+        await this.publishQuickMeeting(target)
+      }
+      return state
+    } catch (error) {
+      this.set({ wecomError: errorMessage(error) })
+      return undefined
+    }
+  }
+
+  /** Start the current account's device-local Enterprise WeChat QR authorization. */
+  startWecomAuthorization = async (): Promise<boolean> => {
     if (this.snapshot.wecomBusy) return false
+    this.set({ wecomBusy: true, wecomError: undefined })
+    try {
+      const state = await requestJson<ChatroomWecomAuthorizationState>(`${CHATROOM_API_PREFIX}/wecom/auth`, {
+        method: 'POST',
+      })
+      this.set({ wecomBusy: false, wecomAuthorization: state, wecomAuthorizationOpen: true })
+      return true
+    } catch (error) {
+      this.set({ wecomBusy: false, wecomError: errorMessage(error) })
+      return false
+    }
+  }
+
+  /** Dismiss the Enterprise WeChat authorization dialog without cancelling the CLI login. */
+  closeWecomAuthorization = (): void => {
+    this.pendingQuickMeetingTarget = undefined
+    this.set({ wecomAuthorizationOpen: false, wecomError: undefined })
+  }
+
+  private async createQuickMeeting(target: { roomId: string } | { directConversationId: string }): Promise<boolean> {
+    if (this.snapshot.wecomBusy) return false
+    this.set({ wecomBusy: true, wecomError: undefined })
+    const authorization = await this.loadWecomAuthorization()
+    if (authorization?.status !== 'authorized') {
+      this.pendingQuickMeetingTarget = target
+      this.set({ wecomBusy: false, wecomAuthorizationOpen: true })
+      if (authorization?.enabled === true && authorization.status === 'unauthorized') {
+        await this.startWecomAuthorization()
+      }
+      return false
+    }
+    return this.publishQuickMeeting(target)
+  }
+
+  private async publishQuickMeeting(target: { roomId: string } | { directConversationId: string }): Promise<boolean> {
     this.set({ wecomBusy: true, wecomError: undefined })
     try {
       await requestJson<ChatroomQuickMeetingResponse>(`${CHATROOM_API_PREFIX}/wecom/quick-meeting`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId }),
+        body: JSON.stringify(target),
       })
       this.set({ wecomBusy: false })
       return true

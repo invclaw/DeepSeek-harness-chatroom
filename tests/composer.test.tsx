@@ -6,6 +6,7 @@ import type { ComponentProps } from 'react'
 import type { ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
   ChatroomComposerAttachments,
+  ChatroomComposerDock,
   ChatroomSessionControls,
   type ChatroomComposerAttachmentsProps,
 } from '../src/client/ChatroomComposer.js'
@@ -66,5 +67,36 @@ describe('chatroom composer attachments', () => {
     expect(stopRoomSession).toHaveBeenCalledWith('lobby')
     expect(newRoomSession).toHaveBeenCalledWith('lobby')
     expect(quickMeeting).toHaveBeenCalledWith('lobby')
+  })
+
+  it('shows the AI-context divider without replacing the retained room transcript', () => {
+    render(<ChatroomComposerDock {...{
+      sessionId: 'chatroom-v1-lobby',
+      input: { draft: '', imageIds: [] },
+      inputActions: { setDraft: vi.fn() },
+      useChatroom: (selector: (snapshot: ChatroomView) => unknown) => selector({
+        composerRoomId: undefined, pendingFiles: [], composerError: undefined,
+      } as unknown as ChatroomView),
+      resolveTarget: () => ({ kind: 'room', room: { id: 'lobby', aiContextResetSeq: 9 } }),
+      addFiles: vi.fn(), removeFile: vi.fn(), clearReply: vi.fn(), sendFiles: vi.fn(),
+    } as unknown as ComponentProps<typeof ChatroomComposerDock>} />)
+    expect(screen.getByText('新的 AI 会话')).not.toBeNull()
+    expect(screen.getByText('此前群聊消息继续保留')).not.toBeNull()
+  })
+
+  it('moves the AI-context divider into the transcript after the first new message', () => {
+    const { container } = render(<ChatroomComposerDock {...{
+      sessionId: 'chatroom-v1-lobby',
+      input: { draft: '', imageIds: [] },
+      inputActions: { setDraft: vi.fn() },
+      useChatroom: (selector: (snapshot: ChatroomView) => unknown) => selector({
+        composerRoomId: undefined, pendingFiles: [], composerError: undefined,
+      } as unknown as ChatroomView),
+      resolveTarget: () => ({
+        kind: 'room', room: { id: 'lobby', aiContextResetSeq: 9, aiContextStartSeq: 10 },
+      }),
+      addFiles: vi.fn(), removeFile: vi.fn(), clearReply: vi.fn(), sendFiles: vi.fn(),
+    } as unknown as ComponentProps<typeof ChatroomComposerDock>} />)
+    expect(container.firstChild).toBeNull()
   })
 })
