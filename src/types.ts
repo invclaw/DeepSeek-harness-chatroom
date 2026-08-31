@@ -84,6 +84,8 @@ export interface ChatroomAutomationOverview {
   readonly canManage: boolean
   readonly provider: string
   readonly model: string
+  readonly meetingSummaryProvider: string
+  readonly meetingSummaryModel: string
   readonly mainAgentPrompt: string
   readonly controllerPrompt: string
   readonly models: readonly ChatroomAutomationModel[]
@@ -233,6 +235,8 @@ export type ChatroomExternalCard = ChatroomMeetingCard | ChatroomDocumentCard
 /** Scheduled Enterprise WeChat meeting rendered as a native room card. */
 export interface ChatroomMeetingCard {
   readonly kind: 'meeting'
+  /** Plugin-owned public identifier used to resolve live status without exposing the provider id. */
+  readonly id?: string
   readonly title: string
   readonly beginTime?: string
   readonly endTime?: string
@@ -258,12 +262,29 @@ export interface ChatroomQuickMeetingRequest {
   readonly directConversationId?: string
 }
 
-/** Current account's isolated Enterprise WeChat authorization state. */
+/** Deployment-wide Enterprise WeChat authorization state. */
 export interface ChatroomWecomAuthorizationState {
   readonly enabled: boolean
   readonly status: 'authorized' | 'unauthorized' | 'pending'
   readonly qrAvailable: boolean
+  readonly canManage: boolean
   readonly error?: string
+}
+
+/** Durable state and AI summary for one Enterprise WeChat meeting. */
+export interface ChatroomMeetingSummary {
+  readonly id: string
+  readonly conversationKind: 'room' | 'direct'
+  readonly conversationId: string
+  readonly title: string
+  readonly status: string
+  readonly summaryStatus: 'pending' | 'completed' | 'failed'
+  readonly beginTime?: string
+  readonly endTime?: string
+  readonly summary?: string
+  readonly summaryError?: string
+  readonly endedAt?: number
+  readonly updatedAt: number
 }
 
 /** Result of creating and posting a quick Enterprise WeChat meeting. */

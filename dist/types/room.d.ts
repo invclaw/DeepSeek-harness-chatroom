@@ -6,7 +6,7 @@ import { type ChatroomAgentAction, type ChatroomAgentActionInput } from './agent
 import type { Config } from './config.js';
 import { type ChatroomReactionEmoji } from './reactions.js';
 import { type WecomAuthorizationState } from './wecom.js';
-import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMeetingCard, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
+import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMeetingCard, ChatroomMeetingSummary, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
 /** Runtime validation failure safe to return to a browser. */
 export declare class ChatroomInputError extends Error {
 }
@@ -39,7 +39,8 @@ export declare class ChatroomRuntime {
     private readonly aiContextStartWrites;
     private readonly chatroomAgentContexts;
     private readonly wecom;
-    private readonly sessionWecomParticipants;
+    private meetingPollTimer;
+    private meetingPoll;
     private ready;
     private stopping;
     constructor(ctx: Context, config: Config);
@@ -52,7 +53,7 @@ export declare class ChatroomRuntime {
     /** Global automatic-response settings and the available controller-model catalog. */
     automationOverview(canManage: boolean): Promise<ChatroomAutomationOverview>;
     /** Validate and persist the controller model plus both chatroom prompt roles. */
-    updateAutomationSettings(provider: string, model: string, mainAgentPrompt: string, controllerPrompt: string): Promise<void>;
+    updateAutomationSettings(provider: string, model: string, mainAgentPrompt: string, controllerPrompt: string, meetingSummaryProvider?: string, meetingSummaryModel?: string): Promise<void>;
     /** Current member roster for one room-management response. */
     membersForRoom(roomId: string): readonly ChatroomMember[];
     /** Active platform accounts that a room manager may add to one room. */
@@ -119,12 +120,26 @@ export declare class ChatroomRuntime {
     createQuickMeeting(roomId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard>;
     /** Create an Enterprise WeChat online meeting and post it to one private conversation. */
     createDirectQuickMeeting(conversationId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard>;
-    /** Read the current account's isolated Enterprise WeChat authorization state. */
-    wecomAuthorizationState(identity: ChatroomIdentity): Promise<WecomAuthorizationState>;
-    /** Start the current account's Enterprise WeChat QR authorization. */
-    startWecomAuthorization(identity: ChatroomIdentity): Promise<WecomAuthorizationState>;
-    /** Read the current account's Enterprise WeChat authorization QR image. */
+    /** Read the deployment-wide Enterprise WeChat authorization state. */
+    wecomAuthorizationState(identity: ChatroomIdentity): Promise<WecomAuthorizationState & {
+        readonly canManage: boolean;
+    }>;
+    /** Start deployment-wide Enterprise WeChat QR authorization. */
+    startWecomAuthorization(identity: ChatroomIdentity): Promise<WecomAuthorizationState & {
+        readonly canManage: boolean;
+    }>;
+    /** Read the deployment-wide Enterprise WeChat authorization QR image. */
     wecomAuthorizationQr(identity: ChatroomIdentity): Promise<Buffer>;
+    /** Remove the shared Enterprise WeChat authorization as a settings administrator. */
+    disconnectWecomAuthorization(identity: ChatroomIdentity): Promise<WecomAuthorizationState & {
+        readonly canManage: boolean;
+    }>;
+    /** Resolve one meeting status or summary after enforcing conversation visibility. */
+    meetingSummary(id: string, identity: ChatroomIdentity): ChatroomMeetingSummary;
+    /** List completed meeting summaries visible to one authenticated participant. */
+    meetingSummaries(identity: ChatroomIdentity): readonly ChatroomMeetingSummary[];
+    /** Poll tracked meetings immediately; used by the scheduler and operational checks. */
+    synchronizeMeetings(): Promise<void>;
     /** Rename one room as its owner or an administrator. */
     renameRoom(roomId: string, title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Promote or demote one room member; only the owner controls administrators. */
@@ -212,6 +227,14 @@ export declare class ChatroomRuntime {
     private setupAgentContext;
     private augmentChatroomAgentContext;
     private createMeetingCard;
+    private prepareAgentWecomCard;
+    private trackMeeting;
+    private scheduleMeetingPoll;
+    private pollMeetings;
+    private pollMeeting;
+    private generateMeetingSummary;
+    private postMeetingSummary;
+    private canReadMeeting;
     private appendDirectCard;
     private appendRoomCard;
     /** Ensure one shared Session uses native Workspace navigation. */
@@ -260,6 +283,8 @@ export declare class ChatroomRuntime {
     private requireDirectMessages;
     private requireThreadState;
     private assertRoomManager;
+    private canManageWecom;
+    private assertCanManageWecom;
     private assertRoomInviter;
     private assertRoomMember;
     private isRoomMember;

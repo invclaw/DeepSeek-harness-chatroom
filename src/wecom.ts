@@ -1,9 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { mkdir, readFile, stat, unlink } from 'node:fs/promises'
+import { cp, mkdir, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, parse, resolve } from 'node:path'
 import type { Config } from './config.js'
 import type { ChatroomDocumentCard, ChatroomExternalCard, ChatroomMeetingCard } from './types.js'
 
@@ -27,6 +26,7 @@ export interface WecomAuthorizationState {
   readonly enabled: boolean
   readonly status: 'authorized' | 'unauthorized' | 'pending'
   readonly qrAvailable: boolean
+  readonly canManage?: boolean
   readonly error?: string
 }
 
@@ -132,130 +132,196 @@ export class WecomCliClient {
   }
 }
 
-/** Account-scoped Enterprise WeChat CLI clients and QR authorization processes. */
+/** Deployment-scoped Enterprise WeChat CLI client and QR authorization process. */
 export class WecomCliManager {
-  private readonly clients = new Map<string, WecomCliClient>()
-  private readonly authorizations = new Map<string, ChildProcess>()
-  private readonly authorizationErrors = new Map<string, string>()
+  private readonly sharedClient: WecomCliClient
+  private authorization: ChildProcess | undefined
+  private authorizationError: string | undefined
+  private sharedDirectoryReady: Promise<void> | undefined
 
-  constructor(private readonly config: Config) {}
-
-  /** Return the isolated CLI client owned by one chatroom account. */
-  client(participantId: string): WecomCliClient {
-    const existing = this.clients.get(participantId)
-    if (existing !== undefined) return existing
-    const client = new WecomCliClient(this.config, this.accountDirectory(participantId))
-    this.clients.set(participantId, client)
-    return client
+  constructor(private readonly config: Config) {
+    this.sharedClient = new WecomCliClient(config, this.sharedDirectory())
   }
 
-  /** Read one account's current authorization state without exposing credentials. */
-  async authorizationState(participantId: string): Promise<WecomAuthorizationState> {
+  /** Return the one Enterprise WeChat client shared by this deployment. */
+  client(): WecomCliClient {
+    return this.sharedClient
+  }
+
+  /** Read the deployment authorization state without exposing credentials. */
+  async authorizationState(): Promise<WecomAuthorizationState> {
     if (!this.config.wecomEnabled) {
       return { enabled: false, status: 'unauthorized', qrAvailable: false, error: '企业微信能力已关闭。' }
     }
-    const qrAvailable = await fileExists(this.qrPath(participantId))
+    await this.ensureSharedDirectory()
+    const qrAvailable = await fileExists(this.qrPath())
     try {
-      const status = String(await this.client(participantId).authStatus()).trim().toLowerCase()
+      const status = String(await this.client().authStatus()).trim().toLowerCase()
       if (status === 'authorized') {
-        this.authorizationErrors.delete(participantId)
+        this.authorizationError = undefined
         return { enabled: true, status: 'authorized', qrAvailable: false }
       }
     } catch (error) {
       if (!(error instanceof WecomCliError) || error.code !== 'unauthorized') {
         return {
           enabled: true,
-          status: this.authorizations.has(participantId) ? 'pending' : 'unauthorized',
+          status: this.authorization === undefined ? 'unauthorized' : 'pending',
           qrAvailable,
           error: error instanceof Error ? error.message : String(error),
         }
       }
     }
-    const pending = this.authorizations.has(participantId)
-    const authorizationError = this.authorizationErrors.get(participantId)
+    const pending = this.authorization !== undefined
     return {
       enabled: true,
       status: pending ? 'pending' : 'unauthorized',
       qrAvailable,
-      ...(authorizationError === undefined ? {} : { error: authorizationError }),
+      ...(this.authorizationError === undefined ? {} : { error: this.authorizationError }),
     }
   }
 
-  /** Start an account-local non-browser authorization and wait until its QR image exists. */
-  async startAuthorization(participantId: string): Promise<WecomAuthorizationState> {
+  /** Start deployment-wide non-browser authorization and wait until its QR image exists. */
+  async startAuthorization(restart = false): Promise<WecomAuthorizationState> {
     if (!this.config.wecomEnabled) throw new WecomCliError('企业微信能力已关闭。', 'disabled')
-    const current = await this.authorizationState(participantId)
+    const current = await this.authorizationState()
     if (current.status === 'authorized') return current
-    if (!this.authorizations.has(participantId)) await this.spawnAuthorization(participantId)
+    if (restart && this.authorization !== undefined) this.stop()
+    if (this.authorization === undefined) await this.spawnAuthorization()
     const deadline = Date.now() + 15_000
     while (Date.now() < deadline) {
-      if (await fileExists(this.qrPath(participantId))) return await this.authorizationState(participantId)
-      if (!this.authorizations.has(participantId)) break
+      if (await fileExists(this.qrPath())) return await this.authorizationState()
+      if (this.authorization === undefined) break
       await delay(150)
     }
-    const state = await this.authorizationState(participantId)
+    const state = await this.authorizationState()
     if (state.qrAvailable) return state
     throw new WecomCliError(state.error ?? '企业微信登录二维码生成超时。', 'timeout')
   }
 
-  /** Read the current account's QR image. */
-  async authorizationQr(participantId: string): Promise<Buffer> {
+  /** Read the deployment authorization QR image. */
+  async authorizationQr(): Promise<Buffer> {
     try {
-      return await readFile(this.qrPath(participantId))
+      return await readFile(this.qrPath())
     } catch {
       throw new WecomCliError('企业微信登录二维码尚未生成。', 'failed')
     }
   }
 
-  /** Stop outstanding authorization processes during plugin teardown. */
-  stop(): void {
-    for (const child of this.authorizations.values()) child.kill('SIGTERM')
-    this.authorizations.clear()
+  /** Remove the deployment-wide authorization and stop an unfinished QR login. */
+  async disconnectAuthorization(): Promise<WecomAuthorizationState> {
+    if (!this.config.wecomEnabled) throw new WecomCliError('企业微信能力已关闭。', 'disabled')
+    this.stop()
+    await this.ensureSharedDirectory()
+    const directory = this.sharedDirectory()
+    const resolved = resolve(directory)
+    if (resolved === parse(resolved).root || resolved === resolve(homedir())) {
+      throw new WecomCliError('企业微信授权目录配置过于宽泛，拒绝清除凭据。', 'failed')
+    }
+    await rm(directory, { recursive: true, force: true })
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    await writeFile(this.migrationMarkerPath(), 'shared\n', { mode: 0o600 })
+    this.authorizationError = undefined
+    return await this.authorizationState()
   }
 
-  private async spawnAuthorization(participantId: string): Promise<void> {
-    const directory = this.accountDirectory(participantId)
+  /** Stop outstanding authorization processes during plugin teardown. */
+  stop(): void {
+    this.authorization?.kill('SIGTERM')
+    this.authorization = undefined
+  }
+
+  private async spawnAuthorization(): Promise<void> {
+    await this.ensureSharedDirectory()
+    const directory = this.sharedDirectory()
     await mkdir(directory, { recursive: true, mode: 0o700 })
     await mkdir(join(directory, 'tmp'), { recursive: true, mode: 0o700 })
-    await unlink(this.qrPath(participantId)).catch((error: NodeJS.ErrnoException) => {
+    await unlink(this.qrPath()).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
     })
-    this.authorizationErrors.delete(participantId)
+    this.authorizationError = undefined
     const cli = this.config.wecomCliPath || require.resolve('@wecom/cli/bin/wecom.js')
     const child = spawn(process.execPath, [cli, 'auth', 'init', '--noninteractive', '--no-browser', '--output-qrcode', 'auth-qrcode.png'], {
       cwd: directory,
       env: { ...process.env, WECOM_CLI_CONFIG_DIR: directory, WECOM_CLI_TMP_DIR: join(directory, 'tmp') },
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     })
-    this.authorizations.set(participantId, child)
+    this.authorization = child
     let diagnostic = ''
+    child.stdout?.on('data', (chunk: Buffer) => { diagnostic = `${diagnostic}${chunk.toString('utf8')}`.slice(-4_096) })
     child.stderr?.on('data', (chunk: Buffer) => { diagnostic = `${diagnostic}${chunk.toString('utf8')}`.slice(-4_096) })
     child.once('error', (error) => {
-      this.authorizationErrors.set(participantId, `无法启动企业微信授权：${error.message}`)
-      this.authorizations.delete(participantId)
+      if (this.authorization !== child) return
+      this.authorizationError = `无法启动企业微信授权：${error.message}`
+      this.authorization = undefined
     })
     child.once('close', (code) => {
+      if (this.authorization !== child) return
       if (code !== 0 && code !== null) {
-        this.authorizationErrors.set(participantId, summarizeFailure(diagnostic || `授权进程退出码 ${String(code)}`))
+        this.authorizationError = summarizeFailure(diagnostic || `授权进程退出码 ${String(code)}`)
       }
-      this.authorizations.delete(participantId)
+      this.authorization = undefined
     })
   }
 
-  private accountDirectory(participantId: string): string {
+  private sharedDirectory(): string {
     const configured = this.config.wecomCliConfigDirectory
-    const base = configured !== ''
-      ? configured
-      : this.config.dataDirectory !== undefined && this.config.dataDirectory !== '' && this.config.dataDirectory !== ':memory:'
-        ? join(this.config.dataDirectory, 'wecom-cli')
-        : join(homedir(), '.dsh', 'chatroom', 'wecom-cli')
-    const account = createHash('sha256').update(participantId).digest('hex').slice(0, 32)
-    return join(base, 'accounts', account)
+    if (configured !== '') return configured
+    const base = this.config.dataDirectory !== undefined && this.config.dataDirectory !== '' && this.config.dataDirectory !== ':memory:'
+      ? join(this.config.dataDirectory, 'wecom-cli')
+      : join(homedir(), '.dsh', 'chatroom', 'wecom-cli')
+    return join(base, 'shared')
   }
 
-  private qrPath(participantId: string): string {
-    return join(this.accountDirectory(participantId), 'auth-qrcode.png')
+  private qrPath(): string {
+    return join(this.sharedDirectory(), 'auth-qrcode.png')
+  }
+
+  private ensureSharedDirectory(): Promise<void> {
+    const current = this.sharedDirectoryReady
+    if (current !== undefined) return current
+    const pending = this.prepareSharedDirectory()
+    this.sharedDirectoryReady = pending
+    return pending
+  }
+
+  private async prepareSharedDirectory(): Promise<void> {
+    const directory = this.sharedDirectory()
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    if (await fileExists(this.migrationMarkerPath())) return
+    if (await fileExists(join(directory, 'credentials.enc'))) {
+      await writeFile(this.migrationMarkerPath(), 'shared\n', { mode: 0o600 })
+      return
+    }
+    const legacyRoot = this.config.wecomCliConfigDirectory !== ''
+      ? join(this.config.wecomCliConfigDirectory, 'accounts')
+      : join(directory, '..', 'accounts')
+    const entries = await readdir(legacyRoot, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return []
+      throw error
+    })
+    const authorized: string[] = []
+    for (const entry of entries) {
+      if (entry.isDirectory() && await fileExists(join(legacyRoot, entry.name, 'credentials.enc'))) {
+        authorized.push(join(legacyRoot, entry.name))
+      }
+    }
+    if (authorized.length === 0) {
+      await writeFile(this.migrationMarkerPath(), 'shared\n', { mode: 0o600 })
+      return
+    }
+    if (authorized.length > 1) {
+      throw new WecomCliError('检测到多份旧企微授权，请由运维保留一份后再迁移为部署共享账号。', 'failed')
+    }
+    for (const entry of await readdir(authorized[0]!, { withFileTypes: true })) {
+      if (entry.name === 'auth-qrcode.png' || entry.name === 'tmp') continue
+      await cp(join(authorized[0]!, entry.name), join(directory, entry.name), { recursive: entry.isDirectory(), force: false })
+    }
+    await writeFile(this.migrationMarkerPath(), 'shared\n', { mode: 0o600 })
+  }
+
+  private migrationMarkerPath(): string {
+    return join(this.sharedDirectory(), '.shared-account')
   }
 }
 

@@ -1398,6 +1398,7 @@ html[data-dsh-chatroom-active] [data-dsh-chatroom-native-actions] {
 .dsh-chatroom-external-copy { display: grid; min-width: 0; gap: 3px; }
 .dsh-chatroom-external-copy small,
 .dsh-chatroom-external-copy span { overflow: hidden; color: var(--text-secondary, #6b7280); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-chatroom-external-copy small em { margin-left: 5px; border-radius: 999px; background: #e8f0ff; padding: 2px 6px; color: #356ae6; font-style: normal; font-weight: 600; }
 .dsh-chatroom-external-copy strong { overflow: hidden; color: var(--text-primary, #111827); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .dsh-chatroom-external-card > a { border-radius: 9px; background: #edf3ff; padding: 7px 10px; color: #356ae6; font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; }
 .dsh-chatroom-emoji-picker {
@@ -1855,6 +1856,7 @@ html[data-dsh-chatroom-active] [data-dsh-chatroom-native-actions] {
 
 .dsh-chatroom-wecom-account-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .dsh-chatroom-wecom-account-row > span { color: var(--text-secondary, #6b7280); }
+.dsh-chatroom-wecom-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .dsh-chatroom-wecom-account-row button,
 .dsh-chatroom-wecom-retry {
   border: 0;
@@ -1873,6 +1875,9 @@ html[data-dsh-chatroom-active] [data-dsh-chatroom-native-actions] {
 .dsh-chatroom-wecom-auth-success > span { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 50%; background: #dcfce7; font-size: 28px; }
 .dsh-chatroom-wecom-retry { margin-top: 12px; }
 .dsh-chatroom-wecom-retry:disabled { cursor: wait; opacity: .55; }
+.dsh-chatroom-wecom-inline-qr { display: grid; justify-items: center; gap: 8px; margin-top: 16px; padding: 18px; border: 1px solid var(--border-color, #e5e7eb); border-radius: 14px; }
+.dsh-chatroom-wecom-inline-qr img { display: block; width: min(280px, 72vw); height: auto; border-radius: 12px; }
+.dsh-chatroom-wecom-inline-qr p { margin: 0; color: var(--text-secondary, #6b7280); }
 .dsh-chatroom-direct-messages .dsh-chatroom-external-card { width: min(620px, 70vw); text-align: left; }
 .dsh-chatroom-direct-composer-tools .dsh-chatroom-direct-meeting { color: var(--text-primary, #111827); font-weight: 600; }
 

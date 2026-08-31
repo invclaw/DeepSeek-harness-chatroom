@@ -117,6 +117,14 @@ export class ChatroomHttpController {
         await this.handleWecomAuthorizationQr(request, response)
         return
       }
+      if (route.endpoint === '/meetings/summaries') {
+        await this.handleMeetingSummaries(request, response)
+        return
+      }
+      if (route.endpoint.startsWith('/meetings/')) {
+        await this.handleMeetingSummary(request, response, route.endpoint.slice('/meetings/'.length))
+        return
+      }
       if (route.endpoint === '/automation') {
         await this.handleAutomation(request, response)
         return
@@ -685,16 +693,18 @@ export class ChatroomHttpController {
   }
 
   private async handleWecomAuthorization(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    if (request.method !== 'GET' && request.method !== 'POST') {
-      methodNotAllowed(response, 'GET, POST')
+    if (request.method !== 'GET' && request.method !== 'POST' && request.method !== 'DELETE') {
+      methodNotAllowed(response, 'GET, POST, DELETE')
       return
     }
-    if (request.method === 'POST') assertSameOrigin(request)
+    if (request.method !== 'GET') assertSameOrigin(request)
     const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     const state = request.method === 'POST'
       ? await this.runtime.startWecomAuthorization(identity)
-      : await this.runtime.wecomAuthorizationState(identity)
+      : request.method === 'DELETE'
+        ? await this.runtime.disconnectWecomAuthorization(identity)
+        : await this.runtime.wecomAuthorizationState(identity)
     json(response, 200, state satisfies ChatroomWecomAuthorizationState)
   }
 
@@ -713,6 +723,29 @@ export class ChatroomHttpController {
       'X-Content-Type-Options': 'nosniff',
     })
     response.end(qr)
+  }
+
+  private async handleMeetingSummary(request: IncomingMessage, response: ServerResponse, encodedId: string): Promise<void> {
+    if (request.method !== 'GET') {
+      methodNotAllowed(response, 'GET')
+      return
+    }
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    let id: string
+    try { id = decodeURIComponent(encodedId) } catch { throw new ChatroomInputError('会议编号无效。') }
+    if (id === '' || id.includes('/')) throw new ChatroomInputError('会议编号无效。')
+    json(response, 200, this.runtime.meetingSummary(id, identity))
+  }
+
+  private async handleMeetingSummaries(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'GET') {
+      methodNotAllowed(response, 'GET')
+      return
+    }
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    json(response, 200, { meetings: this.runtime.meetingSummaries(identity) })
   }
 
   private async handleAutomation(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -740,6 +773,8 @@ export class ChatroomHttpController {
       fieldString(body, 'model'),
       fieldString(body, 'mainAgentPrompt'),
       fieldString(body, 'controllerPrompt'),
+      fieldString(body, 'meetingSummaryProvider'),
+      fieldString(body, 'meetingSummaryModel'),
     )
     json(response, 200, await this.runtime.automationOverview(true) satisfies ChatroomAutomationOverview)
   }

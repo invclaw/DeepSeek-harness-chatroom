@@ -23,14 +23,15 @@ export interface ChatroomAccountPanelProps {
   adminSaveProvider(input: { id: string; label: string; enabled: boolean; issuer: string; clientId: string; clientSecret?: string; scopes: string; usernameClaim: string; displayNameClaim: string; autoCreateUsers: boolean }): Promise<boolean>
   adminDeleteProvider(providerId: string): Promise<boolean>
   loadAutomation?(): Promise<void>
-  saveAutomation?(provider: string, model: string, mainAgentPrompt: string, controllerPrompt: string): Promise<boolean>
+  saveAutomation?(provider: string, model: string, meetingSummaryProvider: string, meetingSummaryModel: string, mainAgentPrompt: string, controllerPrompt: string): Promise<boolean>
   openDirect(peerId?: string): Promise<void>
   closeDirect(): void
   sendDirect(text: string, files?: readonly File[]): Promise<boolean>
   quickDirectMeeting?(conversationId: string): Promise<boolean>
   loadWecomAuthorization?(): Promise<ChatroomView['wecomAuthorization']>
   startWecomAuthorization?(): Promise<boolean>
-  closeWecomAuthorization?(): void
+  disconnectWecomAuthorization?(): Promise<boolean>
+  rebindWecomAuthorization?(): Promise<boolean>
 }
 
 interface OidcProviderForm {
@@ -50,7 +51,6 @@ interface OidcProviderForm {
 export function ChatroomAccountPanels(props: ChatroomAccountPanelProps): JSX.Element {
   return <>
     {props.room.directOpen && <DirectPanel {...props} />}
-    {props.room.wecomAuthorizationOpen && <WecomAuthorizationDialog {...props} />}
   </>
 }
 
@@ -86,26 +86,6 @@ export function ChatroomSettingsSection(props: ChatroomSettingsSectionProps): JS
 
 function WecomAccountPanel(props: ChatroomAccountPanelProps): JSX.Element {
   const authorization = props.room.wecomAuthorization
-  return <section className="dsh-chatroom-card dsh-chatroom-wecom-account" aria-label="企业微信账号">
-    <header><div><h2>企业微信账号</h2><p>每个平台账号单独授权；会议和文档操作使用当前登录用户的企业微信身份。</p></div></header>
-    <div className="dsh-chatroom-wecom-account-row">
-      <span>{authorization?.enabled !== true
-        ? '当前服务未启用企业微信 CLI'
-        : authorization.status === 'authorized'
-          ? '已连接'
-          : authorization.status === 'pending' ? '等待扫码确认' : '尚未连接'}</span>
-      {authorization?.enabled === true && authorization.status !== 'authorized' && <button
-        type="button"
-        disabled={props.room.wecomBusy}
-        onClick={() => { void props.startWecomAuthorization?.() }}
-      >{authorization.status === 'pending' ? '查看二维码' : '扫码连接'}</button>}
-    </div>
-    {props.room.wecomError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.wecomError}</div>}
-  </section>
-}
-
-function WecomAuthorizationDialog(props: ChatroomAccountPanelProps): JSX.Element {
-  const authorization = props.room.wecomAuthorization
   const [qrRevision, setQrRevision] = useState(() => Date.now())
   useEffect(() => {
     if (authorization?.status !== 'pending') return
@@ -115,31 +95,51 @@ function WecomAuthorizationDialog(props: ChatroomAccountPanelProps): JSX.Element
   useEffect(() => {
     if (authorization?.qrAvailable === true) setQrRevision(Date.now())
   }, [authorization?.qrAvailable])
-  return <div className="dsh-chatroom-dialog-layer dsh-chatroom-wecom-auth-layer" data-testid="chatroom-wecom-auth">
-    <section className="dsh-chatroom-card dsh-chatroom-wecom-auth-card" aria-label="连接企业微信">
-      <header><div><h2>连接企业微信</h2><p>使用当前平台账号对应的企业微信扫码。凭据仅保存在服务器上的独立加密目录中。</p></div><button aria-label="关闭企业微信登录" type="button" onClick={props.closeWecomAuthorization}>×</button></header>
-      {authorization?.status === 'authorized'
-        ? <div className="dsh-chatroom-wecom-auth-success"><span aria-hidden>✓</span><strong>已连接，可以发起快速会议</strong></div>
-        : authorization?.qrAvailable === true
-          ? <><img className="dsh-chatroom-wecom-qr" src={`${CHATROOM_API_PREFIX}/wecom/auth/qr?v=${qrRevision}`} alt="企业微信登录二维码" /><p className="dsh-chatroom-panel-status">请使用企业微信扫码并在手机上确认。</p></>
-          : <div className="dsh-chatroom-panel-status">{props.room.wecomBusy ? '正在生成登录二维码…' : '等待二维码…'}</div>}
-      {authorization?.enabled === true && authorization.status !== 'authorized' && <button
-        className="dsh-chatroom-wecom-retry"
-        type="button"
-        disabled={props.room.wecomBusy}
-        onClick={() => { void props.startWecomAuthorization?.() }}
-      >重新生成二维码</button>}
-      {props.room.wecomError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.wecomError}</div>}
-    </section>
-  </div>
+  return <section className="dsh-chatroom-card dsh-chatroom-wecom-account" aria-label="企业微信账号">
+    <header><div><h2>企业微信账号</h2><p>全站共用一个企业微信授权；任何成员发起的会议和文档操作都使用这份部署账号。</p></div></header>
+    <div className="dsh-chatroom-wecom-account-row">
+      <span>{authorization?.enabled !== true
+        ? '当前服务未启用企业微信 CLI'
+        : authorization.status === 'authorized'
+          ? '已连接'
+          : authorization.status === 'pending' ? '等待扫码确认' : '尚未连接'}</span>
+      <div className="dsh-chatroom-wecom-actions">
+        {authorization?.enabled === true && authorization.canManage && authorization.status === 'authorized' && <>
+          <button type="button" disabled={props.room.wecomBusy} onClick={() => {
+            if (globalThis.confirm('解绑后，全站的快速会议和企业微信 Agent 工具都会暂停。确定解绑吗？')) {
+              void props.disconnectWecomAuthorization?.()
+            }
+          }}>解绑</button>
+          <button type="button" disabled={props.room.wecomBusy} onClick={() => {
+            if (globalThis.confirm('重新绑定会先清除当前共享授权。确定继续吗？')) {
+              void props.rebindWecomAuthorization?.()
+            }
+          }}>重新绑定</button>
+        </>}
+        {authorization?.enabled === true && authorization.canManage && authorization.status !== 'authorized' && <button
+          type="button"
+          disabled={props.room.wecomBusy}
+          onClick={() => { void props.startWecomAuthorization?.() }}
+        >{authorization.status === 'pending' ? '重新生成二维码' : '扫码连接'}</button>}
+      </div>
+    </div>
+    {authorization?.enabled === true && !authorization.canManage && authorization.status !== 'authorized'
+      && <p className="dsh-chatroom-panel-status">请联系设置管理员连接共享企业微信账号。</p>}
+    {authorization?.status === 'pending' && authorization.canManage && (authorization.qrAvailable
+      ? <div className="dsh-chatroom-wecom-inline-qr"><img src={`${CHATROOM_API_PREFIX}/wecom/auth/qr?v=${qrRevision}`} alt="企业微信登录二维码" /><p>请使用企业微信扫码并在手机上确认。全站只需绑定一次。</p></div>
+      : <div className="dsh-chatroom-panel-status">{props.room.wecomBusy ? '正在生成登录二维码…' : '等待二维码…'}</div>)}
+    {props.room.wecomError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.wecomError}</div>}
+  </section>
 }
 
 function AutomationPanel(props: ChatroomAccountPanelProps): JSX.Element {
   const overview = props.room.automationOverview
   const [selection, setSelection] = useState('')
+  const [summarySelection, setSummarySelection] = useState('')
   useEffect(() => {
     if (overview !== undefined) setSelection(modelKey(overview.provider, overview.model))
-  }, [overview?.provider, overview?.model])
+    if (overview !== undefined) setSummarySelection(modelKey(overview.meetingSummaryProvider, overview.meetingSummaryModel))
+  }, [overview?.provider, overview?.model, overview?.meetingSummaryProvider, overview?.meetingSummaryModel])
   if (props.room.automationBusy && overview === undefined) {
     return <section className="dsh-chatroom-card dsh-chatroom-automation-card"><div className="dsh-chatroom-panel-status">正在加载 AI 自动响应设置…</div></section>
   }
@@ -157,6 +157,11 @@ function AutomationPanel(props: ChatroomAccountPanelProps): JSX.Element {
         disabled={!overview.canManage || props.room.automationBusy}
         onChange={event => { setSelection(event.target.value) }}
       >{overview.models.map(model => <option key={modelKey(model.provider, model.model)} value={modelKey(model.provider, model.model)}>{model.label}</option>)}</select></label>
+      <label>会议总结模型<select
+        value={summarySelection}
+        disabled={!overview.canManage || props.room.automationBusy}
+        onChange={event => { setSummarySelection(event.target.value) }}
+      >{overview.models.map(model => <option key={`summary:${modelKey(model.provider, model.model)}`} value={modelKey(model.provider, model.model)}>{model.label}</option>)}</select></label>
       {overview.canManage && <button
         type="button"
         disabled={props.room.automationBusy || selection === modelKey(overview.provider, overview.model)}
@@ -165,11 +170,28 @@ function AutomationPanel(props: ChatroomAccountPanelProps): JSX.Element {
           if (model !== undefined) void props.saveAutomation?.(
             model.provider,
             model.model,
+            overview.meetingSummaryProvider,
+            overview.meetingSummaryModel,
             overview.mainAgentPrompt,
             overview.controllerPrompt,
           )
         }}
       >保存判断模型</button>}
+      {overview.canManage && <button
+        type="button"
+        disabled={props.room.automationBusy || summarySelection === modelKey(overview.meetingSummaryProvider, overview.meetingSummaryModel)}
+        onClick={() => {
+          const model = overview.models.find(item => modelKey(item.provider, item.model) === summarySelection)
+          if (model !== undefined) void props.saveAutomation?.(
+            overview.provider,
+            overview.model,
+            model.provider,
+            model.model,
+            overview.mainAgentPrompt,
+            overview.controllerPrompt,
+          )
+        }}
+      >保存会议总结模型</button>}
       {!overview.canManage && <small>只有超级管理员可以修改判断模型。</small>}
     </div>
     {props.room.automationError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.automationError}</div>}
@@ -207,6 +229,8 @@ function PromptPanel(props: ChatroomAccountPanelProps): JSX.Element | null {
             onClick={() => { void props.saveAutomation?.(
               overview.provider,
               overview.model,
+              overview.meetingSummaryProvider,
+              overview.meetingSummaryModel,
               mainAgentPrompt,
               controllerPrompt,
             ) }}

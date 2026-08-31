@@ -56,4 +56,32 @@ describe('ChatArchive', () => {
     expect(() => archive.readBlob('../chatroom.sqlite')).toThrow('invalid chatroom blob key')
     archive.close()
   })
+
+  it('persists meeting lifecycle state for status cards and external summary consumers', async () => {
+    const archive = await openChatArchive(':memory:')
+    archive.upsertMeeting({
+      id: 'public-meeting',
+      conversationKind: 'room',
+      conversationId: 'room-1',
+      externalMeetingId: 'provider-secret',
+      title: '周会',
+      status: 'init',
+      summaryStatus: 'pending',
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    expect(archive.pendingMeetings()).toHaveLength(1)
+    archive.upsertMeeting({
+      ...archive.meeting('public-meeting')!,
+      status: 'end',
+      summaryStatus: 'completed',
+      summary: '结论',
+      endedAt: 2,
+      summaryPostedAt: 3,
+      updatedAt: 3,
+    })
+    expect(archive.meetingSummaries()).toMatchObject([{ id: 'public-meeting', summary: '结论' }])
+    expect(archive.pendingMeetings()).toHaveLength(0)
+    archive.close()
+  })
 })

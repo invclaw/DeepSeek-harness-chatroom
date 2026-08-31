@@ -25,6 +25,8 @@ export declare class ChatroomHttpController {
     private handleQuickMeeting;
     private handleWecomAuthorization;
     private handleWecomAuthorizationQr;
+    private handleMeetingSummary;
+    private handleMeetingSummaries;
     private handleAutomation;
     private handleThreadOpen;
     private handleThreadPrompt;

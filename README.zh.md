@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.3.3" src="https://img.shields.io/badge/version-1.3.3-4f6bff">
+    <img alt="版本 1.4.0" src="https://img.shields.io/badge/version-1.4.0-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -84,8 +84,8 @@
 ### 企业微信协作
 
 - 集成官方 [`@wecom/cli`](https://github.com/WecomTeam/wecom-cli)，覆盖日程增删改查、参与人/闲忙/会议室，会议创建取消更新、列表详情、纪要与转写，文档搜索与权限，以及在线表格、智能表格和智能文档能力。
-- Agent 使用 `wecom_schema` 读取官方运行时参数定义，再通过 `wecom_action` 执行动作；每次执行都绑定当前发起消息的平台用户及其独立企业微信授权。人员先通过通讯录解析，不猜测或展示企业内部 ID。CLI 未授权或单次调用失败只影响对应操作，不影响插件和 Harness 启动。
-- 群聊和私聊输入框提供“快速会议”，用当前登录用户隔离的企业微信授权创建默认 60 分钟在线会议并立即发到当前会话；Solo 不显示该入口。官方 CLI 未返回结构化真人 `userid` 时不虚构参与人，按其可选参与人 schema 直接创建并发布入会链接。会议与文档结果以原生卡片展示标题、时间、参与人、创建者和打开链接，而不是退化成纯文本。
+- Agent 使用 `wecom_schema` 读取官方运行时参数定义，再通过 `wecom_action` 执行动作；所有操作统一使用设置页维护的一份部署级企业微信授权。人员先通过通讯录解析，不猜测或展示企业内部 ID。CLI 未授权或单次调用失败只影响对应操作，不影响插件和 Harness 启动。
+- 群聊和私聊输入框提供“快速会议”，用共享企业微信账号创建默认 60 分钟在线会议并立即发到当前会话；Solo 不显示该入口。会议卡片会从未开始、进行中自动更新到已结束；群会议结束后，由设置页选择的总结模型根据可信会议元数据和官方纪要生成总结并发回原群。会议与文档结果以原生卡片展示标题、时间、参与人、创建者、状态和打开链接，而不是退化成纯文本。
 
 ### 账号、SSO 与私聊
 
@@ -104,7 +104,8 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
-- **1.3.3** — 统一群聊、Solo 与私聊的全宽输入体验，把 AI 上下文重置分割线持久保留在准确的消息位置，并加入按平台账号隔离的企业微信扫码授权；快速会议兼容官方 CLI 不提供结构化真人用户标识的身份响应。
+- **1.4.0** — 把逐用户企微授权收敛为设置页维护的一份部署级共享账号，加入解绑/重新绑定、会议状态跟踪、群会议结束后的可配置 AI 总结，以及经过成员权限过滤的会议总结接口。
+- **1.3.3** — 统一群聊、Solo 与私聊的全宽输入体验，把 AI 上下文重置分割线持久保留在准确的消息位置，并加入企业微信扫码授权；快速会议兼容官方 CLI 不提供结构化真人用户标识的身份响应。
 - **1.3.2** — 开启新的 AI 会话时保留群聊完整历史，并从后续模型请求中排除分界点之前的用户、助手和工具结果消息。
 - **1.3.1** — 优化分支导航：收近分支标记并移除父群左侧边条；把设置导航中的通用齿轮替换为语义化群组/账号图标并保留安全降级；新增布局与设置导航的浏览器回归覆盖。
 - **1.3.0** — 加入群聊“停止 / 新会话”控制，接入官方 wecom-cli 的完整 schema 驱动 Agent 工具、快速会议，以及会议/文档原生卡片；企微鉴权和调用失败继续与 Harness 启动隔离。
@@ -198,6 +199,7 @@ pnpm dsh --profile web
     wecomQuickMeetingDurationMinutes: !!js Number(process.env.DSH_CHATROOM_WECOM_QUICK_MEETING_MINUTES ?? 60)
     wecomQuickMeetingSubject: !!js process.env.DSH_CHATROOM_WECOM_QUICK_MEETING_SUBJECT ?? '快速会议'
     wecomTimeZone: !!js process.env.DSH_CHATROOM_WECOM_TIMEZONE ?? 'Asia/Shanghai'
+    wecomMeetingPollIntervalMs: !!js Number(process.env.DSH_CHATROOM_WECOM_MEETING_POLL_INTERVAL_MS ?? 30000)
 ```
 
 需要调整时，在 Web profile 的 `cordis.patch.yml` 覆盖配置：
@@ -247,11 +249,18 @@ pnpm dsh --profile web
     wecomQuickMeetingDurationMinutes: 60
     wecomQuickMeetingSubject: 快速会议
     wecomTimeZone: Asia/Shanghai
+    wecomMeetingPollIntervalMs: 30000
 ```
 
 ### 企业微信授权
 
-依赖会随插件一起安装，不需要全局安装 CLI。每个平台用户首次点击群聊或私聊的“快速会议”时，插件会在页面中生成二维码；用户用自己的企业微信扫码并确认一次即可。授权凭据由官方 CLI 加密，并按平台参与者 ID 的哈希写入 `wecomCliConfigDirectory/accounts/`（未配置时写入聊天数据目录的 `wecom-cli/accounts/`），不同用户互不可见；容器部署应把该父目录放在持久卷。未授权时只有当前用户的快速会议或 Agent 企微工具暂停，普通群聊和 Agent 功能继续运行。
+依赖会随插件一起安装，不需要全局安装 CLI。设置管理员在“设置 → 群聊与账号”扫码一次，全站即共用这一份企业微信账号；同一面板支持解绑和重新绑定。官方 CLI 加密凭据直接写入 `wecomCliConfigDirectory`（未配置时写入聊天数据目录的 `wecom-cli/shared/`），容器部署必须持久化该目录。旧版 `accounts/` 目录中只有一份有效授权时会自动迁移。未授权时快速会议和 Agent 企微工具暂停，普通群聊和 Agent 功能继续运行。
+
+### 会议状态与总结接口
+
+插件每隔 `wecomMeetingPollIntervalMs` 刷新仍在进行的会议。群会议结束后只生成一次总结并追加到原群；私聊会议的总结可查询，但不会广播到无关群聊。“设置 → 群聊与账号 → 会议总结模型”选择后续总结使用的模型，模型只接收经过筛选的会议字段和企业微信官方纪要。
+
+已认证客户端可通过 `GET /plugins/deepseek-harness-chatroom/api/meetings/:id` 查询单场会议，通过 `GET /plugins/deepseek-harness-chatroom/api/meetings/summaries` 列出已完成总结。每条记录包含插件公开会议 ID、来源会话类型/ID、生命周期与总结状态、时间和总结正文；响应不会暴露企微内部会议 ID，调用者必须是原群或原私聊成员。
 
 `authSecret` 用于加密 OIDC Client Secret，必须稳定保存在 Git 之外。本地密码使用带随机盐的 scrypt。第一次密码注册必须填写 `authBootstrapToken`，该账号会成为初始超级管理员；后续注册遵循“系统管理”里的动态策略。登录失败有内存限流，停用账号会撤销其全部会话，修改密码会轮换当前会话并撤销旧会话。认证 Cookie 是随机值，服务端只保存 SHA-256 摘要，使用 `HttpOnly`、`SameSite=Strict`、根路径，并在 `authPublicOrigin` 为 HTTPS 时加上 `Secure`。
 

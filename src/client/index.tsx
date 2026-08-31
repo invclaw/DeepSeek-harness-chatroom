@@ -220,7 +220,8 @@ export function apply(ctx: ClientContext): void {
       quickDirectMeeting: store.quickDirectMeeting,
       loadWecomAuthorization: store.loadWecomAuthorization,
       startWecomAuthorization: store.startWecomAuthorization,
-      closeWecomAuthorization: store.closeWecomAuthorization,
+      disconnectWecomAuthorization: store.disconnectWecomAuthorization,
+      rebindWecomAuthorization: store.rebindWecomAuthorization,
     }),
   }, ChatroomEntry))
 
@@ -249,7 +250,8 @@ export function apply(ctx: ClientContext): void {
       quickDirectMeeting: store.quickDirectMeeting,
       loadWecomAuthorization: store.loadWecomAuthorization,
       startWecomAuthorization: store.startWecomAuthorization,
-      closeWecomAuthorization: store.closeWecomAuthorization,
+      disconnectWecomAuthorization: store.disconnectWecomAuthorization,
+      rebindWecomAuthorization: store.rebindWecomAuthorization,
     }),
   }, ChatroomSettingsSection))
 

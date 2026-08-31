@@ -7,7 +7,7 @@ import { mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 const NODE_SQLITE_MODULE: string = 'node:sqlite'
 
 export type ArchiveConversationKind = 'room' | 'thread' | 'direct'
@@ -47,6 +47,28 @@ export interface ArchiveAttachmentInput {
   readonly mediaType: string
   readonly bytes: number
   readonly createdAt: number
+}
+
+export type ArchivedMeetingSummaryStatus = 'pending' | 'completed' | 'failed'
+
+/** Durable meeting lifecycle record shared by UI cards, automation, and external APIs. */
+export interface ArchivedMeeting {
+  readonly id: string
+  readonly conversationKind: 'room' | 'direct'
+  readonly conversationId: string
+  readonly externalMeetingId?: string
+  readonly meetingUrl?: string
+  readonly title: string
+  readonly beginTime?: string | undefined
+  readonly endTime?: string | undefined
+  readonly status: string
+  readonly summaryStatus: ArchivedMeetingSummaryStatus
+  readonly summary?: string | undefined
+  readonly summaryError?: string | undefined
+  readonly endedAt?: number
+  readonly summaryPostedAt?: number
+  readonly createdAt: number
+  readonly updatedAt: number
 }
 
 /** Open the plugin database and blob root without depending on Harness persistence internals. */
@@ -163,6 +185,48 @@ export class ChatArchive {
           WHERE conversation_id = ? AND (id = ? OR (session_id = ? AND session_seq = ?))`)
     if (sequence === undefined) statement.run(createdAt, participantId, conversationId, messageId, messageId)
     else statement.run(createdAt, participantId, conversationId, messageId, sessionId ?? null, sequence)
+  }
+
+  /** Create or replace one meeting lifecycle projection. */
+  upsertMeeting(input: ArchivedMeeting): void {
+    this.database.prepare(`INSERT INTO meetings
+      (id, conversation_kind, conversation_id, external_meeting_id, meeting_url, title,
+       begin_time, end_time, status, summary_status, summary, summary_error, ended_at,
+       summary_posted_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        conversation_kind = excluded.conversation_kind, conversation_id = excluded.conversation_id,
+        external_meeting_id = excluded.external_meeting_id, meeting_url = excluded.meeting_url,
+        title = excluded.title, begin_time = excluded.begin_time, end_time = excluded.end_time,
+        status = excluded.status, summary_status = excluded.summary_status, summary = excluded.summary,
+        summary_error = excluded.summary_error, ended_at = excluded.ended_at,
+        summary_posted_at = excluded.summary_posted_at, updated_at = excluded.updated_at`)
+      .run(
+        input.id, input.conversationKind, input.conversationId, input.externalMeetingId ?? null,
+        input.meetingUrl ?? null, input.title, input.beginTime ?? null, input.endTime ?? null,
+        input.status, input.summaryStatus, input.summary ?? null, input.summaryError ?? null,
+        input.endedAt ?? null, input.summaryPostedAt ?? null, input.createdAt, input.updatedAt,
+      )
+  }
+
+  /** Resolve one meeting lifecycle record by its plugin-owned public id. */
+  meeting(id: string): ArchivedMeeting | undefined {
+    const row = this.database.prepare('SELECT * FROM meetings WHERE id = ?').get(id)
+    return row === undefined ? undefined : archivedMeeting(row)
+  }
+
+  /** List meetings that still need provider polling, summarization, or group delivery. */
+  pendingMeetings(): readonly ArchivedMeeting[] {
+    return this.database.prepare(`SELECT * FROM meetings
+      WHERE status != 'end' OR summary_status != 'completed'
+        OR (conversation_kind = 'room' AND summary_posted_at IS NULL)
+      ORDER BY updated_at ASC`).all().map(archivedMeeting)
+  }
+
+  /** List completed summaries for authenticated external consumers. */
+  meetingSummaries(limit = 100): readonly ArchivedMeeting[] {
+    return this.database.prepare(`SELECT * FROM meetings WHERE summary_status = 'completed'
+      ORDER BY updated_at DESC LIMIT ?`).all(limit).map(archivedMeeting)
   }
 
   /** Model message ids excluded from future requests after recall. */
@@ -291,6 +355,25 @@ export class ChatArchive {
         storage_key TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS meetings (
+        id TEXT PRIMARY KEY,
+        conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('room', 'direct')),
+        conversation_id TEXT NOT NULL,
+        external_meeting_id TEXT,
+        meeting_url TEXT,
+        title TEXT NOT NULL,
+        begin_time TEXT,
+        end_time TEXT,
+        status TEXT NOT NULL,
+        summary_status TEXT NOT NULL CHECK(summary_status IN ('pending', 'completed', 'failed')),
+        summary TEXT,
+        summary_error TEXT,
+        ended_at INTEGER,
+        summary_posted_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS meetings_pending ON meetings(status, summary_status, summary_posted_at, updated_at);
     `)
     // A Harness event may be projected under more than one chat-visible id while legacy
     // records are normalized. The conversation/id primary key owns deduplication.
@@ -300,11 +383,32 @@ export class ChatArchive {
         ON messages(session_id, session_seq) WHERE session_id IS NOT NULL AND session_seq IS NOT NULL;
     `)
     const current = this.database.prepare('SELECT value FROM archive_meta WHERE key = ?').get('schema_version')
-    if (current !== undefined && Number(current.value) !== SCHEMA_VERSION) {
+    if (current !== undefined && (!Number.isSafeInteger(Number(current.value)) || Number(current.value) > SCHEMA_VERSION)) {
       throw new Error(`unsupported chatroom archive schema ${String(current.value)}`)
     }
     this.database.prepare(`INSERT INTO archive_meta (key, value) VALUES ('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(SCHEMA_VERSION))
+  }
+}
+
+function archivedMeeting(row: Record<string, unknown>): ArchivedMeeting {
+  return {
+    id: String(row.id),
+    conversationKind: row.conversation_kind === 'direct' ? 'direct' : 'room',
+    conversationId: String(row.conversation_id),
+    ...(typeof row.external_meeting_id === 'string' ? { externalMeetingId: row.external_meeting_id } : {}),
+    ...(typeof row.meeting_url === 'string' ? { meetingUrl: row.meeting_url } : {}),
+    title: String(row.title),
+    ...(typeof row.begin_time === 'string' ? { beginTime: row.begin_time } : {}),
+    ...(typeof row.end_time === 'string' ? { endTime: row.end_time } : {}),
+    status: String(row.status),
+    summaryStatus: row.summary_status === 'completed' ? 'completed' : row.summary_status === 'failed' ? 'failed' : 'pending',
+    ...(typeof row.summary === 'string' ? { summary: row.summary } : {}),
+    ...(typeof row.summary_error === 'string' ? { summaryError: row.summary_error } : {}),
+    ...(typeof row.ended_at === 'number' ? { endedAt: row.ended_at } : {}),
+    ...(typeof row.summary_posted_at === 'number' ? { summaryPostedAt: row.summary_posted_at } : {}),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
   }
 }
 

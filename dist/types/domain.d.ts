@@ -59,6 +59,8 @@ export interface RoomPreferenceRecord {
 export interface AutomationSettingsRecord {
     readonly provider: string;
     readonly model: string;
+    readonly meetingSummaryProvider?: string;
+    readonly meetingSummaryModel?: string;
     readonly mainAgentPrompt?: string;
     readonly controllerPrompt?: string;
     readonly updatedAt: number;

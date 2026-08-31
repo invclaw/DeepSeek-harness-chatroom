@@ -114,7 +114,6 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private activeNativeSession;
     private roomEnsure;
     private readonly pendingAutoTriggerWrites;
-    private pendingQuickMeetingTarget;
     constructor(openSession?: (sessionId: string) => boolean, branchFrame?: ChatroomBranchFrame);
     /** Current immutable room projection. */
     getSnapshot: () => ChatroomView;
@@ -165,7 +164,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     /** Load the global automatic-response controller settings and model catalog. */
     loadAutomation: () => Promise<void>;
     /** Persist the global controller model and both chatroom prompt roles. */
-    saveAutomation: (provider: string, model: string, mainAgentPrompt: string, controllerPrompt: string) => Promise<boolean>;
+    saveAutomation: (provider: string, model: string, meetingSummaryProvider: string, meetingSummaryModel: string, mainAgentPrompt: string, controllerPrompt: string) => Promise<boolean>;
     /** Create a local account from the super-administrator console. */
     adminCreateUser: (input: {
         username: string;
@@ -272,12 +271,14 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     quickMeeting: (roomId: string) => Promise<boolean>;
     /** Create a default Enterprise WeChat meeting and publish its card to a direct conversation. */
     quickDirectMeeting: (directConversationId: string) => Promise<boolean>;
-    /** Refresh authorization for the current platform account. */
+    /** Refresh the deployment-wide Enterprise WeChat authorization. */
     loadWecomAuthorization: () => Promise<ChatroomWecomAuthorizationState | undefined>;
-    /** Start the current account's device-local Enterprise WeChat QR authorization. */
+    /** Start deployment-wide Enterprise WeChat QR authorization. */
     startWecomAuthorization: () => Promise<boolean>;
-    /** Dismiss the Enterprise WeChat authorization dialog without cancelling the CLI login. */
-    closeWecomAuthorization: () => void;
+    /** Remove the deployment-wide Enterprise WeChat authorization. */
+    disconnectWecomAuthorization: () => Promise<boolean>;
+    /** Replace the shared account and start a new QR authorization. */
+    rebindWecomAuthorization: () => Promise<boolean>;
     private createQuickMeeting;
     private publishQuickMeeting;
     /** Create or reopen a branch rooted at one main-room message. */

@@ -30,3 +30,4 @@
         wecomQuickMeetingDurationMinutes: !!js Number(process.env.DSH_CHATROOM_WECOM_QUICK_MEETING_MINUTES ?? 60)
         wecomQuickMeetingSubject: !!js process.env.DSH_CHATROOM_WECOM_QUICK_MEETING_SUBJECT ?? '快速会议'
         wecomTimeZone: !!js process.env.DSH_CHATROOM_WECOM_TIMEZONE ?? 'Asia/Shanghai'
+        wecomMeetingPollIntervalMs: !!js Number(process.env.DSH_CHATROOM_WECOM_MEETING_POLL_INTERVAL_MS ?? 30000)

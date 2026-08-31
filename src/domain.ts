@@ -82,6 +82,8 @@ export interface RoomPreferenceRecord {
 export interface AutomationSettingsRecord {
   readonly provider: string
   readonly model: string
+  readonly meetingSummaryProvider?: string
+  readonly meetingSummaryModel?: string
   readonly mainAgentPrompt?: string
   readonly controllerPrompt?: string
   readonly updatedAt: number
@@ -287,6 +289,8 @@ const roomPreferenceSchema = z.object({
 const automationSettingsSchema = z.object({
   provider: z.string().min(1),
   model: z.string().min(1),
+  meetingSummaryProvider: z.string().min(1).optional(),
+  meetingSummaryModel: z.string().min(1).optional(),
   mainAgentPrompt: z.string().optional(),
   controllerPrompt: z.string().optional(),
   updatedAt: nonNegativeSafeInteger,
@@ -445,6 +449,7 @@ const directMessageSchema = z.object({
   card: z.union([
     z.object({
       kind: z.literal('meeting'),
+      id: z.string().min(1).optional(),
       title: z.string().min(1),
       beginTime: z.string().optional(),
       endTime: z.string().optional(),

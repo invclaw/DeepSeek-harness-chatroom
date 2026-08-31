@@ -166,6 +166,8 @@ describe('native chatroom integration', () => {
         canManage: true,
         provider: 'deepseek',
         model: 'chat',
+        meetingSummaryProvider: 'deepseek',
+        meetingSummaryModel: 'chat',
         mainAgentPrompt: '原主提示词',
         controllerPrompt: '原判断提示词',
         models: [{ provider: 'deepseek', model: 'chat', label: 'DeepSeek · Chat' }],
@@ -175,7 +177,25 @@ describe('native chatroom integration', () => {
     fireEvent.change(screen.getByLabelText('群聊主 Agent 系统提示词'), { target: { value: '新主提示词' } })
     fireEvent.change(screen.getByLabelText('自动回复判断 Agent 系统提示词'), { target: { value: '新判断提示词' } })
     fireEvent.click(screen.getByRole('button', { name: '保存系统提示词' }))
-    expect(saveAutomation).toHaveBeenCalledWith('deepseek', 'chat', '新主提示词', '新判断提示词')
+    expect(saveAutomation).toHaveBeenCalledWith('deepseek', 'chat', 'deepseek', 'chat', '新主提示词', '新判断提示词')
+  })
+
+  it('keeps shared Enterprise WeChat connect, disconnect, and rebind controls in Settings', () => {
+    const disconnectWecomAuthorization = vi.fn(async () => true)
+    const rebindWecomAuthorization = vi.fn(async () => true)
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    renderSettings(view({
+      wecomAuthorization: {
+        enabled: true, status: 'authorized', qrAvailable: false, canManage: true,
+      },
+    }), { disconnectWecomAuthorization, rebindWecomAuthorization })
+
+    expect(screen.getByText('全站共用一个企业微信授权；任何成员发起的会议和文档操作都使用这份部署账号。')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '解绑' }))
+    fireEvent.click(screen.getByRole('button', { name: '重新绑定' }))
+    expect(disconnectWecomAuthorization).toHaveBeenCalledOnce()
+    expect(rebindWecomAuthorization).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('dialog', { name: '连接企业微信' })).toBeNull()
   })
 
   it('lists existing rooms and creates a new independent shared Session', () => {

@@ -45,6 +45,7 @@ export interface Config {
   wecomQuickMeetingDurationMinutes: number
   wecomQuickMeetingSubject: string
   wecomTimeZone: string
+  wecomMeetingPollIntervalMs?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -89,6 +90,7 @@ export const Config: z<Config> = z.object({
   wecomQuickMeetingDurationMinutes: z.number().step(1).min(15).max(240).default(60),
   wecomQuickMeetingSubject: z.string().min(1).max(100).default('快速会议'),
   wecomTimeZone: z.string().min(1).max(80).default('Asia/Shanghai'),
+  wecomMeetingPollIntervalMs: z.number().step(1).min(10_000).max(600_000).default(30_000),
 }) as unknown as z<Config>
 
 /** Validate relationships Schemastery cannot express by individual fields. */

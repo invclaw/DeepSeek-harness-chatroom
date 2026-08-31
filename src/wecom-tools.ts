@@ -2,12 +2,20 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { identifyExternalCardText } from './message.js'
+import type { ChatroomExternalCard } from './types.js'
 import { inferWecomCard, WECOM_SERVICES, type WecomCliClient, type WecomService } from './wecom.js'
 
 const COMMAND_PART = /^[a-z][a-z0-9_-]*$/u
 
 /** Register schema-driven official Enterprise WeChat tools on one Agent context. */
-export function registerWecomAgentTools(ctx: Context, resolveClient: () => WecomCliClient): void {
+export function registerWecomAgentTools(
+  ctx: Context,
+  resolveClient: () => WecomCliClient,
+  prepareCard?: (
+    card: ChatroomExternalCard,
+    operation: { service: WecomService; method: string; parameters: unknown; result: unknown },
+  ) => Promise<ChatroomExternalCard>,
+): void {
   ctx.tools.register(defineTool({
     name: 'wecom_schema',
     description: 'Read the official wecom-cli JSON schema for one Enterprise WeChat calendar, meeting, document, sheet, smart sheet, smart document, contact, or identity operation. Always call this before an unfamiliar action.',
@@ -56,7 +64,11 @@ export function registerWecomAgentTools(ctx: Context, resolveClient: () => Wecom
       const method = commandPart(args.method)
       const parameters = parseObject(args.parametersJson)
       const result = await resolveClient().invoke(service, resource, method, parameters)
-      const card = inferWecomCard(service, method, parameters, result)
+      const inferred = inferWecomCard(service, method, parameters, result)
+      const card = inferred === undefined ? undefined : await prepareCard?.(
+        inferred,
+        { service, method, parameters, result },
+      ) ?? inferred
       if (card !== undefined) {
         exec.deferContext(createUserMessage({
           content: [

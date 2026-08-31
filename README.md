@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.3.3" src="https://img.shields.io/badge/version-1.3.3-4f6bff">
+    <img alt="Version 1.4.0" src="https://img.shields.io/badge/version-1.4.0-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -84,8 +84,8 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 ### Enterprise WeChat collaboration
 
 - The official [`@wecom/cli`](https://github.com/WecomTeam/wecom-cli) supplies calendar CRUD, attendees/free-busy/rooms, meeting lifecycle/minutes/transcripts, document search and permissions, online sheets, smart sheets, and smart documents.
-- Agents read each live operation definition with `wecom_schema` and execute it with `wecom_action`. Every call resolves the current prompting platform user and that account's isolated Enterprise WeChat authorization. People are resolved through contacts instead of guessed or exposed internal IDs. Missing authorization or an individual CLI failure remains isolated from plugin and Harness startup.
-- **Quick meeting** in Group and Direct creates a default 60-minute online meeting with the current platform account's isolated Enterprise WeChat authorization and posts it immediately; Solo intentionally omits the action. When the official CLI does not return a structured human `userid`, the plugin does not invent an attendee and follows the CLI's optional-attendees schema. Meeting and document results render as native cards with titles, times, attendees, owners, and links instead of plain text.
+- Agents read each live operation definition with `wecom_schema` and execute it with `wecom_action`. Every operation uses the one deployment-wide Enterprise WeChat account managed in Settings. People are resolved through contacts instead of guessed or exposed internal IDs. Missing authorization or an individual CLI failure remains isolated from plugin and Harness startup.
+- **Quick meeting** in Group and Direct creates a default 60-minute online meeting with the shared Enterprise WeChat account and posts it immediately; Solo intentionally omits the action. Meeting cards refresh from `init` to `started` and `end`. After a Group meeting ends, the configured meeting-summary model summarizes verified meeting metadata and available official notes, then posts the result back into that Group. Meeting and document results render as native cards with titles, times, attendees, owners, status, and links instead of plain text.
 
 ### Accounts, SSO, and private chat
 
@@ -104,7 +104,8 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
-- **1.3.3** — unify the full-width Group, Solo, and Direct composer experience, persist the AI-context reset divider at its exact transcript position, and add per-platform-account Enterprise WeChat QR authorization with Quick-meeting compatibility for identity responses that omit a structured human user id.
+- **1.4.0** — replace per-user Enterprise WeChat authorization with one deployment-wide account managed in Settings, add disconnect/rebind controls, track meeting lifecycle status, post configurable AI summaries after Group meetings end, and expose authenticated meeting-summary APIs.
+- **1.3.3** — unify the full-width Group, Solo, and Direct composer experience, persist the AI-context reset divider at its exact transcript position, and add Enterprise WeChat QR authorization with Quick-meeting compatibility for identity responses that omit a structured human user id.
 - **1.3.2** — retain the complete room transcript when starting a new AI conversation and exclude every earlier user, assistant, and tool-result message from later model requests.
 - **1.3.1** — polish branch navigation with a closer marker and no parent edge stripe, replace the generic Settings navigation gear with a semantic group/account icon and safe fallback, and add browser coverage for the layout and settings navigation.
 - **1.3.0** — add room Stop/New-session controls, official schema-driven wecom-cli Agent tools, Quick meeting, and native meeting/document cards while keeping Enterprise WeChat authorization failures isolated from Harness startup.
@@ -196,6 +197,7 @@ Installation adds this row to the Web profile:
     wecomQuickMeetingDurationMinutes: !!js Number(process.env.DSH_CHATROOM_WECOM_QUICK_MEETING_MINUTES ?? 60)
     wecomQuickMeetingSubject: !!js process.env.DSH_CHATROOM_WECOM_QUICK_MEETING_SUBJECT ?? 'Quick meeting'
     wecomTimeZone: !!js process.env.DSH_CHATROOM_WECOM_TIMEZONE ?? 'Asia/Shanghai'
+    wecomMeetingPollIntervalMs: !!js Number(process.env.DSH_CHATROOM_WECOM_MEETING_POLL_INTERVAL_MS ?? 30000)
     authDshAuthAvatarAllowedOrigins: !!js (process.env.DSH_CHATROOM_DSH_AUTH_AVATAR_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean)
     authDshAuthRevalidateSeconds: !!js Number(process.env.DSH_CHATROOM_DSH_AUTH_REVALIDATE_SECONDS ?? 60)
 ```
@@ -247,11 +249,18 @@ Override it in the Web profile's `cordis.patch.yml` when needed:
     wecomQuickMeetingDurationMinutes: 60
     wecomQuickMeetingSubject: Quick meeting
     wecomTimeZone: Asia/Shanghai
+    wecomMeetingPollIntervalMs: 30000
 ```
 
 ### Enterprise WeChat authorization
 
-The dependency is installed with the plugin, so no global CLI install is required. On the first Quick-meeting action, each platform user receives an in-page QR code and scans it once with their own Enterprise WeChat account. The official CLI encrypts credentials under an account-isolated directory at `wecomCliConfigDirectory/accounts/` (or the chat data directory's `wecom-cli/accounts/` when unset); container deployments should persist that parent directory. Missing authorization pauses only that user's Quick meeting or Agent Enterprise WeChat action; ordinary rooms and Agents continue to run.
+The dependency is installed with the plugin, so no global CLI install is required. A settings administrator opens **Settings → Group chat and accounts**, scans once, and the whole deployment shares that Enterprise WeChat account. The same panel can disconnect or rebind it. The official CLI encrypts credentials directly under `wecomCliConfigDirectory` (or the chat data directory's `wecom-cli/shared/` when unset); container deployments must persist that directory. A sole authorized account from the former `accounts/` layout migrates automatically. When authorization is missing, Quick meeting and Agent Enterprise WeChat actions pause while ordinary rooms and Agents continue to run.
+
+### Meeting status and summary API
+
+The plugin polls active meeting cards every `wecomMeetingPollIntervalMs`. Completed Group meetings are summarized once and appended to their room; Direct meeting summaries remain queryable but are not broadcast into an unrelated room. **Settings → Group chat and accounts → Meeting summary model** selects the provider and model used for new summaries. Only verified meeting fields and official notes are sent to that model.
+
+Authenticated clients can reuse the durable projection through `GET /plugins/deepseek-harness-chatroom/api/meetings/:id` and list completed summaries with `GET /plugins/deepseek-harness-chatroom/api/meetings/summaries`. Each record includes the public meeting id, source conversation kind/id, lifecycle and summary state, times, and summary text. Responses never expose the provider meeting ID, and the caller must be a member of the source Group or Direct conversation.
 
 `authSecret` encrypts OIDC client secrets and hashes no passwords directly; keep it stable and outside Git. Local passwords use salted scrypt. The first password registration must present `authBootstrapToken` and becomes the initial super administrator. Later registrations follow the mutable policy in **System administration**. Login attempts are bounded in memory, disabling an account revokes all its sessions, and changing a password rotates the current session and revokes older ones. The authentication cookie is random, stored only by SHA-256 digest, `HttpOnly`, `SameSite=Strict`, root-scoped, and `Secure` whenever `authPublicOrigin` uses HTTPS.
 
