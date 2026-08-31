@@ -136,6 +136,8 @@ export declare class ChatroomRuntime {
     }>;
     /** Resolve one meeting status or summary after enforcing conversation visibility. */
     meetingSummary(id: string, identity: ChatroomIdentity): ChatroomMeetingSummary;
+    /** Resolve a legacy meeting card by URL after enforcing conversation visibility. */
+    meetingSummaryByUrl(meetingUrl: string, identity: ChatroomIdentity): ChatroomMeetingSummary;
     /** List completed meeting summaries visible to one authenticated participant. */
     meetingSummaries(identity: ChatroomIdentity): readonly ChatroomMeetingSummary[];
     /** Poll tracked meetings immediately; used by the scheduler and operational checks. */
@@ -229,6 +231,8 @@ export declare class ChatroomRuntime {
     private createMeetingCard;
     private prepareAgentWecomCard;
     private trackMeeting;
+    private backfillMeetingCards;
+    private backfillMeetingCard;
     private scheduleMeetingPoll;
     private pollMeetings;
     private pollMeeting;

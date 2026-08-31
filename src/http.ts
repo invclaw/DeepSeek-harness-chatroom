@@ -121,6 +121,10 @@ export class ChatroomHttpController {
         await this.handleMeetingSummaries(request, response)
         return
       }
+      if (route.endpoint === '/meetings/resolve') {
+        await this.handleMeetingResolution(request, response, url.searchParams)
+        return
+      }
       if (route.endpoint.startsWith('/meetings/')) {
         await this.handleMeetingSummary(request, response, route.endpoint.slice('/meetings/'.length))
         return
@@ -736,6 +740,22 @@ export class ChatroomHttpController {
     try { id = decodeURIComponent(encodedId) } catch { throw new ChatroomInputError('会议编号无效。') }
     if (id === '' || id.includes('/')) throw new ChatroomInputError('会议编号无效。')
     json(response, 200, this.runtime.meetingSummary(id, identity))
+  }
+
+  private async handleMeetingResolution(
+    request: IncomingMessage,
+    response: ServerResponse,
+    search: URLSearchParams,
+  ): Promise<void> {
+    if (request.method !== 'GET') {
+      methodNotAllowed(response, 'GET')
+      return
+    }
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const meetingUrl = search.get('url')?.trim() ?? ''
+    if (meetingUrl === '' || meetingUrl.length > 4_096) throw new ChatroomInputError('会议链接无效。')
+    json(response, 200, this.runtime.meetingSummaryByUrl(meetingUrl, identity))
   }
 
   private async handleMeetingSummaries(request: IncomingMessage, response: ServerResponse): Promise<void> {

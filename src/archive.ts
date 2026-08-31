@@ -215,6 +215,24 @@ export class ChatArchive {
     return row === undefined ? undefined : archivedMeeting(row)
   }
 
+  /** Resolve lifecycle records for legacy cards that only persisted a meeting URL. */
+  meetingsByUrl(meetingUrl: string): readonly ArchivedMeeting[] {
+    return this.database.prepare(`SELECT * FROM meetings WHERE meeting_url = ?
+      ORDER BY updated_at DESC`).all(meetingUrl).map(archivedMeeting)
+  }
+
+  /** Whether one data-projection migration completed successfully. */
+  projectionMigrationComplete(name: string): boolean {
+    return this.database.prepare('SELECT value FROM archive_meta WHERE key = ?')
+      .get(`projection:${name}`)?.value === 'complete'
+  }
+
+  /** Persist completion only after a data-projection migration scans every source. */
+  completeProjectionMigration(name: string): void {
+    this.database.prepare(`INSERT INTO archive_meta (key, value) VALUES (?, 'complete')
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(`projection:${name}`)
+  }
+
   /** List meetings that still need provider polling, summarization, or group delivery. */
   pendingMeetings(): readonly ArchivedMeeting[] {
     return this.database.prepare(`SELECT * FROM meetings

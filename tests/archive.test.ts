@@ -71,8 +71,10 @@ describe('ChatArchive', () => {
       updatedAt: 1,
     })
     expect(archive.pendingMeetings()).toHaveLength(1)
+    expect(archive.meetingsByUrl('https://meeting.example.com/join')).toHaveLength(0)
     archive.upsertMeeting({
       ...archive.meeting('public-meeting')!,
+      meetingUrl: 'https://meeting.example.com/join',
       status: 'end',
       summaryStatus: 'completed',
       summary: '结论',
@@ -81,7 +83,11 @@ describe('ChatArchive', () => {
       updatedAt: 3,
     })
     expect(archive.meetingSummaries()).toMatchObject([{ id: 'public-meeting', summary: '结论' }])
+    expect(archive.meetingsByUrl('https://meeting.example.com/join')).toMatchObject([{ id: 'public-meeting' }])
     expect(archive.pendingMeetings()).toHaveLength(0)
+    expect(archive.projectionMigrationComplete('meeting-cards-v1')).toBe(false)
+    archive.completeProjectionMigration('meeting-cards-v1')
+    expect(archive.projectionMigrationComplete('meeting-cards-v1')).toBe(true)
     archive.close()
   })
 })

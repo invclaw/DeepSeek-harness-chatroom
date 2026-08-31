@@ -8,7 +8,14 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import sharp from 'sharp'
 import type { Config } from '../src/config.js'
 import { ChatroomRuntime } from '../src/room.js'
-import { participantMarker, projectFileText, projectForwardText, projectReplyText } from '../src/message.js'
+import {
+  identifyChatroomText,
+  identifyExternalCardText,
+  participantMarker,
+  projectFileText,
+  projectForwardText,
+  projectReplyText,
+} from '../src/message.js'
 
 describe('ChatroomRuntime', () => {
   it('appends human chat without waking AI and wakes only on explicit mention', async () => {
@@ -196,6 +203,46 @@ describe('ChatroomRuntime', () => {
     expect(JSON.stringify(harness.agents[0]?.session.append.mock.calls.at(-1)?.[1])).toContain('会议总结 · 周会')
     await runtime.synchronizeMeetings()
     expect(invoke).toHaveBeenCalledTimes(3)
+    await runtime.stop()
+  })
+
+  it('recovers a legacy meeting card and posts its summary after restart', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const legacyUrl = 'https://meeting.example.com/legacy'
+    const message = createUserMessage({
+      content: [{
+        type: 'text',
+        text: identifyChatroomText(identifyExternalCardText({
+          kind: 'meeting', title: '旧版快速会议', url: legacyUrl,
+          beginTime: '2026-08-31 16:00:00', endTime: '2026-08-31 17:00:00',
+        }), identity),
+      }],
+      source: { kind: 'user' },
+    })
+    const event = { type: 'user/message', seq: 1, time: 10, data: message, surfaceOp: 'append' } as const
+    const harness = fakeHarness([event])
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    await runtime.selectRoom('lobby', identity)
+    const wecom = (runtime as unknown as { wecom: { client: ReturnType<typeof vi.fn> } }).wecom
+    const invoke = vi.fn().mockResolvedValueOnce({ meetings: [{
+      subject: '旧版快速会议', meeting_status: 'end',
+      begin_time: '2026-08-31 16:00:00', end_time: '2026-08-31 17:00:00',
+      notes: [{ note_content: '完成发布复盘' }],
+    }] })
+    wecom.client = vi.fn(() => ({ invoke }))
+    harness.llmStream.mockImplementationOnce(async function* () {
+      yield { type: 'text-delta', index: 0, text: '旧会议总结。' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+
+    await runtime.synchronizeMeetings()
+
+    expect(invoke).toHaveBeenCalledWith('meeting', [], 'get', { urls: [legacyUrl] })
+    expect(runtime.meetingSummaryByUrl(legacyUrl, identity)).toMatchObject({
+      status: 'end', summaryStatus: 'completed', summary: '旧会议总结。',
+    })
+    expect(JSON.stringify(harness.agents[0]?.session.append.mock.calls.at(-1)?.[1])).toContain('会议总结 · 旧版快速会议')
     await runtime.stop()
   })
 
@@ -1074,7 +1121,7 @@ describe('ChatroomRuntime', () => {
   })
 })
 
-function fakeHarness(): {
+function fakeHarness(initialEvents: SessionEvent[] = []): {
   ctx: Context
   agents: Array<Agent & {
     followup: ReturnType<typeof vi.fn>
@@ -1148,7 +1195,7 @@ function fakeHarness(): {
         const agent = {
           id: sessionId,
           options: { provider: 'deepseek', model: 'chat' },
-          session: { id: sessionId, events: [], append: vi.fn() },
+          session: { id: sessionId, events: [...initialEvents], append: vi.fn() },
           ctx: agentCtx,
           followup: vi.fn(),
           steer: vi.fn(),

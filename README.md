@@ -259,7 +259,7 @@ The dependency is installed with the plugin, so no global CLI install is require
 
 ### Meeting status and summary API
 
-The plugin polls active meeting cards every `wecomMeetingPollIntervalMs`. Completed Group meetings are summarized once and appended to their room; Direct meeting summaries remain queryable but are not broadcast into an unrelated room. **Settings → Group chat and accounts → Meeting summary model** selects the provider and model used for new summaries. Only verified meeting fields and official notes are sent to that model.
+The plugin polls active meeting cards every `wecomMeetingPollIntervalMs`. On the first 1.4 startup it recovers pre-1.4 meeting cards from durable Group and Direct history by their meeting URL, so already-created meetings also receive lifecycle updates and one completion summary. Completed Group meetings are summarized once and appended to their room; Direct meeting summaries remain queryable but are not broadcast into an unrelated room. **Settings → Group chat and accounts → Meeting summary model** selects the provider and model used for new summaries. Only verified meeting fields and official notes are sent to that model.
 
 Authenticated clients can reuse the durable projection through `GET /plugins/deepseek-harness-chatroom/api/meetings/:id` and list completed summaries with `GET /plugins/deepseek-harness-chatroom/api/meetings/summaries`. Each record includes the public meeting id, source conversation kind/id, lifecycle and summary state, times, and summary text. Responses never expose the provider meeting ID, and the caller must be a member of the source Group or Direct conversation.
 

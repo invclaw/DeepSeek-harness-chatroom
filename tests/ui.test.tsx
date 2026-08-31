@@ -12,6 +12,7 @@ import type { ChatroomView } from '../src/client/store.js'
 afterEach(() => {
   cleanup()
   sessionStorage.clear()
+  vi.unstubAllGlobals()
 })
 
 describe('native chatroom integration', () => {
@@ -195,6 +196,18 @@ describe('native chatroom integration', () => {
     fireEvent.click(screen.getByRole('button', { name: '重新绑定' }))
     expect(disconnectWecomAuthorization).toHaveBeenCalledOnce()
     expect(rebindWecomAuthorization).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('dialog', { name: '连接企业微信' })).toBeNull()
+  })
+
+  it('renders the Enterprise WeChat QR code inside Settings instead of behind it', () => {
+    renderSettings(view({
+      wecomAuthorization: {
+        enabled: true, status: 'pending', qrAvailable: true, canManage: true,
+      },
+    }))
+
+    const image = screen.getByRole('img', { name: '企业微信登录二维码' })
+    expect(image.closest('.dsh-chatroom-settings')).not.toBeNull()
     expect(screen.queryByRole('dialog', { name: '连接企业微信' })).toBeNull()
   })
 

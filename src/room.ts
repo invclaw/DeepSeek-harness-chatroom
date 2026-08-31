@@ -50,6 +50,7 @@ import {
   mentionsAi,
   participantMarker,
   projectFileText,
+  projectExternalCardText,
   projectForwardText,
   projectReplyText,
 } from './message.js'
@@ -456,6 +457,7 @@ export class ChatroomRuntime {
     }
     await this.syncArchive()
     await this.ensureRoom(this.config.roomId)
+    await this.backfillMeetingCards()
     this.ready = true
     this.scheduleMeetingPoll()
   }
@@ -807,6 +809,15 @@ export class ChatroomRuntime {
     if (meeting === undefined || !this.canReadMeeting(meeting, identity.participantId)) {
       throw new ChatroomInputError('会议不存在或你无权访问。')
     }
+    return publicMeetingSummary(meeting)
+  }
+
+  /** Resolve a legacy meeting card by URL after enforcing conversation visibility. */
+  meetingSummaryByUrl(meetingUrl: string, identity: ChatroomIdentity): ChatroomMeetingSummary {
+    this.assertReady()
+    const meeting = this.requireArchive().meetingsByUrl(meetingUrl)
+      .find(candidate => this.canReadMeeting(candidate, identity.participantId))
+    if (meeting === undefined) throw new ChatroomInputError('会议不存在或你无权访问。')
     return publicMeetingSummary(meeting)
   }
 
@@ -2261,6 +2272,65 @@ export class ChatroomRuntime {
     })
   }
 
+  private async backfillMeetingCards(): Promise<void> {
+    const archive = this.requireArchive()
+    if (archive.projectionMigrationComplete('meeting-cards-v1')) return
+    for (const [, message] of this.requireDirectMessages().entries()) {
+      if (message.card?.kind === 'meeting') {
+        this.backfillMeetingCard(message.card, 'direct', message.conversationId, message.createdAt)
+      }
+    }
+    const persisted = new Set((await this.ctx.sessionPersistence.list()).map(header => String(header.id)))
+    let complete = true
+    for (const state of this.states.values()) {
+      let events: readonly SessionEvent[] | undefined = state.binding?.agent.session.events
+      if (events === undefined && persisted.has(state.record.sessionId)) {
+        try {
+          events = (await this.ctx.sessionPersistence.inspect(SessionId(state.record.sessionId))).events
+        } catch (error) {
+          complete = false
+          this.log.warn('Unable to inspect room %s while recovering meeting cards: %s', state.record.id, String(error))
+        }
+      }
+      if (events === undefined) continue
+      for (const event of events) {
+        if (event.type !== 'user/message' && event.type !== 'assistant/message') continue
+        const message = event.type === 'assistant/message' ? event.data.message : event.data
+        for (const card of meetingCards(message.content)) {
+          this.backfillMeetingCard(card, 'room', state.record.id, event.time)
+        }
+      }
+    }
+    if (complete) archive.completeProjectionMigration('meeting-cards-v1')
+  }
+
+  private backfillMeetingCard(
+    card: ChatroomMeetingCard,
+    conversationKind: 'room' | 'direct',
+    conversationId: string,
+    createdAt: number,
+  ): void {
+    if (card.url === undefined) return
+    const archive = this.requireArchive()
+    if (archive.meetingsByUrl(card.url).some(meeting =>
+      meeting.conversationKind === conversationKind && meeting.conversationId === conversationId)) return
+    const id = card.id ?? legacyMeetingId(conversationKind, conversationId, card.url)
+    if (archive.meeting(id) !== undefined) return
+    archive.upsertMeeting({
+      id,
+      conversationKind,
+      conversationId,
+      meetingUrl: card.url,
+      title: card.title,
+      ...(card.beginTime === undefined ? {} : { beginTime: card.beginTime }),
+      ...(card.endTime === undefined ? {} : { endTime: card.endTime }),
+      status: card.status ?? 'init',
+      summaryStatus: 'pending',
+      createdAt,
+      updatedAt: Date.now(),
+    })
+  }
+
   private scheduleMeetingPoll(): void {
     if (this.stopping || !this.ready || !this.config.wecomEnabled || this.meetingPollTimer !== undefined) return
     this.meetingPollTimer = setTimeout(() => {
@@ -3521,6 +3591,23 @@ function findMeetingDetail(value: unknown): Record<string, unknown> | undefined 
     return undefined
   }
   return visit(value, 0)
+}
+
+function meetingCards(content: readonly ContentBlock[]): readonly ChatroomMeetingCard[] {
+  return content.flatMap(block => block.type === 'text'
+    ? projectExternalCardText(block.text).cards.flatMap(card => card.kind === 'meeting' ? [card] : [])
+    : [])
+}
+
+function legacyMeetingId(
+  conversationKind: 'room' | 'direct',
+  conversationId: string,
+  meetingUrl: string,
+): string {
+  return `legacy-${createHash('sha256')
+    .update(`${conversationKind}\u0000${conversationId}\u0000${meetingUrl}`)
+    .digest('hex')
+    .slice(0, 32)}`
 }
 
 function stringField(record: Record<string, unknown>, key: string): string | undefined {

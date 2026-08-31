@@ -1295,6 +1295,20 @@ var ChatArchive = class {
     const row = this.database.prepare("SELECT * FROM meetings WHERE id = ?").get(id);
     return row === void 0 ? void 0 : archivedMeeting(row);
   }
+  /** Resolve lifecycle records for legacy cards that only persisted a meeting URL. */
+  meetingsByUrl(meetingUrl) {
+    return this.database.prepare(`SELECT * FROM meetings WHERE meeting_url = ?
+      ORDER BY updated_at DESC`).all(meetingUrl).map(archivedMeeting);
+  }
+  /** Whether one data-projection migration completed successfully. */
+  projectionMigrationComplete(name2) {
+    return this.database.prepare("SELECT value FROM archive_meta WHERE key = ?").get(`projection:${name2}`)?.value === "complete";
+  }
+  /** Persist completion only after a data-projection migration scans every source. */
+  completeProjectionMigration(name2) {
+    this.database.prepare(`INSERT INTO archive_meta (key, value) VALUES (?, 'complete')
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(`projection:${name2}`);
+  }
   /** List meetings that still need provider polling, summarization, or group delivery. */
   pendingMeetings() {
     return this.database.prepare(`SELECT * FROM meetings
@@ -1964,6 +1978,25 @@ function projectForwardText(text) {
 function identifyExternalCardText(card) {
   return `${EXTERNAL_CARD_MARKER_START}${encodePayload(card)}${PARTICIPANT_MARKER_END}${externalCardPrefix(card)}`;
 }
+function projectExternalCardText(text) {
+  const cards = [];
+  let visible = text;
+  while (true) {
+    const start = visible.indexOf(EXTERNAL_CARD_MARKER_START);
+    if (start < 0) break;
+    const end = visible.indexOf(PARTICIPANT_MARKER_END, start + EXTERNAL_CARD_MARKER_START.length);
+    if (end < 0) break;
+    const card = decodePayload(visible.slice(start + EXTERNAL_CARD_MARKER_START.length, end));
+    if (!validExternalCard(card)) break;
+    cards.push(card);
+    const before = visible.slice(0, start).replace(/\n$/u, "");
+    let after = visible.slice(end + PARTICIPANT_MARKER_END.length);
+    const prefix = externalCardPrefix(card);
+    if (after.startsWith(prefix)) after = after.slice(prefix.length);
+    visible = `${before}${after}`;
+  }
+  return { text: visible, cards };
+}
 function mentionsAi(content, aiDisplayName) {
   return [aiDisplayName, "AI"].some((name2) => mentionsName(content, name2));
 }
@@ -2041,6 +2074,22 @@ function validForwardContentPart(value) {
   if (part.type !== "image" || part.image === null || typeof part.image !== "object") return false;
   const image = part.image;
   return typeof image.attachmentId === "string" && typeof image.mediaType === "string" && typeof image.bytes === "number" && typeof image.width === "number" && typeof image.height === "number";
+}
+function validExternalCard(value) {
+  if (value === null || typeof value !== "object") return false;
+  const card = value;
+  if (card.kind !== "meeting" && card.kind !== "document") return false;
+  if (typeof card.title !== "string" || card.title.trim() === "") return false;
+  if (card.kind === "meeting") {
+    if (card.id !== void 0 && typeof card.id !== "string") return false;
+    const meeting = value;
+    return optionalStrings(meeting.beginTime, meeting.endTime, meeting.url, meeting.location, meeting.status) && (meeting.attendees === void 0 || Array.isArray(meeting.attendees) && meeting.attendees.every((item) => typeof item === "string"));
+  }
+  const document = value;
+  return optionalStrings(document.documentType, document.url, document.modifiedAt, document.owner);
+}
+function optionalStrings(...values) {
+  return values.every((value) => value === void 0 || typeof value === "string");
 }
 
 // src/wecom.ts
@@ -2823,6 +2872,7 @@ var ChatroomRuntime = class {
     }
     await this.syncArchive();
     await this.ensureRoom(this.config.roomId);
+    await this.backfillMeetingCards();
     this.ready = true;
     this.scheduleMeetingPoll();
   }
@@ -3148,6 +3198,13 @@ var ChatroomRuntime = class {
     if (meeting === void 0 || !this.canReadMeeting(meeting, identity.participantId)) {
       throw new ChatroomInputError("\u4F1A\u8BAE\u4E0D\u5B58\u5728\u6216\u4F60\u65E0\u6743\u8BBF\u95EE\u3002");
     }
+    return publicMeetingSummary(meeting);
+  }
+  /** Resolve a legacy meeting card by URL after enforcing conversation visibility. */
+  meetingSummaryByUrl(meetingUrl, identity) {
+    this.assertReady();
+    const meeting = this.requireArchive().meetingsByUrl(meetingUrl).find((candidate) => this.canReadMeeting(candidate, identity.participantId));
+    if (meeting === void 0) throw new ChatroomInputError("\u4F1A\u8BAE\u4E0D\u5B58\u5728\u6216\u4F60\u65E0\u6743\u8BBF\u95EE\u3002");
     return publicMeetingSummary(meeting);
   }
   /** List completed meeting summaries visible to one authenticated participant. */
@@ -4369,6 +4426,57 @@ var ChatroomRuntime = class {
       updatedAt: now
     });
   }
+  async backfillMeetingCards() {
+    const archive = this.requireArchive();
+    if (archive.projectionMigrationComplete("meeting-cards-v1")) return;
+    for (const [, message] of this.requireDirectMessages().entries()) {
+      if (message.card?.kind === "meeting") {
+        this.backfillMeetingCard(message.card, "direct", message.conversationId, message.createdAt);
+      }
+    }
+    const persisted = new Set((await this.ctx.sessionPersistence.list()).map((header) => String(header.id)));
+    let complete = true;
+    for (const state of this.states.values()) {
+      let events = state.binding?.agent.session.events;
+      if (events === void 0 && persisted.has(state.record.sessionId)) {
+        try {
+          events = (await this.ctx.sessionPersistence.inspect(SessionId(state.record.sessionId))).events;
+        } catch (error) {
+          complete = false;
+          this.log.warn("Unable to inspect room %s while recovering meeting cards: %s", state.record.id, String(error));
+        }
+      }
+      if (events === void 0) continue;
+      for (const event of events) {
+        if (event.type !== "user/message" && event.type !== "assistant/message") continue;
+        const message = event.type === "assistant/message" ? event.data.message : event.data;
+        for (const card of meetingCards(message.content)) {
+          this.backfillMeetingCard(card, "room", state.record.id, event.time);
+        }
+      }
+    }
+    if (complete) archive.completeProjectionMigration("meeting-cards-v1");
+  }
+  backfillMeetingCard(card, conversationKind, conversationId, createdAt) {
+    if (card.url === void 0) return;
+    const archive = this.requireArchive();
+    if (archive.meetingsByUrl(card.url).some((meeting) => meeting.conversationKind === conversationKind && meeting.conversationId === conversationId)) return;
+    const id = card.id ?? legacyMeetingId(conversationKind, conversationId, card.url);
+    if (archive.meeting(id) !== void 0) return;
+    archive.upsertMeeting({
+      id,
+      conversationKind,
+      conversationId,
+      meetingUrl: card.url,
+      title: card.title,
+      ...card.beginTime === void 0 ? {} : { beginTime: card.beginTime },
+      ...card.endTime === void 0 ? {} : { endTime: card.endTime },
+      status: card.status ?? "init",
+      summaryStatus: "pending",
+      createdAt,
+      updatedAt: Date.now()
+    });
+  }
   scheduleMeetingPoll() {
     if (this.stopping || !this.ready || !this.config.wecomEnabled || this.meetingPollTimer !== void 0) return;
     this.meetingPollTimer = setTimeout(() => {
@@ -5461,6 +5569,12 @@ function findMeetingDetail(value) {
   };
   return visit(value, 0);
 }
+function meetingCards(content) {
+  return content.flatMap((block) => block.type === "text" ? projectExternalCardText(block.text).cards.flatMap((card) => card.kind === "meeting" ? [card] : []) : []);
+}
+function legacyMeetingId(conversationKind, conversationId, meetingUrl) {
+  return `legacy-${createHash3("sha256").update(`${conversationKind}\0${conversationId}\0${meetingUrl}`).digest("hex").slice(0, 32)}`;
+}
 function stringField(record, key) {
   const value = record[key];
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
@@ -5658,6 +5772,10 @@ var ChatroomHttpController = class {
       }
       if (route.endpoint === "/meetings/summaries") {
         await this.handleMeetingSummaries(request, response);
+        return;
+      }
+      if (route.endpoint === "/meetings/resolve") {
+        await this.handleMeetingResolution(request, response, url.searchParams);
         return;
       }
       if (route.endpoint.startsWith("/meetings/")) {
@@ -6242,6 +6360,17 @@ var ChatroomHttpController = class {
     }
     if (id === "" || id.includes("/")) throw new ChatroomInputError("\u4F1A\u8BAE\u7F16\u53F7\u65E0\u6548\u3002");
     json(response, 200, this.runtime.meetingSummary(id, identity));
+  }
+  async handleMeetingResolution(request, response, search) {
+    if (request.method !== "GET") {
+      methodNotAllowed(response, "GET");
+      return;
+    }
+    const identity = await this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    const meetingUrl = search.get("url")?.trim() ?? "";
+    if (meetingUrl === "" || meetingUrl.length > 4096) throw new ChatroomInputError("\u4F1A\u8BAE\u94FE\u63A5\u65E0\u6548\u3002");
+    json(response, 200, this.runtime.meetingSummaryByUrl(meetingUrl, identity));
   }
   async handleMeetingSummaries(request, response) {
     if (request.method !== "GET") {

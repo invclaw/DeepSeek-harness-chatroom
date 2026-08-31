@@ -23,13 +23,18 @@ function MeetingCard({ card }: { card: Extract<ChatroomExternalCard, { kind: 'me
   const [meeting, setMeeting] = useState<ChatroomMeetingSummary | undefined>()
   useEffect(() => {
     setMeeting(undefined)
-    if (card.id === undefined) return
+    const endpoint = card.id !== undefined
+      ? `${CHATROOM_API_PREFIX}/meetings/${encodeURIComponent(card.id)}`
+      : card.url !== undefined
+        ? `${CHATROOM_API_PREFIX}/meetings/resolve?url=${encodeURIComponent(card.url)}`
+        : undefined
+    if (endpoint === undefined) return
     let active = true
     let timer: number | undefined
     const refresh = async (): Promise<void> => {
       let complete = false
       try {
-        const response = await fetch(`${CHATROOM_API_PREFIX}/meetings/${encodeURIComponent(card.id!)}`, {
+        const response = await fetch(endpoint, {
           credentials: 'same-origin',
           headers: { Accept: 'application/json' },
         })
@@ -48,7 +53,7 @@ function MeetingCard({ card }: { card: Extract<ChatroomExternalCard, { kind: 'me
       active = false
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [card.id])
+  }, [card.id, card.url])
   const status = meeting?.status ?? card.status
   const summaryStatus = meeting?.summaryStatus
   return (
