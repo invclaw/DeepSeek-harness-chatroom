@@ -1,4 +1,4 @@
-import type { ChatroomFileReference, ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js';
+import type { ChatroomExternalCard, ChatroomFileReference, ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js';
 import type { ChatroomReactionEmoji } from './reactions.js';
 import type { ChatroomAvatarId } from './avatars.js';
 export interface IdentityRecord {
@@ -47,6 +47,8 @@ export interface RoomRecord {
     readonly autoTriggerEnabled?: boolean;
     /** Last Session event excluded from later AI requests after starting a new AI conversation. */
     readonly aiContextResetSeq?: number;
+    /** First participant message displayed after the latest AI-context reset. */
+    readonly aiContextStartSeq?: number;
 }
 export interface RoomPreferenceRecord {
     readonly roomId: string;
@@ -180,6 +182,7 @@ export interface DirectMessageRecord {
     readonly senderId: string;
     readonly text: string;
     readonly files?: readonly ChatroomFileReference[];
+    readonly card?: ChatroomExternalCard;
     readonly createdAt: number;
 }
 /** Durable identities, rooms, and the version-zero message table retained for on-disk compatibility. */

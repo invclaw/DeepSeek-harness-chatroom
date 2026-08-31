@@ -93,6 +93,27 @@ describe('participant-specific native message projection', () => {
     expect(screen.getByTestId('native').textContent).toBe('别人的消息')
   })
 
+  it('keeps the AI-context divider before the first participant message after reset', () => {
+    const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>
+    const node = userNode(identifyChatroomText('新会话第一条', alice))
+    const baseRoom = {
+      id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby',
+      aiContextResetSeq: 0,
+    }
+    const { rerender } = render(<ChatroomUserMessageNodeView {...messageProps(node, alice, Native, {
+      rooms: [{ ...baseRoom, aiContextStartSeq: 1 }],
+      room: { ...baseRoom, aiContextStartSeq: 1 },
+    })} />)
+    expect(screen.getByText('新的 AI 会话')).not.toBeNull()
+    expect(screen.getByText('此前群聊消息继续保留')).not.toBeNull()
+
+    rerender(<ChatroomUserMessageNodeView {...messageProps(node, alice, Native, {
+      rooms: [{ ...baseRoom, aiContextStartSeq: 2 }],
+      room: { ...baseRoom, aiContextStartSeq: 2 },
+    })} />)
+    expect(screen.queryByText('新的 AI 会话')).toBeNull()
+  })
+
   it('offers recall only for the sender and replaces the message with a tombstone', () => {
     const recallMessage = vi.fn(async () => true)
     const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>

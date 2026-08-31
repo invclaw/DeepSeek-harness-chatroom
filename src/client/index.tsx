@@ -69,6 +69,7 @@ export function apply(ctx: ClientContext): void {
     return sessionId
   }), 'chatroom: distinct native New Session')
   ctx.effect(() => {
+    document.documentElement.setAttribute('data-dsh-chatroom-installed', '')
     if (branchFrame !== undefined) document.documentElement.setAttribute('data-dsh-chatroom-branch-frame', '')
     const markBranchShell = () => {
       if (branchFrame === undefined) return
@@ -153,6 +154,7 @@ export function apply(ctx: ClientContext): void {
       store.stop()
       style.remove()
       shellObserver?.disconnect()
+      document.documentElement.removeAttribute('data-dsh-chatroom-installed')
       if (branchFrame !== undefined) {
         clearBranchFrameReady()
         document.documentElement.removeAttribute('data-dsh-chatroom-branch-frame')
@@ -215,6 +217,10 @@ export function apply(ctx: ClientContext): void {
       openDirect: store.openDirect,
       closeDirect: store.closeDirect,
       sendDirect: store.sendDirect,
+      quickDirectMeeting: store.quickDirectMeeting,
+      loadWecomAuthorization: store.loadWecomAuthorization,
+      startWecomAuthorization: store.startWecomAuthorization,
+      closeWecomAuthorization: store.closeWecomAuthorization,
     }),
   }, ChatroomEntry))
 
@@ -240,6 +246,10 @@ export function apply(ctx: ClientContext): void {
       openDirect: store.openDirect,
       closeDirect: store.closeDirect,
       sendDirect: store.sendDirect,
+      quickDirectMeeting: store.quickDirectMeeting,
+      loadWecomAuthorization: store.loadWecomAuthorization,
+      startWecomAuthorization: store.startWecomAuthorization,
+      closeWecomAuthorization: store.closeWecomAuthorization,
     }),
   }, ChatroomSettingsSection))
 

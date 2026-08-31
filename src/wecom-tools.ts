@@ -7,7 +7,7 @@ import { inferWecomCard, WECOM_SERVICES, type WecomCliClient, type WecomService 
 const COMMAND_PART = /^[a-z][a-z0-9_-]*$/u
 
 /** Register schema-driven official Enterprise WeChat tools on one Agent context. */
-export function registerWecomAgentTools(ctx: Context, client: WecomCliClient): void {
+export function registerWecomAgentTools(ctx: Context, resolveClient: () => WecomCliClient): void {
   ctx.tools.register(defineTool({
     name: 'wecom_schema',
     description: 'Read the official wecom-cli JSON schema for one Enterprise WeChat calendar, meeting, document, sheet, smart sheet, smart document, contact, or identity operation. Always call this before an unfamiliar action.',
@@ -27,7 +27,7 @@ export function registerWecomAgentTools(ctx: Context, client: WecomCliClient): v
     async execute(args) {
       const resource = commandParts(args.resource ?? [])
       const method = commandPart(args.method)
-      const value = await client.schema(args.service as WecomService, resource, method)
+      const value = await resolveClient().schema(args.service as WecomService, resource, method)
       return { schemaJson: JSON.stringify(value) }
     },
     presentCall: args => ({ card: 'generic', title: `企微接口定义 · ${args.service}`, kind: 'read', rawInput: args }),
@@ -55,7 +55,7 @@ export function registerWecomAgentTools(ctx: Context, client: WecomCliClient): v
       const resource = commandParts(args.resource ?? [])
       const method = commandPart(args.method)
       const parameters = parseObject(args.parametersJson)
-      const result = await client.invoke(service, resource, method, parameters)
+      const result = await resolveClient().invoke(service, resource, method, parameters)
       const card = inferWecomCard(service, method, parameters, result)
       if (card !== undefined) {
         exec.deferContext(createUserMessage({

@@ -1,5 +1,9 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdir, readFile, stat, unlink } from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { Config } from './config.js'
 import type { ChatroomDocumentCard, ChatroomExternalCard, ChatroomMeetingCard } from './types.js'
 
@@ -19,6 +23,13 @@ export const WECOM_SERVICES = [
 
 export type WecomService = typeof WECOM_SERVICES[number]
 
+export interface WecomAuthorizationState {
+  readonly enabled: boolean
+  readonly status: 'authorized' | 'unauthorized' | 'pending'
+  readonly qrAvailable: boolean
+  readonly error?: string
+}
+
 /** Structured failure returned by the Enterprise WeChat CLI adapter. */
 export class WecomCliError extends Error {
   constructor(message: string, readonly code: 'disabled' | 'unauthorized' | 'timeout' | 'invalid-output' | 'failed') {
@@ -29,7 +40,7 @@ export class WecomCliError extends Error {
 
 /** Lazy process adapter around the official `@wecom/cli` package. */
 export class WecomCliClient {
-  constructor(private readonly config: Config) {}
+  constructor(private readonly config: Config, private readonly configDirectory = config.wecomCliConfigDirectory) {}
 
   /** Query one official CLI method schema without requiring plugin restart. */
   schema(service: WecomService, resource: readonly string[], method: string): Promise<unknown> {
@@ -43,17 +54,25 @@ export class WecomCliClient {
 
   /** Read the current Enterprise WeChat authorization state. */
   authStatus(): Promise<unknown> {
-    return this.run(['auth', 'show', '--status'])
+    return this.runText(['auth', 'show', '--status'])
   }
 
   private run(args: readonly string[]): Promise<unknown> {
+    return this.runOutput(args, output => output === '' ? {} : parseJson(output))
+  }
+
+  private runText(args: readonly string[]): Promise<string> {
+    return this.runOutput(args, output => output)
+  }
+
+  private runOutput<T>(args: readonly string[], parse: (output: string) => T): Promise<T> {
     if (!this.config.wecomEnabled) {
       return Promise.reject(new WecomCliError('企业微信能力已在插件配置中关闭。', 'disabled'))
     }
     const cli = this.config.wecomCliPath || require.resolve('@wecom/cli/bin/wecom.js')
     const environment = {
       ...process.env,
-      ...(this.config.wecomCliConfigDirectory === '' ? {} : { WECOM_CLI_CONFIG_DIR: this.config.wecomCliConfigDirectory }),
+      ...(this.configDirectory === '' ? {} : { WECOM_CLI_CONFIG_DIR: this.configDirectory }),
     }
     return new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [cli, ...args], {
@@ -90,20 +109,18 @@ export class WecomCliClient {
           const unauthorized = /unauthorized|未授权|auth init|登录|扫码/iu.test(`${output}\n${diagnostic}`)
           reject(new WecomCliError(
             unauthorized
-              ? '企业微信尚未授权，请在部署机运行 wecom-cli auth init 完成扫码登录。'
+              ? '当前账号尚未完成企业微信扫码授权。'
               : summarizeFailure(output || diagnostic || `退出码 ${String(code)}`),
             unauthorized ? 'unauthorized' : 'failed',
           ))
           return
         }
-        if (output === '') {
-          resolve({})
-          return
-        }
         try {
-          resolve(JSON.parse(output) as unknown)
-        } catch {
-          reject(new WecomCliError('企业微信 CLI 没有返回有效 JSON。', 'invalid-output'))
+          resolve(parse(output))
+        } catch (error) {
+          reject(error instanceof WecomCliError
+            ? error
+            : new WecomCliError('企业微信 CLI 没有返回有效数据。', 'invalid-output'))
         }
       }))
       const timer = setTimeout(() => {
@@ -112,6 +129,133 @@ export class WecomCliClient {
       }, this.config.wecomCliTimeoutMs)
       timer.unref()
     })
+  }
+}
+
+/** Account-scoped Enterprise WeChat CLI clients and QR authorization processes. */
+export class WecomCliManager {
+  private readonly clients = new Map<string, WecomCliClient>()
+  private readonly authorizations = new Map<string, ChildProcess>()
+  private readonly authorizationErrors = new Map<string, string>()
+
+  constructor(private readonly config: Config) {}
+
+  /** Return the isolated CLI client owned by one chatroom account. */
+  client(participantId: string): WecomCliClient {
+    const existing = this.clients.get(participantId)
+    if (existing !== undefined) return existing
+    const client = new WecomCliClient(this.config, this.accountDirectory(participantId))
+    this.clients.set(participantId, client)
+    return client
+  }
+
+  /** Read one account's current authorization state without exposing credentials. */
+  async authorizationState(participantId: string): Promise<WecomAuthorizationState> {
+    if (!this.config.wecomEnabled) {
+      return { enabled: false, status: 'unauthorized', qrAvailable: false, error: '企业微信能力已关闭。' }
+    }
+    const qrAvailable = await fileExists(this.qrPath(participantId))
+    try {
+      const status = String(await this.client(participantId).authStatus()).trim().toLowerCase()
+      if (status === 'authorized') {
+        this.authorizationErrors.delete(participantId)
+        return { enabled: true, status: 'authorized', qrAvailable: false }
+      }
+    } catch (error) {
+      if (!(error instanceof WecomCliError) || error.code !== 'unauthorized') {
+        return {
+          enabled: true,
+          status: this.authorizations.has(participantId) ? 'pending' : 'unauthorized',
+          qrAvailable,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
+    }
+    const pending = this.authorizations.has(participantId)
+    const authorizationError = this.authorizationErrors.get(participantId)
+    return {
+      enabled: true,
+      status: pending ? 'pending' : 'unauthorized',
+      qrAvailable,
+      ...(authorizationError === undefined ? {} : { error: authorizationError }),
+    }
+  }
+
+  /** Start an account-local non-browser authorization and wait until its QR image exists. */
+  async startAuthorization(participantId: string): Promise<WecomAuthorizationState> {
+    if (!this.config.wecomEnabled) throw new WecomCliError('企业微信能力已关闭。', 'disabled')
+    const current = await this.authorizationState(participantId)
+    if (current.status === 'authorized') return current
+    if (!this.authorizations.has(participantId)) await this.spawnAuthorization(participantId)
+    const deadline = Date.now() + 15_000
+    while (Date.now() < deadline) {
+      if (await fileExists(this.qrPath(participantId))) return await this.authorizationState(participantId)
+      if (!this.authorizations.has(participantId)) break
+      await delay(150)
+    }
+    const state = await this.authorizationState(participantId)
+    if (state.qrAvailable) return state
+    throw new WecomCliError(state.error ?? '企业微信登录二维码生成超时。', 'timeout')
+  }
+
+  /** Read the current account's QR image. */
+  async authorizationQr(participantId: string): Promise<Buffer> {
+    try {
+      return await readFile(this.qrPath(participantId))
+    } catch {
+      throw new WecomCliError('企业微信登录二维码尚未生成。', 'failed')
+    }
+  }
+
+  /** Stop outstanding authorization processes during plugin teardown. */
+  stop(): void {
+    for (const child of this.authorizations.values()) child.kill('SIGTERM')
+    this.authorizations.clear()
+  }
+
+  private async spawnAuthorization(participantId: string): Promise<void> {
+    const directory = this.accountDirectory(participantId)
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    await mkdir(join(directory, 'tmp'), { recursive: true, mode: 0o700 })
+    await unlink(this.qrPath(participantId)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error
+    })
+    this.authorizationErrors.delete(participantId)
+    const cli = this.config.wecomCliPath || require.resolve('@wecom/cli/bin/wecom.js')
+    const child = spawn(process.execPath, [cli, 'auth', 'init', '--noninteractive', '--no-browser', '--output-qrcode', 'auth-qrcode.png'], {
+      cwd: directory,
+      env: { ...process.env, WECOM_CLI_CONFIG_DIR: directory, WECOM_CLI_TMP_DIR: join(directory, 'tmp') },
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+    })
+    this.authorizations.set(participantId, child)
+    let diagnostic = ''
+    child.stderr?.on('data', (chunk: Buffer) => { diagnostic = `${diagnostic}${chunk.toString('utf8')}`.slice(-4_096) })
+    child.once('error', (error) => {
+      this.authorizationErrors.set(participantId, `无法启动企业微信授权：${error.message}`)
+      this.authorizations.delete(participantId)
+    })
+    child.once('close', (code) => {
+      if (code !== 0 && code !== null) {
+        this.authorizationErrors.set(participantId, summarizeFailure(diagnostic || `授权进程退出码 ${String(code)}`))
+      }
+      this.authorizations.delete(participantId)
+    })
+  }
+
+  private accountDirectory(participantId: string): string {
+    const configured = this.config.wecomCliConfigDirectory
+    const base = configured !== ''
+      ? configured
+      : this.config.dataDirectory !== undefined && this.config.dataDirectory !== '' && this.config.dataDirectory !== ':memory:'
+        ? join(this.config.dataDirectory, 'wecom-cli')
+        : join(homedir(), '.dsh', 'chatroom', 'wecom-cli')
+    const account = createHash('sha256').update(participantId).digest('hex').slice(0, 32)
+    return join(base, 'accounts', account)
+  }
+
+  private qrPath(participantId: string): string {
+    return join(this.accountDirectory(participantId), 'auth-qrcode.png')
   }
 }
 
@@ -219,6 +363,27 @@ function records(value: unknown): Record<string, unknown>[] {
 
 function joinCommand(service: WecomService, resource: readonly string[], method: string): string {
   return [service, ...resource, method].join('.')
+}
+
+function parseJson(output: string): unknown {
+  if (output === '') return {}
+  try {
+    return JSON.parse(output) as unknown
+  } catch {
+    throw new WecomCliError('企业微信 CLI 没有返回有效 JSON。', 'invalid-output')
+  }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile()
+  } catch {
+    return false
+  }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds))
 }
 
 function summarizeFailure(value: string): string {

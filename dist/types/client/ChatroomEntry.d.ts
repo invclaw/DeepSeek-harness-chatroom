@@ -74,6 +74,10 @@ interface ChatroomEntryInjected {
     openDirect(peerId?: string): Promise<void>;
     closeDirect(): void;
     sendDirect(text: string, files?: readonly File[]): Promise<boolean>;
+    quickDirectMeeting?(conversationId: string): Promise<boolean>;
+    loadWecomAuthorization?(): Promise<ChatroomView['wecomAuthorization']>;
+    startWecomAuthorization?(): Promise<boolean>;
+    closeWecomAuthorization?(): void;
 }
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected;
 /** Authentication and first-identity overlays plus persistent chatroom panels. */

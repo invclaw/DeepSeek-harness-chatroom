@@ -30,6 +30,7 @@ import type { ChatroomView } from './store.js'
 import type { ChatroomAgentTarget } from './store.js'
 import { ChatroomAvatar } from './ChatroomAvatar.js'
 import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
+import { ChatroomContextResetDivider } from './ChatroomComposer.js'
 
 type ParticipantNode = ChatNode<'user' | 'steering'>
 
@@ -183,14 +184,17 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
     : () => { void props.openThread(activeRoom.id, threadRoot) }
   const tools = messageTools(props, room, activeRoom.id, message, message.text, projection.own, onReply, onThread)
   const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, 'human')
-  return <ParticipantMessage
-    native={native}
-    projection={projection}
-    tools={tools}
-    threadPreview={threadPreview}
-    onReply={onReply}
-    onThread={onThread}
-  />
+  return <>
+    {activeRoom.aiContextStartSeq === props.node.data.seq && <ChatroomContextResetDivider />}
+    <ParticipantMessage
+      native={native}
+      projection={projection}
+      tools={tools}
+      threadPreview={threadPreview}
+      onReply={onReply}
+      onThread={onThread}
+    />
+  </>
 })
 
 /** Reuse Harness' native steering renderer and move only peer steering messages to the left. */
@@ -223,14 +227,17 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
     : () => { void props.openThread(activeRoom.id, threadRoot) }
   const tools = messageTools(props, room, activeRoom.id, message, message.text, projection.own, onReply, onThread)
   const threadPreview = findThreadPreview(room.threadPreviews, message.messageId, 'human')
-  return <ParticipantMessage
-    native={native}
-    projection={projection}
-    tools={tools}
-    threadPreview={threadPreview}
-    onReply={onReply}
-    onThread={onThread}
-  />
+  return <>
+    {activeRoom.aiContextStartSeq === props.node.data.seq && <ChatroomContextResetDivider />}
+    <ParticipantMessage
+      native={native}
+      projection={projection}
+      tools={tools}
+      threadPreview={threadPreview}
+      onReply={onReply}
+      onThread={onThread}
+    />
+  </>
 })
 
 function ParticipantMessage({

@@ -514,6 +514,52 @@ describe('ChatroomClientStore', () => {
     })
     expect(store.getSnapshot()).toMatchObject({ room: renamed, members: [owner, added], managementBusy: false })
   })
+
+  it('resets only AI context and keeps the active shared Session open', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const resetRoom = { ...room, aiContextResetSeq: 9 }
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ room: resetRoom, members: [], reactions: [], recalls: [], threadPreviews: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const openSession = vi.fn(() => true)
+    const store = new ChatroomClientStore(openSession)
+    await store.start()
+    store.activateSession(room.sessionId)
+
+    await expect(store.newRoomSession(room.id)).resolves.toBe(true)
+
+    expect(openSession).not.toHaveBeenCalled()
+    expect(store.getSnapshot()).toMatchObject({ room: resetRoom })
+    store.completeComposition(store.composition(room.id))
+    expect(store.getSnapshot().room).toEqual(resetRoom)
+  })
+
+  it('continues a pending quick meeting after the current account authorizes', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'unauthorized', qrAvailable: false }))
+      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'pending', qrAvailable: true }))
+      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'authorized', qrAvailable: false }))
+      .mockResolvedValueOnce(jsonResponse({ accepted: true, card: { kind: 'meeting', title: '快速会议' } }, 201))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+
+    await expect(store.quickMeeting(room.id)).resolves.toBe(false)
+    expect(store.getSnapshot()).toMatchObject({
+      wecomAuthorizationOpen: true,
+      wecomAuthorization: { status: 'pending', qrAvailable: true },
+    })
+    await store.loadWecomAuthorization()
+    expect(JSON.parse(String((fetchMock.mock.calls[4]?.[1] as RequestInit).body))).toEqual({ roomId: room.id })
+    expect(store.getSnapshot()).toMatchObject({ wecomBusy: false, wecomError: undefined })
+  })
 })
 
 function roomInfo() {

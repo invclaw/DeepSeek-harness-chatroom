@@ -206,6 +206,10 @@ export interface ChatroomInfo {
   readonly updatedAt?: number
   readonly pinned?: boolean
   readonly autoTriggerEnabled?: boolean
+  /** Last native Session event excluded from subsequent AI requests. */
+  readonly aiContextResetSeq?: number
+  /** First participant message displayed after the latest AI-context reset. */
+  readonly aiContextStartSeq?: number
   /** Up to nine member avatars used by compact room-directory surfaces. */
   readonly memberAvatarIds?: readonly ChatroomAvatarId[]
   readonly memberAvatars?: readonly ChatroomRoomAvatar[]
@@ -250,7 +254,16 @@ export interface ChatroomDocumentCard {
 
 /** Explicit request for a default Enterprise WeChat online meeting. */
 export interface ChatroomQuickMeetingRequest {
-  readonly roomId: string
+  readonly roomId?: string
+  readonly directConversationId?: string
+}
+
+/** Current account's isolated Enterprise WeChat authorization state. */
+export interface ChatroomWecomAuthorizationState {
+  readonly enabled: boolean
+  readonly status: 'authorized' | 'unauthorized' | 'pending'
+  readonly qrAvailable: boolean
+  readonly error?: string
 }
 
 /** Result of creating and posting a quick Enterprise WeChat meeting. */
@@ -294,6 +307,7 @@ export interface ChatroomDirectMessage {
   readonly senderId: string
   readonly text: string
   readonly files?: readonly ChatroomFileReference[]
+  readonly card?: ChatroomExternalCard
   readonly createdAt: number
 }
 

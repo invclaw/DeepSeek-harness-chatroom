@@ -5,6 +5,7 @@ import { CHATROOM_AVATARS, type ChatroomAvatarId } from '../avatars.js'
 import { ChatroomAvatar } from './ChatroomAvatar.js'
 import type { ChatroomView } from './store.js'
 import { ChatroomAvatarView } from './ChatroomAvatarView.js'
+import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
 
 const DIRECT_MESSAGE_EMOJIS = ['😀', '😄', '😂', '🥰', '😍', '🤔', '😮', '😭', '👍', '👏', '🙏', '🎉', '❤️', '🔥', '✨', '✅', '👀', '🚀'] as const
@@ -26,6 +27,10 @@ export interface ChatroomAccountPanelProps {
   openDirect(peerId?: string): Promise<void>
   closeDirect(): void
   sendDirect(text: string, files?: readonly File[]): Promise<boolean>
+  quickDirectMeeting?(conversationId: string): Promise<boolean>
+  loadWecomAuthorization?(): Promise<ChatroomView['wecomAuthorization']>
+  startWecomAuthorization?(): Promise<boolean>
+  closeWecomAuthorization?(): void
 }
 
 interface OidcProviderForm {
@@ -45,6 +50,7 @@ interface OidcProviderForm {
 export function ChatroomAccountPanels(props: ChatroomAccountPanelProps): JSX.Element {
   return <>
     {props.room.directOpen && <DirectPanel {...props} />}
+    {props.room.wecomAuthorizationOpen && <WecomAuthorizationDialog {...props} />}
   </>
 }
 
@@ -64,6 +70,7 @@ export function ChatroomSettingsSection(props: ChatroomSettingsSectionProps): JS
   }, [superAdmin])
   useEffect(() => {
     void props.loadAutomation?.()
+    void props.loadWecomAuthorization?.()
   }, [])
   return <div className="dsh-chatroom-settings" data-testid="chatroom-settings">
     <header className="dsh-chatroom-settings-header">
@@ -71,8 +78,59 @@ export function ChatroomSettingsSection(props: ChatroomSettingsSectionProps): JS
     </header>
     <AutomationPanel {...panelProps} />
     <PromptPanel {...panelProps} />
+    <WecomAccountPanel {...panelProps} />
     <AccountPanel {...panelProps} embedded />
     {superAdmin && <AdminPanel {...panelProps} embedded />}
+  </div>
+}
+
+function WecomAccountPanel(props: ChatroomAccountPanelProps): JSX.Element {
+  const authorization = props.room.wecomAuthorization
+  return <section className="dsh-chatroom-card dsh-chatroom-wecom-account" aria-label="企业微信账号">
+    <header><div><h2>企业微信账号</h2><p>每个平台账号单独授权；会议和文档操作使用当前登录用户的企业微信身份。</p></div></header>
+    <div className="dsh-chatroom-wecom-account-row">
+      <span>{authorization?.enabled !== true
+        ? '当前服务未启用企业微信 CLI'
+        : authorization.status === 'authorized'
+          ? '已连接'
+          : authorization.status === 'pending' ? '等待扫码确认' : '尚未连接'}</span>
+      {authorization?.enabled === true && authorization.status !== 'authorized' && <button
+        type="button"
+        disabled={props.room.wecomBusy}
+        onClick={() => { void props.startWecomAuthorization?.() }}
+      >{authorization.status === 'pending' ? '查看二维码' : '扫码连接'}</button>}
+    </div>
+    {props.room.wecomError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.wecomError}</div>}
+  </section>
+}
+
+function WecomAuthorizationDialog(props: ChatroomAccountPanelProps): JSX.Element {
+  const authorization = props.room.wecomAuthorization
+  const [qrRevision, setQrRevision] = useState(() => Date.now())
+  useEffect(() => {
+    if (authorization?.status !== 'pending') return
+    const timer = globalThis.setInterval(() => { void props.loadWecomAuthorization?.() }, 1_500)
+    return () => { globalThis.clearInterval(timer) }
+  }, [authorization?.status])
+  useEffect(() => {
+    if (authorization?.qrAvailable === true) setQrRevision(Date.now())
+  }, [authorization?.qrAvailable])
+  return <div className="dsh-chatroom-dialog-layer dsh-chatroom-wecom-auth-layer" data-testid="chatroom-wecom-auth">
+    <section className="dsh-chatroom-card dsh-chatroom-wecom-auth-card" aria-label="连接企业微信">
+      <header><div><h2>连接企业微信</h2><p>使用当前平台账号对应的企业微信扫码。凭据仅保存在服务器上的独立加密目录中。</p></div><button aria-label="关闭企业微信登录" type="button" onClick={props.closeWecomAuthorization}>×</button></header>
+      {authorization?.status === 'authorized'
+        ? <div className="dsh-chatroom-wecom-auth-success"><span aria-hidden>✓</span><strong>已连接，可以发起快速会议</strong></div>
+        : authorization?.qrAvailable === true
+          ? <><img className="dsh-chatroom-wecom-qr" src={`${CHATROOM_API_PREFIX}/wecom/auth/qr?v=${qrRevision}`} alt="企业微信登录二维码" /><p className="dsh-chatroom-panel-status">请使用企业微信扫码并在手机上确认。</p></>
+          : <div className="dsh-chatroom-panel-status">{props.room.wecomBusy ? '正在生成登录二维码…' : '等待二维码…'}</div>}
+      {authorization?.enabled === true && authorization.status !== 'authorized' && <button
+        className="dsh-chatroom-wecom-retry"
+        type="button"
+        disabled={props.room.wecomBusy}
+        onClick={() => { void props.startWecomAuthorization?.() }}
+      >重新生成二维码</button>}
+      {props.room.wecomError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.wecomError}</div>}
+    </section>
   </div>
 }
 
@@ -361,6 +419,7 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
             <div>
               <strong>{own ? '我' : current.peer.displayName}</strong>
               {message.text !== '' && <p>{message.text}</p>}
+              {message.card !== undefined && <ChatroomExternalCardView card={message.card} />}
               {message.files !== undefined && message.files.length > 0 && <div className="dsh-chatroom-direct-media">
                 {message.files.map(file => {
                   const url = `${CHATROOM_API_PREFIX}/files/${encodeURIComponent(file.id)}`
@@ -420,6 +479,12 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
               </div>}
             </div>
             <button type="button" aria-label="选择私聊图片或文件" onClick={() => { fileInputRef.current?.click() }}>📎 <span>附件</span></button>
+            <button
+              type="button"
+              className="dsh-chatroom-direct-meeting"
+              disabled={props.room.wecomBusy}
+              onClick={() => { void props.quickDirectMeeting?.(current.id) }}
+            >⚡ <span>快速会议</span></button>
             <input ref={fileInputRef} aria-label="选择私聊文件" type="file" multiple onChange={event => {
               const selected = event.currentTarget.files
               if (selected !== null) setFiles(currentFiles => [...currentFiles, ...selected])

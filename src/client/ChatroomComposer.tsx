@@ -142,12 +142,17 @@ export function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | nu
   const room = props.useChatroom(snapshot => snapshot)
   const target = props.resolveTarget(String(props.sessionId))
   const active = target?.room
-  if (active === undefined || room.composerRoomId !== active.id) return null
-  const hasFiles = room.pendingFiles.length > 0
-  if (!hasFiles && room.composerError === undefined) return null
+  if (active === undefined) return null
+  const compositionActive = room.composerRoomId === active.id
+  const hasFiles = compositionActive && room.pendingFiles.length > 0
+  const resetVisible = target?.kind === 'room'
+    && active.aiContextResetSeq !== undefined
+    && active.aiContextStartSeq === undefined
+  if (!hasFiles && !resetVisible && (!compositionActive || room.composerError === undefined)) return null
   const canSendFilesOnly = hasFiles && props.input.draft.trim() === '' && props.input.imageIds.length === 0
   return (
     <div className="dsh-chatroom-composer-dock" data-testid="chatroom-composer-dock">
+      {resetVisible && <ChatroomContextResetDivider />}
       {hasFiles && (
         <div className="dsh-chatroom-pending-files">
           {room.pendingFiles.map(item => (
@@ -171,9 +176,16 @@ export function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | nu
             : <small className="dsh-chatroom-file-hint">文件将随当前消息发送</small>}
         </div>
       )}
-      {room.composerError !== undefined && <div className="dsh-chatroom-composer-error" role="alert">{room.composerError}</div>}
+      {compositionActive && room.composerError !== undefined && <div className="dsh-chatroom-composer-error" role="alert">{room.composerError}</div>}
     </div>
   )
+}
+
+/** Persistent visual boundary between retained room history and a fresh AI context. */
+export function ChatroomContextResetDivider(): JSX.Element {
+  return <div className="dsh-chatroom-context-reset" role="status">
+    <span>新的 AI 会话</span><small>此前群聊消息继续保留</small>
+  </div>
 }
 
 /** Native attachment renderer plus an in-card reply preview for shared sessions. */

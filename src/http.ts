@@ -8,6 +8,7 @@ import type { Config } from './config.js'
 import { cookieValue, expiredSessionCookie, sessionCookie } from './cookies.js'
 import { matchChatroomApi } from './routes.js'
 import { ChatroomInputError, ChatroomRuntime } from './room.js'
+import { WecomCliError } from './wecom.js'
 import { isChatroomReactionEmoji } from './reactions.js'
 import type {
   ChatroomErrorResponse,
@@ -26,6 +27,7 @@ import type {
   ChatroomSessionResponse,
   ChatroomThreadPromptRequest,
   ChatroomThreadRoot,
+  ChatroomWecomAuthorizationState,
 } from './types.js'
 
 /** HTTP/SSE adapter for the browser client. */
@@ -107,6 +109,14 @@ export class ChatroomHttpController {
         await this.handleQuickMeeting(request, response)
         return
       }
+      if (route.endpoint === '/wecom/auth') {
+        await this.handleWecomAuthorization(request, response)
+        return
+      }
+      if (route.endpoint === '/wecom/auth/qr') {
+        await this.handleWecomAuthorizationQr(request, response)
+        return
+      }
       if (route.endpoint === '/automation') {
         await this.handleAutomation(request, response)
         return
@@ -162,7 +172,7 @@ export class ChatroomHttpController {
         json(response, 429, { error: error.message } satisfies ChatroomErrorResponse)
         return
       }
-      if (error instanceof ChatroomInputError || error instanceof ChatroomAuthError) {
+      if (error instanceof ChatroomInputError || error instanceof ChatroomAuthError || error instanceof WecomCliError) {
         json(response, 422, { error: error.message } satisfies ChatroomErrorResponse)
         return
       }
@@ -663,8 +673,46 @@ export class ChatroomHttpController {
     const identity = await this.requireIdentity(request, response)
     if (identity === undefined) return
     const body = await readJson(request, smallRequestLimit(this.config))
-    const card = await this.runtime.createQuickMeeting(fieldString(body, 'roomId'), identity)
+    const roomId = optionalFieldString(body, 'roomId')
+    const directConversationId = optionalFieldString(body, 'directConversationId')
+    if ((roomId === undefined) === (directConversationId === undefined)) {
+      throw new ChatroomInputError('快速会议必须指定一个群聊或私聊。')
+    }
+    const card = roomId === undefined
+      ? await this.runtime.createDirectQuickMeeting(directConversationId!, identity)
+      : await this.runtime.createQuickMeeting(roomId, identity)
     json(response, 201, { accepted: true, card } satisfies ChatroomQuickMeetingResponse)
+  }
+
+  private async handleWecomAuthorization(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'GET' && request.method !== 'POST') {
+      methodNotAllowed(response, 'GET, POST')
+      return
+    }
+    if (request.method === 'POST') assertSameOrigin(request)
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const state = request.method === 'POST'
+      ? await this.runtime.startWecomAuthorization(identity)
+      : await this.runtime.wecomAuthorizationState(identity)
+    json(response, 200, state satisfies ChatroomWecomAuthorizationState)
+  }
+
+  private async handleWecomAuthorizationQr(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'GET') {
+      methodNotAllowed(response, 'GET')
+      return
+    }
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const qr = await this.runtime.wecomAuthorizationQr(identity)
+    response.writeHead(200, {
+      'Content-Type': 'image/png',
+      'Content-Length': qr.byteLength,
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    })
+    response.end(qr)
   }
 
   private async handleAutomation(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -1143,18 +1191,18 @@ function fieldString(body: Record<string, unknown>, field: string): string {
   return value
 }
 
+function optionalFieldString(body: Record<string, unknown>, field: string): string | undefined {
+  const value = body[field]
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value === '') throw new ChatroomInputError(`字段 ${field} 必须是非空字符串。`)
+  return value
+}
+
 function stringArray(body: Record<string, unknown>, field: string): readonly string[] {
   const value = body[field]
   if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
     throw new ChatroomInputError(`字段 ${field} 必须是字符串数组。`)
   }
-  return value
-}
-
-function optionalFieldString(body: Record<string, unknown>, field: string): string | undefined {
-  const value = body[field]
-  if (value === undefined) return undefined
-  if (typeof value !== 'string') throw new ChatroomInputError(`字段 ${field} 必须是字符串。`)
   return value
 }
 

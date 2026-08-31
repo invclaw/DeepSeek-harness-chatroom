@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.3.2" src="https://img.shields.io/badge/version-1.3.2-4f6bff">
+    <img alt="Version 1.3.3" src="https://img.shields.io/badge/version-1.3.3-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -61,13 +61,13 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 - **Settings → Chatroom & accounts** selects the global auto-reply decision model and edits separate system prompts for the main/branch Agent and the auto-reply decision Agent. Prompt changes apply to the next turn without restarting Harness.
 - The native `@` menu lists the Agent and current room members together. Participant identity is attached on the Host before Session admission, so browsers and the model see the same sender.
 - Shared Session rows retain the native sidebar while adding a roomier member-avatar collage. Native Session renames update the durable room title, so the name survives navigation and restarts.
-- Shared rooms use the full available conversation column for the transcript and composer instead of the native fixed-width cap.
+- Group, Solo, and Direct reuse the room composer layout and interaction model. Their transcript and composer use the full available conversation column instead of the native fixed-width cap.
 - The Session header shows the current identity, online count, and **Group management**. New-message toasts, title unread counts, and opt-in browser notifications work across rooms.
 
 ### Complete native Agent runtime
 
 - The native sidebar, Conversation/Trajectory tabs, composer, model and permission selectors, reasoning/tool flow, Session log, approvals, questions, slash commands, stop/queue/steer, failures, and retries remain intact.
-- The room composer adds **Stop** and **New session**. Stop cancels the active Agent turn while retaining queued input. New session keeps the room's visible Session and complete transcript, but persists a new context boundary so later AI requests contain only messages sent after that point. Concurrent requests coalesce into one reset.
+- The room composer adds **Stop** and **New session**. Stop cancels the active Agent turn while retaining queued input. New session keeps the room's visible Session and complete transcript, first shows a new-AI-conversation divider above the composer, and then permanently keeps it before the next participant message. The server persists the matching context boundary so later AI requests contain only messages sent after that point. Concurrent requests coalesce into one reset.
 - While an Agent is running, Think and tool rows stay visible. Once the final answer arrives, the preceding process rows collapse into one expandable summary.
 - Persistent branches open in a right-side panel and own independent Harness Sessions. Branches support Markdown, `@` candidates, images/files, quotes, reactions, forwarding, selection, and the full Agent runtime without nested chatroom branches. Their sidebar rows use a compact marker and parent context instead of a heavy edge stripe, keeping the hierarchy visible without making the branch look like a second room. Gateways that reject embedded documents switch immediately to an inline compatibility view instead of waiting for a timeout, with the complete Agent available in a new tab.
 - Historical images remain durable. For text-only models, only the model request receives deterministic text markers in place of image input; the UI keeps the original media.
@@ -84,15 +84,15 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 ### Enterprise WeChat collaboration
 
 - The official [`@wecom/cli`](https://github.com/WecomTeam/wecom-cli) supplies calendar CRUD, attendees/free-busy/rooms, meeting lifecycle/minutes/transcripts, document search and permissions, online sheets, smart sheets, and smart documents.
-- Agents read each live operation definition with `wecom_schema` and execute it with `wecom_action`. People are resolved through contacts instead of guessed or exposed internal IDs. Missing authorization or an individual CLI failure remains isolated from plugin and Harness startup.
-- **Quick meeting** in the composer creates a default 60-minute online meeting for the current enterprise identity and posts it immediately. Meeting and document results render as native cards with titles, times, attendees, owners, and links instead of plain text.
+- Agents read each live operation definition with `wecom_schema` and execute it with `wecom_action`. Every call resolves the current prompting platform user and that account's isolated Enterprise WeChat authorization. People are resolved through contacts instead of guessed or exposed internal IDs. Missing authorization or an individual CLI failure remains isolated from plugin and Harness startup.
+- **Quick meeting** in Group and Direct creates a default 60-minute online meeting with the current platform account's isolated Enterprise WeChat authorization and posts it immediately; Solo intentionally omits the action. When the official CLI does not return a structured human `userid`, the plugin does not invent an attendee and follows the CLI's optional-attendees schema. Meeting and document results render as native cards with titles, times, attendees, owners, and links instead of plain text.
 
 ### Accounts, SSO, and private chat
 
 - Optional local password registration, super-administrator account provisioning, roles/status, password rotation, disabled-account revocation, and one identity reused across rooms.
 - Pluggable authentication through local accounts, [`dsh-auth`](https://github.com/hxy91819/dsh-auth), or enterprise OIDC Authorization Code with discovery, PKCE, state, and nonce.
 - The chosen external provider can automatically receive unauthenticated users; `local=1` keeps a local recovery entry.
-- Durable private conversations are visible only to their two participants, support Enter-to-send, Shift+Enter newlines, emoji, images, and files, and reuse the same unread/toast/browser-notification channel. The Direct folder is also the account directory: clicking any profile starts the conversation in the main Harness conversation area.
+- Durable private conversations are visible only to their two participants, support Enter-to-send, Shift+Enter newlines, emoji, images, files, and Quick-meeting cards, and reuse the same unread/toast/browser-notification channel. The Direct folder is also the account directory: clicking any profile starts the conversation in the main Harness conversation area.
 
 ### Storage and backup
 
@@ -104,6 +104,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.3.3** — unify the full-width Group, Solo, and Direct composer experience, persist the AI-context reset divider at its exact transcript position, and add per-platform-account Enterprise WeChat QR authorization with Quick-meeting compatibility for identity responses that omit a structured human user id.
 - **1.3.2** — retain the complete room transcript when starting a new AI conversation and exclude every earlier user, assistant, and tool-result message from later model requests.
 - **1.3.1** — polish branch navigation with a closer marker and no parent edge stripe, replace the generic Settings navigation gear with a semantic group/account icon and safe fallback, and add browser coverage for the layout and settings navigation.
 - **1.3.0** — add room Stop/New-session controls, official schema-driven wecom-cli Agent tools, Quick meeting, and native meeting/document cards while keeping Enterprise WeChat authorization failures isolated from Harness startup.
@@ -250,7 +251,7 @@ Override it in the Web profile's `cordis.patch.yml` when needed:
 
 ### Enterprise WeChat authorization
 
-The dependency is installed with the plugin, so no global CLI install is required. Before first use, run `pnpm exec wecom-cli auth init` as the same operating-system user and with the same configuration directory as Harness, then scan the QR code. Container deployments should point `WECOM_CLI_CONFIG_DIR` at persistent storage. Check the state with `pnpm exec wecom-cli auth show --status`. Without authorization, only Quick meeting and Agent Enterprise WeChat operations fail; ordinary rooms and Agents continue to run.
+The dependency is installed with the plugin, so no global CLI install is required. On the first Quick-meeting action, each platform user receives an in-page QR code and scans it once with their own Enterprise WeChat account. The official CLI encrypts credentials under an account-isolated directory at `wecomCliConfigDirectory/accounts/` (or the chat data directory's `wecom-cli/accounts/` when unset); container deployments should persist that parent directory. Missing authorization pauses only that user's Quick meeting or Agent Enterprise WeChat action; ordinary rooms and Agents continue to run.
 
 `authSecret` encrypts OIDC client secrets and hashes no passwords directly; keep it stable and outside Git. Local passwords use salted scrypt. The first password registration must present `authBootstrapToken` and becomes the initial super administrator. Later registrations follow the mutable policy in **System administration**. Login attempts are bounded in memory, disabling an account revokes all its sessions, and changing a password rotates the current session and revokes older ones. The authentication cookie is random, stored only by SHA-256 digest, `HttpOnly`, `SameSite=Strict`, root-scoped, and `Secure` whenever `authPublicOrigin` uses HTTPS.
 

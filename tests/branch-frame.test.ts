@@ -126,7 +126,7 @@ describe('native branch frame isolation', () => {
     )
     expect(CHATROOM_STYLES).toContain('grid-column: 2 !important;')
     expect(CHATROOM_STYLES).toContain('[data-dsh-chatroom-process-row][hidden] { display: none !important; }')
-    expect(CHATROOM_STYLES).toContain('html[data-dsh-chatroom-active] [data-conversation-scroll]')
+    expect(CHATROOM_STYLES).toContain('html[data-dsh-chatroom-installed] [data-conversation-scroll]')
     expect(CHATROOM_STYLES).toContain('--dsh-chat-content-width: 100%;')
     expect(CHATROOM_STYLES).toContain('--dsh-composer-card-max-width: 100%;')
   })
