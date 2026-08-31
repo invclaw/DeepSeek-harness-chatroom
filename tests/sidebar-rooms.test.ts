@@ -317,6 +317,81 @@ describe('native sidebar room rows', () => {
     observer.disconnect()
   })
 
+  it('keeps only the two newest branches visible per room until that room is expanded', () => {
+    document.body.innerHTML = `
+      <div role="tree">
+        <span><div role="treeitem" aria-selected="true"><span>甲群</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：甲一</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：甲四</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：甲二</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：甲三</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>乙群</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：乙一</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：乙三</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：乙二</span></div></span>
+      </div>
+    `
+    const rows = [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+    const sessionIds = [
+      'parent-a', 'chatroom-thread-v1-a1', 'chatroom-thread-v1-a4', 'chatroom-thread-v1-a2',
+      'chatroom-thread-v1-a3', 'parent-b', 'chatroom-thread-v1-b1', 'chatroom-thread-v1-b3',
+      'chatroom-thread-v1-b2',
+    ]
+    rows.forEach((row, index) => bindNativeSession(row, sessionIds[index]!))
+    const rooms = [
+      { id: 'room-a', title: '甲群', sessionId: 'parent-a' },
+      { id: 'room-b', title: '乙群', sessionId: 'parent-b' },
+    ]
+    const summaries = Object.fromEntries(sessionIds.map((sessionId, index) => [sessionId, {
+      id: sessionId,
+      displayTitle: rows[index]!.textContent!.trim(),
+      ...(sessionId.startsWith('chatroom-thread-v1-a') ? { parentId: 'parent-a' } : {}),
+      ...(sessionId.startsWith('chatroom-thread-v1-b') ? { parentId: 'parent-b' } : {}),
+      running: false,
+      blank: false,
+      updatedAt: sessionId.startsWith('chatroom-thread-v1-') ? Number(sessionId.at(-1)) : 0,
+    }]))
+
+    const snapshot = {
+      rooms, room: rooms[0], members: [], directPeers: [], directConversations: [],
+    } as unknown as ChatroomView
+    const sessionList = { byId: summaries } as never
+    reconcileSidebarRoomRows(document, snapshot, 'parent-a' as never, undefined, undefined, undefined, sessionList)
+
+    const hiddenBranchIds = (): string[] => [...document.querySelectorAll<HTMLElement>('[data-dsh-chatroom-branch-row]')]
+      .filter(row => row.hasAttribute('data-dsh-chatroom-branch-overflow-row')
+        || row.parentElement?.hasAttribute('data-dsh-chatroom-branch-overflow-row') === true)
+      .map(row => row.dataset.dshChatroomBranchSessionId!)
+      .sort()
+    expect(hiddenBranchIds()).toEqual([
+      'chatroom-thread-v1-a1', 'chatroom-thread-v1-a2', 'chatroom-thread-v1-b1',
+    ])
+    const controls = [...document.querySelectorAll<HTMLElement>('[data-dsh-chatroom-branch-overflow]')]
+    expect(controls).toHaveLength(2)
+    const firstControl = controls.find(control => control.dataset.parentSessionId === 'parent-a')!
+    const secondControl = controls.find(control => control.dataset.parentSessionId === 'parent-b')!
+    expect(firstControl.textContent).toBe('展开其余 2 个分支')
+    expect(secondControl.textContent).toBe('展开其余 1 个分支')
+    const firstRoomSecondNewest = rows.find(row => row.dataset.dshChatroomBranchSessionId === 'chatroom-thread-v1-a3')!
+    const secondRoom = rows.find(row => row.dataset.dshChatroomRoomId === 'room-b')!
+    expect(Number(firstRoomSecondNewest.style.order)).toBeLessThan(Number(firstControl.style.order))
+    expect(Number(firstControl.style.order)).toBeLessThan(Number(secondRoom.style.order))
+
+    firstControl.querySelector<HTMLButtonElement>('button')!.click()
+    expect(hiddenBranchIds()).toEqual(['chatroom-thread-v1-b1'])
+    expect(firstControl.textContent).toBe('收起')
+    expect(firstControl.querySelector('button')?.getAttribute('aria-expanded')).toBe('true')
+
+    reconcileSidebarRoomRows(document, snapshot, 'parent-a' as never, undefined, undefined, undefined, sessionList)
+    expect(hiddenBranchIds()).toEqual(['chatroom-thread-v1-b1'])
+    expect(firstControl.textContent).toBe('收起')
+
+    firstControl.querySelector<HTMLButtonElement>('button')!.click()
+    expect(hiddenBranchIds()).toEqual([
+      'chatroom-thread-v1-a1', 'chatroom-thread-v1-a2', 'chatroom-thread-v1-b1',
+    ])
+  })
+
   it('does not bind a selected branch row to the active parent room', () => {
     document.body.innerHTML = '<div role="treeitem" aria-selected="true"><span></span><span>分支：发布计划</span></div>'
     const row = document.querySelector<HTMLElement>('[role="treeitem"]')!

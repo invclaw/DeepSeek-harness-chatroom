@@ -58,6 +58,32 @@ describe('sidebar category overflow in a real browser', () => {
     expect(sessionRows().filter(isVisible)).toHaveLength(0)
     expect(isVisible(requiredElement<HTMLElement>('[data-dsh-chatroom-category-overflow="solo"]'))).toBe(false)
   })
+
+  it('shows the two newest room branches and expands the older branches in place', () => {
+    const { snapshot, sessionList } = mountBranchSidebar()
+
+    reconcileSidebarRoomRows(
+      document,
+      snapshot,
+      'parent-session' as never,
+      undefined,
+      undefined,
+      undefined,
+      sessionList,
+    )
+
+    const branches = [...document.querySelectorAll<HTMLElement>('[data-dsh-chatroom-branch-row]')]
+    const control = requiredElement<HTMLElement>('[data-dsh-chatroom-branch-overflow]')
+    expect(branches.filter(isVisible)).toHaveLength(2)
+    expect(control.textContent).toBe('展开其余 2 个分支')
+    expect(bottomOfVisibleRows(branches)).toBeLessThanOrEqual(control.getBoundingClientRect().top)
+
+    requiredElement<HTMLButtonElement>('[data-dsh-chatroom-branch-overflow] button').click()
+
+    expect(branches.filter(isVisible)).toHaveLength(4)
+    expect(control.textContent).toBe('收起')
+    expect(bottomOfVisibleRows(branches)).toBeLessThanOrEqual(control.getBoundingClientRect().top)
+  })
 })
 
 function sessionRows(): readonly HTMLElement[] {
@@ -104,6 +130,63 @@ function mountSidebar(sessionsPerSection: readonly number[]): void {
       + '</div>'
   }).join('')
   document.body.innerHTML = `<div class="host-tree" role="tree">${sections}</div>`
+}
+
+function mountBranchSidebar(): { readonly snapshot: ChatroomView; readonly sessionList: never } {
+  document.documentElement.dataset.dshChatroomActive = ''
+  const style = document.createElement('style')
+  style.textContent = `${CHATROOM_STYLES}
+    body { margin: 0; }
+    .host-tree { display: flex; flex-direction: column; width: 280px; }
+    .host-wrapper { display: block; }
+    div[role="treeitem"] { display: flex; align-items: center; height: 44px; }
+  `
+  document.head.append(style)
+  document.body.innerHTML = `
+    <div class="host-tree" role="tree">
+      <span class="host-wrapper"><div role="treeitem" aria-selected="true"><span>项目群</span></div></span>
+      <span class="host-wrapper"><div role="treeitem" aria-selected="false"><span>分支：旧一</span></div></span>
+      <span class="host-wrapper"><div role="treeitem" aria-selected="false"><span>分支：最新</span></div></span>
+      <span class="host-wrapper"><div role="treeitem" aria-selected="false"><span>分支：旧二</span></div></span>
+      <span class="host-wrapper"><div role="treeitem" aria-selected="false"><span>分支：次新</span></div></span>
+    </div>
+  `
+  const rows = [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+  const ids = [
+    'parent-session', 'chatroom-thread-v1-old-1', 'chatroom-thread-v1-newest',
+    'chatroom-thread-v1-old-2', 'chatroom-thread-v1-recent',
+  ]
+  rows.forEach((row, index) => {
+    row.draggable = true
+    row.addEventListener('dragstart', event => {
+      ;(event as DragEvent).dataTransfer?.setData('text/plain', ids[index]!)
+    })
+  })
+  const room = { id: 'room', title: '项目群', sessionId: 'parent-session' }
+  const snapshot = {
+    rooms: [room], room, members: [], directPeers: [], directConversations: [],
+  } as unknown as ChatroomView
+  const sessionList = {
+    byId: {
+      'parent-session': sessionSummary('parent-session', '项目群', 0),
+      'chatroom-thread-v1-old-1': sessionSummary('chatroom-thread-v1-old-1', '分支：旧一', 1),
+      'chatroom-thread-v1-newest': sessionSummary('chatroom-thread-v1-newest', '分支：最新', 4),
+      'chatroom-thread-v1-old-2': sessionSummary('chatroom-thread-v1-old-2', '分支：旧二', 2),
+      'chatroom-thread-v1-recent': sessionSummary('chatroom-thread-v1-recent', '分支：次新', 3),
+    },
+  } as never
+  return { snapshot, sessionList }
+}
+
+function sessionSummary(id: string, displayTitle: string, updatedAt: number): object {
+  return {
+    id,
+    displayTitle,
+    ...(id === 'parent-session' ? {} : { parentId: 'parent-session' }),
+    running: false,
+    blank: false,
+    updatedAt,
+  }
 }
 
 function requiredElement<T extends Element>(selector: string): T {
