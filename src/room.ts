@@ -753,7 +753,7 @@ export class ChatroomRuntime {
     const state = this.requireState(roomId)
     this.assertRoomMember(roomId, identity.participantId)
     const task = state.admission.then(async () => {
-      const created = await this.createMeetingCard()
+      const created = await this.createMeetingCard(identity)
       this.trackMeeting(created.card, 'room', roomId, created.externalMeetingId)
       await this.appendRoomCard(state, identity, created.card)
       return created.card
@@ -769,7 +769,7 @@ export class ChatroomRuntime {
     if (conversation === undefined || !conversation.participantIds.includes(identity.participantId)) {
       throw new ChatroomInputError('私聊不存在或你无权访问。')
     }
-    const created = await this.createMeetingCard()
+    const created = await this.createMeetingCard(identity)
     this.trackMeeting(created.card, 'direct', conversation.id, created.externalMeetingId)
     await this.appendDirectCard(conversation, identity, created.card)
     return created.card
@@ -2205,17 +2205,26 @@ export class ChatroomRuntime {
     })
   }
 
-  private async createMeetingCard(): Promise<{ card: ChatroomMeetingCard; externalMeetingId?: string }> {
+  private async createMeetingCard(identity: ChatroomIdentity): Promise<{ card: ChatroomMeetingCard; externalMeetingId?: string }> {
     const client = this.wecom.client()
-    const whoami = await client.invoke('identity', [], 'whoami', {})
-    const userid = findStringField(whoami, ['userid', 'user_id', 'open_userid', 'open_vid'])
+    const peer = this.directoryPeer(identity.participantId) ?? (this.config.authEnabled ? undefined : {
+      username: identity.displayName,
+      displayName: identity.displayName,
+    })
+    if (peer === undefined) throw new ChatroomInputError('当前发起人不在聊天账号目录中。')
+    const contact = wecomContactUser(await client.invoke('contact', ['users'], 'search', {
+      keywords: [...new Set([peer.username, peer.displayName])],
+    }), peer.username, peer.displayName)
+    if (contact === undefined) {
+      throw new ChatroomInputError(`企微通讯录中找不到当前发起人“${identity.displayName}”，请检查聊天账号与企微账号是否一致。`)
+    }
     const begin = new Date(Date.now() + 5 * 60_000)
     const end = new Date(begin.getTime() + this.config.wecomQuickMeetingDurationMinutes * 60_000)
     const parameters = {
       subject: this.config.wecomQuickMeetingSubject,
       begin_time: formatWecomTime(begin, this.config.wecomTimeZone),
       end_time: formatWecomTime(end, this.config.wecomTimeZone),
-      ...(userid === undefined ? {} : { attendees: [{ userid }] }),
+      attendees: [{ userid: contact.userid }],
       timezone: {
         timezone_id: this.config.wecomTimeZone,
         timezone_offset: timezoneOffsetSeconds(begin, this.config.wecomTimeZone),
@@ -2226,7 +2235,12 @@ export class ChatroomRuntime {
     if (inferred?.kind !== 'meeting') throw new ChatroomInputError('企微已创建会议，但返回信息缺少会议标题。')
     const externalMeetingId = findStringField(result, ['meeting_id'])
     return {
-      card: { ...inferred, id: randomUUID(), status: inferred.status ?? 'init' },
+      card: {
+        ...inferred,
+        id: randomUUID(),
+        status: inferred.status ?? 'init',
+        attendees: inferred.attendees ?? [contact.name],
+      },
       ...(externalMeetingId === undefined ? {} : { externalMeetingId }),
     }
   }
@@ -3570,6 +3584,41 @@ function findStringField(value: unknown, keys: readonly string[]): string | unde
     return undefined
   }
   return visit(value, 0)
+}
+
+function wecomContactUser(
+  value: unknown,
+  username: string,
+  displayName: string,
+): { readonly userid: string; readonly name: string } | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const users = (value as Record<string, unknown>).users
+  if (!Array.isArray(users)) return undefined
+  const normalizedUsername = username.trim().toLocaleLowerCase('en-US')
+  const normalizedDisplayName = displayName.trim().toLocaleLowerCase('zh-CN')
+  const candidates = users.flatMap((item) => {
+    if (item === null || typeof item !== 'object') return []
+    const record = item as Record<string, unknown>
+    const userid = stringField(record, 'userid')
+    const name = stringField(record, 'name')
+    if (userid === undefined || name === undefined) return []
+    const alias = stringField(record, 'alias')?.toLocaleLowerCase('en-US')
+    const emailName = stringField(record, 'email')?.split('@', 1)[0]?.toLocaleLowerCase('en-US')
+    const matchedKeywords = Array.isArray(record.matched_keywords)
+      ? record.matched_keywords.filter((keyword): keyword is string => typeof keyword === 'string')
+        .map(keyword => keyword.toLocaleLowerCase('zh-CN'))
+      : []
+    const score = userid.toLocaleLowerCase('en-US') === normalizedUsername ? 5
+      : alias === normalizedUsername || emailName === normalizedUsername ? 4
+        : matchedKeywords.includes(normalizedUsername) ? 3
+          : name.toLocaleLowerCase('zh-CN') === normalizedDisplayName ? 2
+            : matchedKeywords.includes(normalizedDisplayName) ? 1
+              : 0
+    return score === 0 ? [] : [{ userid, name, score }]
+  }).sort((left, right) => right.score - left.score)
+  const best = candidates[0]
+  if (best === undefined || candidates[1]?.score === best.score) return undefined
+  return { userid: best.userid, name: best.name }
 }
 
 function findMeetingDetail(value: unknown): Record<string, unknown> | undefined {

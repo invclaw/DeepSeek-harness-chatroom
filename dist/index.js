@@ -3148,7 +3148,7 @@ var ChatroomRuntime = class {
     const state = this.requireState(roomId);
     this.assertRoomMember(roomId, identity.participantId);
     const task = state.admission.then(async () => {
-      const created = await this.createMeetingCard();
+      const created = await this.createMeetingCard(identity);
       this.trackMeeting(created.card, "room", roomId, created.externalMeetingId);
       await this.appendRoomCard(state, identity, created.card);
       return created.card;
@@ -3163,7 +3163,7 @@ var ChatroomRuntime = class {
     if (conversation === void 0 || !conversation.participantIds.includes(identity.participantId)) {
       throw new ChatroomInputError("\u79C1\u804A\u4E0D\u5B58\u5728\u6216\u4F60\u65E0\u6743\u8BBF\u95EE\u3002");
     }
-    const created = await this.createMeetingCard();
+    const created = await this.createMeetingCard(identity);
     this.trackMeeting(created.card, "direct", conversation.id, created.externalMeetingId);
     await this.appendDirectCard(conversation, identity, created.card);
     return created.card;
@@ -4372,17 +4372,26 @@ var ChatroomRuntime = class {
       text: () => "\u4F60\u53EF\u4F7F\u7528 wecom_schema \u4E0E wecom_action \u64CD\u4F5C\u4F01\u4E1A\u5FAE\u4FE1\u65E5\u7A0B\u3001\u4F1A\u8BAE\u3001\u4F1A\u8BAE\u7EAA\u8981\u3001\u6587\u6863\u3001\u5728\u7EBF\u8868\u683C\u3001\u667A\u80FD\u8868\u683C\u548C\u667A\u80FD\u6587\u6863\u3002\u5199\u64CD\u4F5C\u524D\u5148\u8BFB\u53D6\u5BF9\u5E94 schema\uFF1B\u6D89\u53CA\u4EBA\u5458\u65F6\u5148\u7528 contact \u89E3\u6790\u771F\u5B9E\u8D26\u53F7\uFF1B\u4E0D\u8981\u731C\u6D4B\u6216\u5411\u7528\u6237\u5C55\u793A userid\u3001docid\u3001meeting_id \u7B49\u5185\u90E8\u6807\u8BC6\u3002\u7528\u6237\u672A\u6307\u5B9A\u6587\u6863\u7C7B\u578B\u65F6\u9ED8\u8BA4\u521B\u5EFA\u667A\u80FD\u6587\u6863\u3002"
     });
   }
-  async createMeetingCard() {
+  async createMeetingCard(identity) {
     const client = this.wecom.client();
-    const whoami = await client.invoke("identity", [], "whoami", {});
-    const userid = findStringField(whoami, ["userid", "user_id", "open_userid", "open_vid"]);
+    const peer = this.directoryPeer(identity.participantId) ?? (this.config.authEnabled ? void 0 : {
+      username: identity.displayName,
+      displayName: identity.displayName
+    });
+    if (peer === void 0) throw new ChatroomInputError("\u5F53\u524D\u53D1\u8D77\u4EBA\u4E0D\u5728\u804A\u5929\u8D26\u53F7\u76EE\u5F55\u4E2D\u3002");
+    const contact = wecomContactUser(await client.invoke("contact", ["users"], "search", {
+      keywords: [.../* @__PURE__ */ new Set([peer.username, peer.displayName])]
+    }), peer.username, peer.displayName);
+    if (contact === void 0) {
+      throw new ChatroomInputError(`\u4F01\u5FAE\u901A\u8BAF\u5F55\u4E2D\u627E\u4E0D\u5230\u5F53\u524D\u53D1\u8D77\u4EBA\u201C${identity.displayName}\u201D\uFF0C\u8BF7\u68C0\u67E5\u804A\u5929\u8D26\u53F7\u4E0E\u4F01\u5FAE\u8D26\u53F7\u662F\u5426\u4E00\u81F4\u3002`);
+    }
     const begin = new Date(Date.now() + 5 * 6e4);
     const end = new Date(begin.getTime() + this.config.wecomQuickMeetingDurationMinutes * 6e4);
     const parameters = {
       subject: this.config.wecomQuickMeetingSubject,
       begin_time: formatWecomTime(begin, this.config.wecomTimeZone),
       end_time: formatWecomTime(end, this.config.wecomTimeZone),
-      ...userid === void 0 ? {} : { attendees: [{ userid }] },
+      attendees: [{ userid: contact.userid }],
       timezone: {
         timezone_id: this.config.wecomTimeZone,
         timezone_offset: timezoneOffsetSeconds(begin, this.config.wecomTimeZone)
@@ -4393,7 +4402,12 @@ var ChatroomRuntime = class {
     if (inferred?.kind !== "meeting") throw new ChatroomInputError("\u4F01\u5FAE\u5DF2\u521B\u5EFA\u4F1A\u8BAE\uFF0C\u4F46\u8FD4\u56DE\u4FE1\u606F\u7F3A\u5C11\u4F1A\u8BAE\u6807\u9898\u3002");
     const externalMeetingId = findStringField(result, ["meeting_id"]);
     return {
-      card: { ...inferred, id: randomUUID3(), status: inferred.status ?? "init" },
+      card: {
+        ...inferred,
+        id: randomUUID3(),
+        status: inferred.status ?? "init",
+        attendees: inferred.attendees ?? [contact.name]
+      },
       ...externalMeetingId === void 0 ? {} : { externalMeetingId }
     };
   }
@@ -5548,6 +5562,28 @@ function findStringField(value, keys) {
     return void 0;
   };
   return visit(value, 0);
+}
+function wecomContactUser(value, username, displayName) {
+  if (value === null || typeof value !== "object") return void 0;
+  const users = value.users;
+  if (!Array.isArray(users)) return void 0;
+  const normalizedUsername = username.trim().toLocaleLowerCase("en-US");
+  const normalizedDisplayName = displayName.trim().toLocaleLowerCase("zh-CN");
+  const candidates = users.flatMap((item) => {
+    if (item === null || typeof item !== "object") return [];
+    const record = item;
+    const userid = stringField(record, "userid");
+    const name2 = stringField(record, "name");
+    if (userid === void 0 || name2 === void 0) return [];
+    const alias = stringField(record, "alias")?.toLocaleLowerCase("en-US");
+    const emailName = stringField(record, "email")?.split("@", 1)[0]?.toLocaleLowerCase("en-US");
+    const matchedKeywords = Array.isArray(record.matched_keywords) ? record.matched_keywords.filter((keyword) => typeof keyword === "string").map((keyword) => keyword.toLocaleLowerCase("zh-CN")) : [];
+    const score = userid.toLocaleLowerCase("en-US") === normalizedUsername ? 5 : alias === normalizedUsername || emailName === normalizedUsername ? 4 : matchedKeywords.includes(normalizedUsername) ? 3 : name2.toLocaleLowerCase("zh-CN") === normalizedDisplayName ? 2 : matchedKeywords.includes(normalizedDisplayName) ? 1 : 0;
+    return score === 0 ? [] : [{ userid, name: name2, score }];
+  }).sort((left, right) => right.score - left.score);
+  const best = candidates[0];
+  if (best === void 0 || candidates[1]?.score === best.score) return void 0;
+  return { userid: best.userid, name: best.name };
 }
 function findMeetingDetail(value) {
   const visit = (candidate, depth) => {
