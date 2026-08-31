@@ -24,6 +24,7 @@ import { NewGroupSetupDock } from './NewGroupSetupDock.js'
 import { installRemoteConfigurationApi } from './remote-configuration.js'
 import { RoomIdentityAction } from './RoomIdentityAction.js'
 import { installSidebarRoomRows } from './sidebar-rooms.js'
+import { registerChatroomSettingsNavIcon } from './settings-nav-icon.js'
 import { ChatroomClientStore, newGroupMentionName } from './store.js'
 import { CHATROOM_STYLES } from './styles.js'
 import {
@@ -241,6 +242,15 @@ export function apply(ctx: ClientContext): void {
       sendDirect: store.sendDirect,
     }),
   }, ChatroomSettingsSection))
+
+  // DSH 0.1.x renders a gear for every external settings section because the
+  // slot contract has no icon field. Mark this localized row after the modal
+  // mounts; styles.ts then paints the group/account glyph while the disposer
+  // keeps HMR and plugin disable cleanup deterministic.
+  ctx.effect(
+    () => registerChatroomSettingsNavIcon(() => '群聊与账号'),
+    'chatroom: settings navigation icon',
+  )
 
   ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
     name: 'conversation.session.header.actions',
