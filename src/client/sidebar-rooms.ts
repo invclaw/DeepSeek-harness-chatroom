@@ -170,8 +170,13 @@ export function reconcileSidebarRoomRows(
   for (const row of rows) {
     decorateNativeConversationNavigation(row, closeDirect)
     const selected = row.getAttribute('aria-selected') === 'true'
-    const sessionId = nativeSessionId(row) ?? (selected ? currentSessionId : undefined)
-    const summary = sessionSummary(sessionList, sessionId) ?? uniquelyTitledBranchSummary(sessionList, row)
+    const titledBranch = uniquelyTitledBranchSummary(sessionList, row)
+    // An unambiguous branch summary supplies its Session ID without the drag
+    // probe, whose host state update can otherwise replace and re-probe the row.
+    const sessionId = titledBranch === undefined
+      ? nativeSessionId(row) ?? (selected ? currentSessionId : undefined)
+      : String(titledBranch.id)
+    const summary = sessionSummary(sessionList, sessionId) ?? titledBranch
     const bySession = sessionId === undefined
       ? undefined
       : takeRoom(remaining, candidate => candidate.sessionId === sessionId)
@@ -499,8 +504,12 @@ function decorateRoomRow(
 
 function decorateBranchRow(row: HTMLElement, facts: BranchRowFacts): void {
   row.dataset.dshChatroomBranchRow = ''
-  if (facts.sessionId !== undefined) row.dataset.dshChatroomBranchSessionId = facts.sessionId
-  else delete row.dataset.dshChatroomBranchSessionId
+  if (facts.sessionId !== undefined) {
+    row.dataset.dshChatroomBranchSessionId = facts.sessionId
+    row.setAttribute(SESSION_ID_ATTRIBUTE, facts.sessionId)
+  } else {
+    delete row.dataset.dshChatroomBranchSessionId
+  }
   if (facts.parentSessionId !== undefined) row.dataset.dshChatroomBranchParentSessionId = facts.parentSessionId
   else delete row.dataset.dshChatroomBranchParentSessionId
   row.setAttribute(BRANCH_UPDATED_AT_ATTRIBUTE, String(facts.updatedAt))

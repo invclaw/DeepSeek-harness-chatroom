@@ -713,4 +713,64 @@ describe('native sidebar room rows', () => {
     expect(getSnapshot).toHaveBeenCalled()
     dispose()
   })
+
+  it('settles branch overflow reconciliation without scheduling itself again', async () => {
+    document.body.innerHTML = `
+      <div role="tree">
+        <span><div role="treeitem" aria-selected="true"><span>项目群</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：一</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：四</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：二</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：三</span></div></span>
+      </div>
+    `
+    const rows = [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+    const sessionIds = [
+      'parent-session', 'chatroom-thread-v1-1', 'chatroom-thread-v1-4',
+      'chatroom-thread-v1-2', 'chatroom-thread-v1-3',
+    ]
+    const branchDragStart = vi.fn()
+    rows.forEach((row, index) => {
+      bindNativeSession(row, sessionIds[index]!)
+      if (index > 0) row.addEventListener('dragstart', branchDragStart)
+    })
+    const room = { id: 'room', title: '项目群', sessionId: 'parent-session' }
+    const snapshot = {
+      phase: 'ready', rooms: [room], room, members: [], directPeers: [], directConversations: [],
+    } as unknown as ChatroomView
+    const sessionSnapshot = {
+      current: 'parent-session',
+      byId: Object.fromEntries(sessionIds.map((sessionId, index) => [sessionId, {
+        id: sessionId,
+        displayTitle: rows[index]!.textContent!.trim(),
+        ...(sessionId === 'parent-session' ? {} : { parentId: 'parent-session' }),
+        running: false,
+        blank: false,
+        updatedAt: index,
+      }])),
+    }
+    const getSnapshot = vi.fn(() => sessionSnapshot)
+    const store = {
+      getSnapshot: () => snapshot,
+      subscribe: () => () => undefined,
+      loadDirectDirectory: vi.fn(async () => true),
+      setRoomPinned: vi.fn(),
+      openDirect: vi.fn(),
+      closeDirect: vi.fn(),
+    } as unknown as ChatroomClientStore
+    const sessions = {
+      list: { getSnapshot, subscribe: () => () => undefined },
+    } as never
+
+    const dispose = installSidebarRoomRows(store, sessions)
+    await settleMutations()
+    const settledCalls = getSnapshot.mock.calls.length
+    await settleMutations()
+
+    expect(getSnapshot.mock.calls.length).toBe(settledCalls)
+    expect(settledCalls).toBeLessThan(5)
+    expect(branchDragStart).not.toHaveBeenCalled()
+    expect(rows.slice(1).map(row => row.dataset.dshChatroomSessionId)).toEqual(sessionIds.slice(1))
+    dispose()
+  })
 })

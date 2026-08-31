@@ -104,7 +104,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
-- **1.4.0** — replace per-user Enterprise WeChat authorization with one deployment-wide account managed in Settings, add disconnect/rebind controls, track meeting lifecycle status, post configurable AI summaries after Group meetings end, and expose authenticated meeting-summary APIs.
+- **1.4.0** — replace per-user Enterprise WeChat authorization with one deployment-wide account managed in Settings, add disconnect/rebind controls, track meeting lifecycle status, post configurable AI summaries after Group meetings end, expose authenticated meeting-summary APIs, and keep branch folding from re-triggering native sidebar drag state.
 - **1.3.4** — expand the native per-Workspace session truncation and give each sidebar category a single show-more control whose count matches its folder count, instead of several native buttons stranded mid-list by the flattened categories.
 - **1.3.3** — unify the full-width Group, Solo, and Direct composer experience, persist the AI-context reset divider at its exact transcript position, and add Enterprise WeChat QR authorization with Quick-meeting compatibility for identity responses that omit a structured human user id.
 - **1.3.2** — retain the complete room transcript when starting a new AI conversation and exclude every earlier user, assistant, and tool-result message from later model requests.
