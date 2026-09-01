@@ -28,6 +28,8 @@ import type {
   ChatroomRoomManageResponse,
   ChatroomRoomManagementResponse,
   ChatroomRoomInviteCandidate,
+  ChatroomSearchResponse,
+  ChatroomSearchResult,
   ChatroomServerEvent,
   ChatroomSessionResponse,
   ChatroomThread,
@@ -149,6 +151,11 @@ export interface ChatroomView {
   readonly directMessages: readonly ChatroomDirectMessage[]
   readonly directError: string | undefined
   readonly newSessionModes: Readonly<Record<string, ChatroomNewSessionMode>>
+  readonly searchOpen: boolean
+  readonly searchQuery: string
+  readonly searchBusy: boolean
+  readonly searchResults: readonly ChatroomSearchResult[]
+  readonly searchError: string | undefined
 }
 
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
@@ -221,6 +228,11 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     directMessages: [],
     directError: undefined,
     newSessionModes: {},
+    searchOpen: false,
+    searchQuery: '',
+    searchBusy: false,
+    searchResults: [],
+    searchError: undefined,
   }
   private readonly listeners = new Set<() => void>()
   private eventSource: EventSource | undefined
@@ -230,8 +242,14 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private stopped = false
   private compositionRevision = 0
   private pendingFileSequence = 0
+  private searchRevision = 0
   private originalTitle: string | undefined
-  private activeNativeSession: { readonly id: string; readonly title: string; readonly shareable: boolean } | undefined
+  private activeNativeSession: {
+    readonly id: string
+    readonly title: string
+    readonly shareable: boolean
+    readonly parentSessionId?: string
+  } | undefined
   private roomEnsure: { readonly sessionId: string; readonly promise: Promise<void> } | undefined
   private readonly pendingAutoTriggerWrites = new Map<string, Promise<boolean>>()
 
@@ -250,9 +268,18 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     const direct = this.snapshot.rooms.find(room => room.sessionId === sessionId)
     if (direct !== undefined) return direct
     const frame = this.snapshot.branchFrame
-    return frame?.sessionId === sessionId
-      ? this.snapshot.rooms.find(room => room.id === frame.roomId)
-      : undefined
+    const previewRoomId = this.snapshot.threadPreviews
+      .find(preview => preview.thread.sessionId === sessionId)?.thread.roomId
+    if (frame?.sessionId === sessionId) {
+      return this.snapshot.rooms.find(room => room.id === frame.roomId)
+    }
+    if (previewRoomId !== undefined) {
+      return this.snapshot.rooms.find(room => room.id === previewRoomId)
+    }
+    const active = this.activeNativeSession
+    if (active?.id !== sessionId || active.parentSessionId === undefined
+      || !sessionId.startsWith('chatroom-thread-v1-')) return undefined
+    return this.snapshot.rooms.find(room => room.sessionId === active.parentSessionId)
   }
 
   /** Resolve whether one native Session submits to a room or one branch. */
@@ -260,9 +287,14 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     const room = this.roomForSession(sessionId)
     if (room === undefined) return undefined
     const frame = this.snapshot.branchFrame
-    return frame?.sessionId === sessionId
-      ? { kind: 'thread', room, threadId: frame.threadId }
-      : { kind: 'room', room }
+    if (frame?.sessionId === sessionId) return { kind: 'thread', room, threadId: frame.threadId }
+    const thread = this.snapshot.threadPreviews.find(preview => preview.thread.sessionId === sessionId)?.thread
+    if (thread !== undefined) return { kind: 'thread', room, threadId: thread.id }
+    if (this.activeNativeSession?.id === sessionId && this.activeNativeSession.parentSessionId !== undefined
+      && sessionId.startsWith('chatroom-thread-v1-')) {
+      return { kind: 'thread', room, threadId: sessionId.slice('chatroom-thread-v1-'.length) }
+    }
+    return { kind: 'room', room }
   }
 
   /** Mark a newly created native Session as a Group by default. */
@@ -421,6 +453,10 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         directOpen: false,
         directConversation: undefined,
         directMessages: [],
+        searchOpen: false,
+        searchBusy: false,
+        searchResults: [],
+        searchError: undefined,
       })
     }
   }
@@ -593,6 +629,70 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   closeDirect = (): void => {
     this.set({ directOpen: false, directError: undefined })
+  }
+
+  /** Open the visibility-filtered global account, conversation, and message search. */
+  openSearch = (): void => {
+    if (this.snapshot.phase !== 'ready') return
+    this.set({
+      searchOpen: true,
+      searchError: undefined,
+      membersOpen: false,
+      accountOpen: false,
+      adminOpen: false,
+    })
+  }
+
+  /** Close global search without changing the active conversation. */
+  closeSearch = (): void => {
+    this.searchRevision += 1
+    this.set({ searchOpen: false, searchBusy: false, searchError: undefined })
+  }
+
+  /** Search every account, visible conversation title, and archived message. */
+  searchAll = async (query: string): Promise<void> => {
+    const normalized = query.normalize('NFC').trim()
+    const revision = ++this.searchRevision
+    if (normalized === '') {
+      this.set({ searchQuery: query, searchBusy: false, searchResults: [], searchError: undefined })
+      return
+    }
+    this.set({ searchQuery: query, searchBusy: true, searchError: undefined })
+    try {
+      const response = await requestJson<ChatroomSearchResponse>(
+        `${CHATROOM_API_PREFIX}/search?q=${encodeURIComponent(normalized)}`,
+      )
+      if (revision !== this.searchRevision || !this.snapshot.searchOpen) return
+      this.set({ searchBusy: false, searchResults: response.results, searchError: undefined })
+    } catch (error) {
+      if (revision !== this.searchRevision || !this.snapshot.searchOpen) return
+      this.set({ searchBusy: false, searchResults: [], searchError: errorMessage(error) })
+    }
+  }
+
+  /** Open one search result and reveal its message when it identifies a message block. */
+  openSearchResult = async (result: ChatroomSearchResult): Promise<void> => {
+    this.closeSearch()
+    if (result.participantId !== undefined
+      && (result.conversationKind === 'direct' || result.kind === 'account' || result.kind === 'direct')) {
+      await this.openDirect(result.participantId)
+      this.revealSearchMessage(result.messageId)
+      return
+    }
+    if (result.conversationKind === 'room' && result.conversationId !== undefined) {
+      await this.selectRoom(result.conversationId)
+      this.revealSearchMessage(result.messageId)
+      return
+    }
+    if (result.sessionId !== undefined) {
+      this.closeDirect()
+      this.closeThread()
+      if (!this.openSession(result.sessionId)) {
+        this.set({ error: '暂时无法打开搜索结果对应的会话。' })
+        return
+      }
+      this.revealSearchMessage(result.messageId)
+    }
   }
 
   /** Send one text/media message inside the selected private conversation. */
@@ -823,9 +923,13 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     sessionId: string | undefined,
     title = '新会话',
     shareable = true,
+    parentSessionId?: string,
   ): void => {
-    this.activeNativeSession = sessionId === undefined ? undefined : { id: sessionId, title, shareable }
-    const room = sessionId === undefined ? undefined : this.roomForSession(sessionId)
+    this.activeNativeSession = sessionId === undefined
+      ? undefined
+      : { id: sessionId, title, shareable, ...(parentSessionId === undefined ? {} : { parentSessionId }) }
+    const target = sessionId === undefined ? undefined : this.agentTargetForSession(sessionId)
+    const room = target?.room
     if (room === undefined) {
       this.closeEvents()
       this.identityPromptedRoomId = undefined
@@ -857,7 +961,8 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       this.identityPromptedRoomId = room.id
       this.set({ open: true })
     }
-    if (this.snapshot.room?.id === room.id && this.eventSource !== undefined) return
+    if (this.snapshot.room?.id === room.id
+      && (this.eventSource !== undefined || this.snapshot.branchFrame !== undefined)) return
     this.set({
       room,
       roomEnsureSessionId: undefined,
@@ -1160,6 +1265,11 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     return this.createQuickMeeting({ roomId })
   }
 
+  /** Create a default Enterprise WeChat meeting and publish its card to a branch. */
+  quickThreadMeeting = async (threadId: string): Promise<boolean> => {
+    return this.createQuickMeeting({ threadId })
+  }
+
   /** Create a default Enterprise WeChat meeting and publish its card to a direct conversation. */
   quickDirectMeeting = async (directConversationId: string): Promise<boolean> => {
     return this.createQuickMeeting({ directConversationId })
@@ -1215,7 +1325,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     return await this.startWecomAuthorization()
   }
 
-  private async createQuickMeeting(target: { roomId: string } | { directConversationId: string }): Promise<boolean> {
+  private async createQuickMeeting(
+    target: { roomId: string } | { threadId: string } | { directConversationId: string },
+  ): Promise<boolean> {
     if (this.snapshot.wecomBusy) return false
     this.set({ wecomBusy: true, wecomError: undefined })
     const authorization = await this.loadWecomAuthorization()
@@ -1232,7 +1344,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     return this.publishQuickMeeting(target)
   }
 
-  private async publishQuickMeeting(target: { roomId: string } | { directConversationId: string }): Promise<boolean> {
+  private async publishQuickMeeting(
+    target: { roomId: string } | { threadId: string } | { directConversationId: string },
+  ): Promise<boolean> {
     this.set({ wecomBusy: true, wecomError: undefined })
     try {
       await requestJson<ChatroomQuickMeetingResponse>(`${CHATROOM_API_PREFIX}/wecom/quick-meeting`, {
@@ -1508,6 +1622,10 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private openEvents(room: ChatroomInfo): void {
     this.closeEvents()
     if (this.stopped || this.snapshot.identity === undefined) return
+    if (this.snapshot.branchFrame !== undefined) {
+      this.set({ connection: 'online' })
+      return
+    }
     this.set({ connection: 'connecting' })
     const source = new EventSource(`${CHATROOM_API_PREFIX}/events?roomId=${encodeURIComponent(room.id)}`)
     this.eventSource = source
@@ -1528,7 +1646,8 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   }
 
   private openNotifications(): void {
-    if (this.stopped || this.snapshot.identity === undefined || this.notificationSource !== undefined) return
+    if (this.stopped || this.snapshot.identity === undefined || this.notificationSource !== undefined
+      || this.snapshot.branchFrame !== undefined) return
     const source = new EventSource(`${CHATROOM_API_PREFIX}/notifications`)
     this.notificationSource = source
     source.onmessage = (event) => {
@@ -1711,6 +1830,24 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private updateActiveDocumentRoom(active: boolean): void {
     if (typeof document === 'undefined') return
     document.documentElement.toggleAttribute('data-dsh-chatroom-active', active)
+  }
+
+  private revealSearchMessage(messageId: string | undefined): void {
+    if (messageId === undefined || typeof document === 'undefined') return
+    let attempts = 0
+    const reveal = (): void => {
+      const target = [...document.querySelectorAll<HTMLElement>('[data-dsh-chatroom-message-id]')]
+        .find(candidate => candidate.dataset.dshChatroomMessageId === messageId)
+      if (target === undefined) {
+        attempts += 1
+        if (attempts < 30) globalThis.setTimeout(reveal, 100)
+        return
+      }
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      target.setAttribute('data-dsh-chatroom-search-highlight', '')
+      globalThis.setTimeout(() => { target.removeAttribute('data-dsh-chatroom-search-highlight') }, 2_400)
+    }
+    globalThis.setTimeout(reveal, 0)
   }
 
   private set(patch: Partial<ChatroomView>): void {

@@ -78,22 +78,24 @@ describe('native prompt admission', () => {
     expect(api.sessions.prompt).toBe(original)
   })
 
-  it('routes a native branch composer payload, attachments, and steer mode to the branch Agent', async () => {
+  it('synchronizes room auto-response settings before routing consecutive native branch prompts', async () => {
     const original = vi.fn(async () => ({
       rpcId: 'rpc' as never,
       result: { ok: true as const, value: { accepted: true as const } },
     }))
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify({
       accepted: true,
       aiTriggered: true,
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
     const api = { sessions: { prompt: original } } as unknown as IApiClient
     const room = { id: 'room', sessionId: 'room-session' }
+    const waitForRoomAutoTrigger = vi.fn(async () => undefined)
     const store = {
       agentTargetForSession: (sessionId: string) => sessionId === 'branch-session'
         ? { kind: 'thread', room, threadId: 'thread-id' }
         : undefined,
+      waitForRoomAutoTrigger,
       getSnapshot: () => ({ identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' } }),
       composition: () => ({
         roomId: 'room',
@@ -116,8 +118,13 @@ describe('native prompt admission', () => {
       mode: 'steer',
       content: [{ type: 'text', text: '@AI 继续' }],
     })
+    await api.sessions.prompt({
+      sessionId: 'branch-session' as never,
+      mode: 'queue',
+      content: [{ type: 'text', text: '再发一条' }],
+    })
 
-    expect(fetchMock).toHaveBeenCalledWith('/plugins/deepseek-harness-chatroom/api/threads/prompt', expect.objectContaining({
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/plugins/deepseek-harness-chatroom/api/threads/prompt', expect.objectContaining({
       body: JSON.stringify({
         threadId: 'thread-id',
         mode: 'steer',
@@ -128,8 +135,22 @@ describe('native prompt admission', () => {
         reply: { messageId: 'user:1', displayName: 'Bob', text: '前文' },
       }),
     }))
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/plugins/deepseek-harness-chatroom/api/threads/prompt', expect.objectContaining({
+      body: JSON.stringify({
+        threadId: 'thread-id',
+        mode: 'queue',
+        content: [
+          { type: 'text', text: '再发一条' },
+          { type: 'file', name: 'note.txt', mediaType: 'text/plain', data: 'aGVsbG8=' },
+        ],
+        reply: { messageId: 'user:1', displayName: 'Bob', text: '前文' },
+      }),
+    }))
     expect(original).not.toHaveBeenCalled()
-    expect(store.completeComposition).toHaveBeenCalledOnce()
+    expect(waitForRoomAutoTrigger).toHaveBeenCalledTimes(2)
+    expect(waitForRoomAutoTrigger).toHaveBeenNthCalledWith(1, 'room')
+    expect(waitForRoomAutoTrigger).toHaveBeenNthCalledWith(2, 'room')
+    expect(store.completeComposition).toHaveBeenCalledTimes(2)
   })
 
   it('invites people mentioned in the first new-Group prompt before sending it', async () => {

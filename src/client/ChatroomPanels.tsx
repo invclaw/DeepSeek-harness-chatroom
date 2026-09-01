@@ -4,6 +4,7 @@ import type {
   ChatroomForwardItem,
   ChatroomNotification,
   ChatroomReplyReference,
+  ChatroomSearchResult,
   ChatroomThread,
   ChatroomThreadMessage,
 } from '../types.js'
@@ -20,6 +21,7 @@ import {
 import { ChatroomAccountPanels, type ChatroomAccountPanelProps } from './ChatroomAccountPanels.js'
 import { ChatroomAvatarView } from './ChatroomAvatarView.js'
 import { ChatroomMarkdown } from './ChatroomMarkdown.js'
+import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
 import {
   ChatroomInlineMessageActions,
   ChatroomMessageContextMenu,
@@ -48,6 +50,9 @@ interface ChatroomPanelsProps extends ChatroomAccountPanelProps {
   forwardSelected(targetRoomId: string): Promise<boolean>
   clearMessageSelection(): void
   toggleMessageSelection(roomId: string, message: ChatroomForwardItem): void
+  closeSearch(): void
+  searchAll(query: string): Promise<void>
+  openSearchResult(result: ChatroomSearchResult): Promise<void>
 }
 
 let branchFrameInstance = 0
@@ -55,26 +60,97 @@ const BRANCH_FRAME_COMPATIBILITY_KEY = 'dsh-chatroom:branch-frame-compatibility'
 
 /** Persistent member management, branch conversation, and in-page alerts. */
 export function ChatroomPanels(props: ChatroomPanelsProps): JSX.Element {
-  const [retainedThread, setRetainedThread] = useState<ChatroomThread>()
-  const visibleThread = props.room.thread
-  const mountedThread = visibleThread ?? retainedThread
-  useEffect(() => {
-    if (visibleThread !== undefined) setRetainedThread(visibleThread)
-  }, [visibleThread])
   return (
     <>
       <ToastStack toasts={props.room.toasts} dismiss={props.dismissToast} />
       <ChatroomAccountPanels {...props} />
       {props.room.membersOpen && <MemberPanel {...props} />}
-      {mountedThread !== undefined && <ThreadPanel
+      {props.room.thread !== undefined && <ThreadPanel
         {...props}
-        thread={mountedThread}
-        open={visibleThread?.id === mountedThread.id}
+        thread={props.room.thread}
+        open
       />}
       {props.room.selectionRoomId !== undefined && <SelectionBar {...props} />}
       {props.room.forwardOpen && <ForwardPanel {...props} />}
+      {props.room.searchOpen && <SearchPanel {...props} />}
     </>
   )
+}
+
+function SearchPanel(props: ChatroomPanelsProps): JSX.Element {
+  const [query, setQuery] = useState(props.room.searchQuery)
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') props.closeSearch() }
+    document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('keydown', close) }
+  }, [props.closeSearch])
+  useEffect(() => {
+    const timer = globalThis.setTimeout(() => { void props.searchAll(query) }, 180)
+    return () => { globalThis.clearTimeout(timer) }
+  }, [props.searchAll, query])
+  return <div
+    className="dsh-chatroom-search-layer"
+    data-testid="chatroom-search-dialog"
+    onPointerDown={event => { if (event.target === event.currentTarget) props.closeSearch() }}
+  >
+    <section className="dsh-chatroom-search-dialog" role="dialog" aria-modal="true" aria-label="搜索全部会话">
+      <header>
+        <div><strong>搜索</strong><small>用户、群聊、私聊、分支与全部聊天内容</small></div>
+        <button type="button" aria-label="关闭搜索" onClick={props.closeSearch}>×</button>
+      </header>
+      <label className="dsh-chatroom-search-input">
+        <span aria-hidden>⌕</span>
+        <input
+          autoFocus
+          type="search"
+          value={query}
+          placeholder="输入用户名、群聊名或消息内容"
+          aria-label="搜索用户名、群聊名或消息内容"
+          onChange={event => { setQuery(event.target.value) }}
+        />
+        {query !== '' && <button type="button" aria-label="清空搜索" onClick={() => { setQuery('') }}>×</button>}
+      </label>
+      <div className="dsh-chatroom-search-results" role="listbox" aria-label="搜索结果">
+        {props.room.searchResults.map(result => <button
+          type="button"
+          role="option"
+          aria-label={`${result.title}，${result.subtitle}`}
+          key={result.id}
+          onClick={() => { void props.openSearchResult(result) }}
+        >
+          <span className="dsh-chatroom-search-result-icon" aria-hidden>{searchResultIcon(result.kind)}</span>
+          <span className="dsh-chatroom-search-result-copy">
+            <strong>{result.title}</strong>
+            <small>{result.subtitle}</small>
+            {result.preview !== undefined && <span>{result.preview}</span>}
+          </span>
+          {result.createdAt !== undefined && <time>{formatSearchTime(result.createdAt)}</time>}
+        </button>)}
+        {props.room.searchBusy && <p role="status">正在搜索…</p>}
+        {!props.room.searchBusy && props.room.searchError !== undefined && <p className="dsh-chatroom-error" role="alert">{props.room.searchError}</p>}
+        {!props.room.searchBusy && props.room.searchError === undefined && query.trim() === '' && <p>输入关键词，搜索当前账号可见的全部内容。</p>}
+        {!props.room.searchBusy && props.room.searchError === undefined && query.trim() !== '' && props.room.searchResults.length === 0 && <p>没有找到匹配的用户、会话或消息。</p>}
+      </div>
+    </section>
+  </div>
+}
+
+function searchResultIcon(kind: ChatroomSearchResult['kind']): string {
+  switch (kind) {
+    case 'account': return '人'
+    case 'direct': return '私'
+    case 'room': return '群'
+    case 'thread': return '↳'
+    case 'message': return '文'
+  }
+}
+
+function formatSearchTime(createdAt: number): string {
+  const date = new Date(createdAt)
+  const today = new Date()
+  return date.toDateString() === today.toDateString()
+    ? date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+    : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
 }
 
 function SelectionBar(props: ChatroomPanelsProps): JSX.Element {
@@ -286,6 +362,12 @@ function ThreadPanel(props: ChatroomPanelsProps & {
     restoreParentSessionSelection(parentSessionId)
   }, [parentSessionId, props.open])
   useEffect(() => {
+    if (!props.open) return
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') props.closeThread() }
+    document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('keydown', close) }
+  }, [props.closeThread, props.open])
+  useEffect(() => {
     if (compatibilityMode) return
     setReady(false)
     let settled = false
@@ -337,12 +419,18 @@ function ThreadPanel(props: ChatroomPanelsProps & {
     ? undefined
     : branchFrameUrl(thread, parentSessionId, `${frameInstance}:${attempt}`)
   return (
+    <div
+      className="dsh-chatroom-thread-layer"
+      data-testid="chatroom-thread-layer"
+      onPointerDown={event => { if (event.target === event.currentTarget) props.closeThread() }}
+    >
     <aside
       className="dsh-chatroom-thread-panel"
       data-testid="chatroom-thread-panel"
       data-open={props.open}
       aria-hidden={!props.open}
       aria-label="分支回复"
+      onPointerDown={event => { event.stopPropagation() }}
     >
       <header>
         <div><strong>分支回复</strong><small>来自 {props.room.room?.title ?? '群聊'} · {thread.root.displayName}：{summary}</small></div>
@@ -386,6 +474,7 @@ function ThreadPanel(props: ChatroomPanelsProps & {
           </div>}
       {props.room.threadError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.threadError}</div>}
     </aside>
+    </div>
   )
 }
 
@@ -551,6 +640,7 @@ function ThreadMessage({
   const menu = useChatroomMessageMenu()
   return <article
     className="dsh-chatroom-thread-message"
+    data-dsh-chatroom-message-id={message.id}
     data-own={own}
     data-role={message.role}
     data-dsh-chatroom-selection-mode={tools.selecting || undefined}
@@ -577,6 +667,7 @@ function ThreadMessage({
           : message.role === 'ai'
             ? <ChatroomMarkdown text={message.text} />
             : <div className="dsh-chatroom-thread-literal-text">{message.text}</div>}
+        {!tools.recalled && message.card !== undefined && <ChatroomExternalCardView card={message.card} />}
       </div>
       <ChatroomReactionBar {...tools} />
       <ChatroomInlineMessageActions tools={tools} />

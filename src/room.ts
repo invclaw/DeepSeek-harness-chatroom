@@ -16,7 +16,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { ChatroomAuth } from './auth.js'
-import { ChatArchive, openChatArchive, type ArchivedMeeting } from './archive.js'
+import { ChatArchive, openChatArchive, type ArchivedMeeting, type ArchivedSearchHit } from './archive.js'
 import {
   CHATROOM_AGENT_ACTIONS,
   registerChatroomAgentTools,
@@ -83,6 +83,8 @@ import type {
   ChatroomReaction,
   ChatroomRecall,
   ChatroomReplyReference,
+  ChatroomSearchResponse,
+  ChatroomSearchResult,
   ChatroomRoomInviteCandidate,
   ChatroomServerEvent,
   ChatroomSnapshotEvent,
@@ -335,6 +337,8 @@ export class ChatroomRuntime {
       readonly role: 'human' | 'ai'
       readonly displayName: string
       readonly text: string
+      readonly sourceSessionId?: string
+      readonly sourceSeq?: number
     }>
     readonly actions: ChatroomAgentAction[]
   }> {
@@ -756,6 +760,21 @@ export class ChatroomRuntime {
       const created = await this.createMeetingCard(identity)
       this.trackMeeting(created.card, 'room', roomId, created.externalMeetingId)
       await this.appendRoomCard(state, identity, created.card)
+      return created.card
+    })
+    state.admission = task.then(() => undefined, () => undefined)
+    return await task
+  }
+
+  /** Create an Enterprise WeChat online meeting and post it to one branch. */
+  async createThreadQuickMeeting(threadId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard> {
+    this.assertReady()
+    const state = this.requireThreadState(threadId)
+    this.assertRoomMember(state.record.roomId, identity.participantId)
+    const task = state.admission.then(async () => {
+      const created = await this.createMeetingCard(identity)
+      this.trackMeeting(created.card, 'thread', threadId, created.externalMeetingId)
+      await this.appendThreadCard(state, identity, created.card)
       return created.card
     })
     state.admission = task.then(() => undefined, () => undefined)
@@ -1267,6 +1286,58 @@ export class ChatroomRuntime {
     return { peers, conversations }
   }
 
+  /** Search visible accounts, room names, branch names, and archived messages. */
+  search(query: string, identity: ChatroomIdentity): ChatroomSearchResponse {
+    this.assertReady()
+    const normalized = query.normalize('NFC').trim()
+    if (normalized === '') return { query: normalized, results: [] }
+    if ([...normalized].length > 120 || /\u0000/u.test(normalized)) {
+      throw new ChatroomInputError('搜索关键词过长或包含无效字符。')
+    }
+    const matches = (value: string): boolean => value.localeCompare(normalized, undefined, { sensitivity: 'accent' }) === 0
+      || value.toLocaleLowerCase('zh-CN').includes(normalized.toLocaleLowerCase('zh-CN'))
+    const visibleRooms = this.roomsFor(identity)
+    const roomById = new Map(visibleRooms.map(room => [room.id, room]))
+    const direct = this.directDirectory(identity)
+    const directById = new Map(direct.conversations.map(conversation => [conversation.id, conversation]))
+    const results: ChatroomSearchResult[] = []
+    for (const peer of direct.peers) {
+      if (!matches(peer.displayName) && !matches(peer.username)) continue
+      const conversation = direct.conversations.find(item => item.peer.participantId === peer.participantId)
+      results.push({
+        id: `account:${peer.participantId}`,
+        kind: conversation === undefined ? 'account' : 'direct',
+        title: peer.displayName,
+        subtitle: `用户 · @${peer.username}`,
+        participantId: peer.participantId,
+        ...(conversation === undefined ? {} : {
+          conversationKind: 'direct' as const,
+          conversationId: conversation.id,
+          createdAt: conversation.updatedAt,
+        }),
+      })
+    }
+    for (const room of visibleRooms) {
+      if (!matches(room.title)) continue
+      results.push({
+        id: `room:${room.id}`,
+        kind: 'room',
+        title: room.title,
+        subtitle: '群聊',
+        conversationKind: 'room',
+        conversationId: room.id,
+        sessionId: room.sessionId,
+        ...(room.updatedAt === undefined ? {} : { createdAt: room.updatedAt }),
+      })
+    }
+    for (const hit of this.requireArchive().search(identity.participantId, normalized)) {
+      const result = this.searchHit(hit, roomById, directById)
+      if (result !== undefined && !results.some(item => item.id === result.id)) results.push(result)
+    }
+    results.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
+    return { query: normalized, results: results.slice(0, 80) }
+  }
+
   /** Create or reopen one two-account private conversation. */
   async openDirect(peerId: string, identity: ChatroomIdentity): Promise<ChatroomDirectResponse> {
     this.assertReady()
@@ -1397,7 +1468,7 @@ export class ChatroomRuntime {
     return await task
   }
 
-  /** Append one branch message durably and enqueue it in the independent branch Agent. */
+  /** Append one branch message immediately and evaluate optional automatic responses in a separate queue. */
   async submitThread(
     threadId: string,
     identity: ChatroomIdentity,
@@ -1429,8 +1500,10 @@ export class ChatroomRuntime {
       const binding = await this.ensureThread(threadId)
       const roomState = this.requireState(state.record.roomId)
       const room = roomState.record
+      const aiTriggered = mentionsAi(content, room.aiDisplayName)
+        || (room.autoTriggerEnabled === true && addressesAi(content, room.aiDisplayName))
       const { provider, model: modelId } = binding.agent.options
-      if (provider !== undefined && modelId !== undefined && content.some(part => part.type === 'image')) {
+      if (aiTriggered && provider !== undefined && modelId !== undefined && content.some(part => part.type === 'image')) {
         const model = await this.ctx.llm.resolveModelInfo(provider, modelId)
         if (model.inputModalities !== undefined && !model.inputModalities.includes('image')) {
           throw new ChatroomInputError(`模型 ${JSON.stringify(modelId)} 不支持图片输入。`)
@@ -1466,8 +1539,16 @@ export class ChatroomRuntime {
       }
       await this.requireThreadMessages().put(record.id, record)
       this.archiveThreadMessage(state.record, record)
-      if (mode === 'steer') binding.agent.steer(message)
-      else binding.agent.followup(message)
+      if (!aiTriggered) {
+        binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
+      } else if (mode === 'steer') {
+        binding.agent.steer(message)
+      } else {
+        binding.agent.followup(message)
+      }
+      if (!aiTriggered && room.autoTriggerEnabled === true) {
+        this.scheduleAutomaticResponse(roomState, binding, content, state)
+      }
       await this.touchMember(state.record.roomId, identity)
       await this.touchRoom(state.record.roomId)
       const publicMessage = publicThreadMessage(record)
@@ -1487,7 +1568,7 @@ export class ChatroomRuntime {
         text,
         createdAt: record.createdAt,
       })
-      return { accepted: true as const, aiTriggered: true }
+      return { accepted: true as const, aiTriggered }
     })
     state.admission = task.then(() => undefined, () => undefined)
     return await task
@@ -1821,6 +1902,52 @@ export class ChatroomRuntime {
       .map(publicDirectMessage)
   }
 
+  private searchHit(
+    hit: ArchivedSearchHit,
+    rooms: ReadonlyMap<string, ChatroomInfo>,
+    direct: ReadonlyMap<string, ChatroomDirectConversation>,
+  ): ChatroomSearchResult | undefined {
+    const roomId = hit.conversationKind === 'thread' ? hit.parentId : hit.conversationId
+    const room = roomId === undefined ? undefined : rooms.get(roomId)
+    const directConversation = hit.conversationKind === 'direct' ? direct.get(hit.conversationId) : undefined
+    if (hit.conversationKind !== 'direct' && room === undefined) return undefined
+    if (hit.conversationKind === 'direct' && directConversation === undefined) return undefined
+    const title = hit.conversationKind === 'direct'
+      ? directConversation!.peer.displayName
+      : hit.conversationKind === 'thread'
+        ? projectThreadSearchTitle(hit.conversationTitle)
+        : room!.title
+    const subtitle = hit.conversationKind === 'direct'
+      ? '私聊'
+      : hit.conversationKind === 'thread' ? `分支 · ${room!.title}` : '群聊'
+    if (hit.kind === 'conversation') {
+      if (hit.conversationKind === 'room' || hit.conversationKind === 'direct') return undefined
+      return {
+        id: `thread:${hit.conversationId}`,
+        kind: 'thread',
+        title,
+        subtitle,
+        conversationKind: hit.conversationKind,
+        conversationId: hit.conversationId,
+        ...(hit.sessionId === undefined ? {} : { sessionId: hit.sessionId }),
+        createdAt: hit.createdAt,
+      }
+    }
+    return {
+      id: `message:${hit.conversationId}:${hit.messageId ?? String(hit.createdAt)}`,
+      kind: 'message',
+      title: hit.displayName ?? title,
+      subtitle: `${subtitle} · ${title}`,
+      preview: hit.text ?? '',
+      conversationKind: hit.conversationKind,
+      conversationId: hit.conversationId,
+      ...(hit.sessionId === undefined ? {} : { sessionId: hit.sessionId }),
+      ...(hit.messageId === undefined ? {} : { messageId: hit.messageId }),
+      ...(directConversation === undefined ? {} : { participantId: directConversation.peer.participantId }),
+      createdAt: hit.createdAt,
+    }
+  }
+
   private async storeDirectFiles(
     conversationId: string,
     identity: ChatroomIdentity,
@@ -2024,6 +2151,8 @@ export class ChatroomRuntime {
     readonly role: 'human' | 'ai'
     readonly displayName: string
     readonly text: string
+    readonly sourceSessionId?: string
+    readonly sourceSeq?: number
   }>> {
     const recalled = new Set(this.recallsForRoom(target.room.record.id).map(record => record.messageId))
     if (target.thread !== undefined) {
@@ -2245,20 +2374,22 @@ export class ChatroomRuntime {
     operation: { service: WecomService; method: string; parameters: unknown; result: unknown },
   ): Promise<ChatroomExternalCard> {
     if (card.kind !== 'meeting' || operation.service !== 'meeting' || operation.method !== 'create') return card
-    const room = [...this.states.values()].find(state => state.record.sessionId === sessionId)
-      ?? (() => {
-        const thread = [...this.threadStates.values()].find(state => state.record.sessionId === sessionId)
-        return thread === undefined ? undefined : this.states.get(thread.record.roomId)
-      })()
-    if (room === undefined) return card
     const tracked = { ...card, id: randomUUID(), status: card.status ?? 'init' }
-    this.trackMeeting(tracked, 'room', room.record.id, findStringField(operation.result, ['meeting_id']))
+    const externalMeetingId = findStringField(operation.result, ['meeting_id'])
+    const thread = [...this.threadStates.values()].find(state => state.record.sessionId === sessionId)
+    if (thread !== undefined) {
+      this.trackMeeting(tracked, 'thread', thread.record.id, externalMeetingId)
+      return tracked
+    }
+    const room = [...this.states.values()].find(state => state.record.sessionId === sessionId)
+    if (room === undefined) return card
+    this.trackMeeting(tracked, 'room', room.record.id, externalMeetingId)
     return tracked
   }
 
   private trackMeeting(
     card: ChatroomMeetingCard,
-    conversationKind: 'room' | 'direct',
+    conversationKind: 'room' | 'thread' | 'direct',
     conversationId: string,
     externalMeetingId?: string,
   ): void {
@@ -2282,7 +2413,7 @@ export class ChatroomRuntime {
 
   private async backfillMeetingCards(): Promise<void> {
     const archive = this.requireArchive()
-    if (archive.projectionMigrationComplete('meeting-cards-v1')) return
+    if (archive.projectionMigrationComplete('meeting-cards-v2')) return
     for (const [, message] of this.requireDirectMessages().entries()) {
       if (message.card?.kind === 'meeting') {
         this.backfillMeetingCard(message.card, 'direct', message.conversationId, message.createdAt)
@@ -2309,12 +2440,31 @@ export class ChatroomRuntime {
         }
       }
     }
-    if (complete) archive.completeProjectionMigration('meeting-cards-v1')
+    for (const state of this.threadStates.values()) {
+      let events: readonly SessionEvent[] | undefined = state.binding?.agent.session.events
+      if (events === undefined && persisted.has(state.record.sessionId)) {
+        try {
+          events = (await this.ctx.sessionPersistence.inspect(SessionId(state.record.sessionId))).events
+        } catch (error) {
+          complete = false
+          this.log.warn('Unable to inspect branch %s while recovering meeting cards: %s', state.record.id, String(error))
+        }
+      }
+      if (events === undefined) continue
+      for (const event of events) {
+        if (event.type !== 'user/message' && event.type !== 'assistant/message') continue
+        const message = event.type === 'assistant/message' ? event.data.message : event.data
+        for (const card of meetingCards(message.content)) {
+          this.backfillMeetingCard(card, 'thread', state.record.id, event.time)
+        }
+      }
+    }
+    if (complete) archive.completeProjectionMigration('meeting-cards-v2')
   }
 
   private backfillMeetingCard(
     card: ChatroomMeetingCard,
-    conversationKind: 'room' | 'direct',
+    conversationKind: 'room' | 'thread' | 'direct',
     conversationId: string,
     createdAt: number,
   ): void {
@@ -2412,7 +2562,8 @@ export class ChatroomRuntime {
       }
       this.requireArchive().upsertMeeting(current)
     }
-    if (current.conversationKind === 'room' && current.summaryStatus === 'completed'
+    if ((current.conversationKind === 'room' || current.conversationKind === 'thread')
+      && current.summaryStatus === 'completed'
       && current.summary !== undefined && current.summaryPostedAt === undefined) {
       await this.postMeetingSummary(current)
       current = { ...current, summaryPostedAt: Date.now(), updatedAt: Date.now() }
@@ -2444,8 +2595,9 @@ export class ChatroomRuntime {
   }
 
   private async postMeetingSummary(meeting: ArchivedMeeting): Promise<void> {
-    const room = this.requireState(meeting.conversationId)
-    const binding = await this.ensureRoom(room.record.id)
+    const binding = meeting.conversationKind === 'thread'
+      ? await this.ensureThread(meeting.conversationId)
+      : await this.ensureRoom(this.requireState(meeting.conversationId).record.id)
     const settings = this.resolvedAutomationSettings()
     const message = createAssistantMessage({
       content: [{ type: 'text', text: `## 会议总结 · ${meeting.title}\n\n${meeting.summary ?? ''}` }],
@@ -2456,7 +2608,62 @@ export class ChatroomRuntime {
 
   private canReadMeeting(meeting: ArchivedMeeting, participantId: string): boolean {
     if (meeting.conversationKind === 'room') return this.isRoomMember(meeting.conversationId, participantId)
+    if (meeting.conversationKind === 'thread') {
+      const thread = this.threadStates.get(meeting.conversationId)
+      return thread !== undefined && this.isRoomMember(thread.record.roomId, participantId)
+    }
     return this.requireDirectConversations().get(meeting.conversationId)?.participantIds.includes(participantId) ?? false
+  }
+
+  private async appendThreadCard(
+    state: ThreadState,
+    identity: ChatroomIdentity,
+    card: ChatroomMeetingCard,
+  ): Promise<void> {
+    const binding = await this.ensureThread(state.record.id)
+    const durable = await this.durableContent(
+      state.record.roomId,
+      identity,
+      identifyPrompt([{ type: 'text', text: identifyExternalCardText(card) }], identity),
+    )
+    const message = createUserMessage({ content: durable, source: { kind: 'user' } })
+    const now = Date.now()
+    const record: ThreadMessageRecord = {
+      id: randomUUID(),
+      threadId: state.record.id,
+      sequence: this.nextThreadSequence(state.record.id),
+      role: 'human',
+      participantId: identity.participantId,
+      displayName: identity.displayName,
+      avatarId: identity.avatarId,
+      ...(identity.avatarUrl === undefined ? {} : { avatarUrl: identity.avatarUrl }),
+      text: `创建了企微会议「${card.title}」`,
+      card,
+      createdAt: now,
+      modelMessageId: String(message.id),
+    }
+    await this.requireThreadMessages().put(record.id, record)
+    this.archiveThreadMessage(state.record, record)
+    binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
+    await this.touchMember(state.record.roomId, identity)
+    await this.touchRoom(state.record.roomId)
+    const room = this.requireState(state.record.roomId)
+    this.broadcast(room, {
+      type: 'thread-message',
+      message: publicThreadMessage(record),
+      preview: this.threadPreview(state.record),
+    })
+    this.notify({
+      id: record.id,
+      roomId: state.record.roomId,
+      roomTitle: room.record.title,
+      threadId: state.record.id,
+      participantId: identity.participantId,
+      displayName: identity.displayName,
+      role: 'human',
+      text: record.text,
+      createdAt: now,
+    })
   }
 
   private async appendDirectCard(
@@ -2529,6 +2736,9 @@ export class ChatroomRuntime {
     identity: ChatroomIdentity,
     content: readonly ChatroomPromptContentPart[],
   ): Promise<ContentBlock[]> {
+    if (content.every((part): part is Extract<ChatroomPromptContentPart, { type: 'text' }> => part.type === 'text')) {
+      return content.map(part => ({ type: 'text', text: part.text }))
+    }
     const prepared = content.map(part => part.type === 'text'
       ? part
       : { part, data: decodeBase64(part.data, part.type === 'image' ? '图片' : '文件') })
@@ -2836,7 +3046,13 @@ export class ChatroomRuntime {
       ...(record.sessionSeq === undefined ? {} : { sessionSeq: record.sessionSeq }),
       ...(record.modelMessageId === undefined ? {} : { modelMessageId: record.modelMessageId }),
       ...(record.reply === undefined ? {} : { replyTo: record.reply.messageId }),
-      content: { text: record.text, files: record.files ?? [], hasImages: record.hasImages ?? false, reply: record.reply },
+      content: {
+        text: record.text,
+        files: record.files ?? [],
+        hasImages: record.hasImages ?? false,
+        reply: record.reply,
+        card: record.card,
+      },
     })
   }
 
@@ -3310,6 +3526,7 @@ function publicThreadMessage(record: ThreadMessageRecord): ChatroomThreadMessage
     ...(record.files === undefined ? {} : { files: record.files }),
     ...(record.hasImages === undefined ? {} : { hasImages: record.hasImages }),
     ...(record.reply === undefined ? {} : { reply: record.reply }),
+    ...(record.card === undefined ? {} : { card: record.card }),
     createdAt: record.createdAt,
     ...(record.avatarId === undefined ? {} : { avatarId: record.avatarId }),
     ...(record.avatarUrl === undefined ? {} : { avatarUrl: record.avatarUrl }),
@@ -3330,6 +3547,14 @@ function normalizeRoomTitle(value: string, maxChars: number): string {
   if ([...normalized].length > maxChars) throw new ChatroomInputError(`共享会话名称不能超过 ${maxChars} 个字符。`)
   if (/\p{Cc}/u.test(normalized)) throw new ChatroomInputError('共享会话名称不能包含控制字符。')
   return normalized
+}
+
+function projectThreadSearchTitle(value: string): string {
+  const raw = value.replace(/^分支：/u, '').trim()
+  const projected = projectExternalCardText(raw)
+  const visible = projected.text.replace(/\s+/gu, ' ').trim()
+  const cardTitle = projected.cards.map(card => card.title.trim()).find(title => title !== '')
+  return [...(visible || cardTitle || '分支消息')].slice(0, 80).join('')
 }
 
 function normalizeThreadRoot(root: ChatroomThreadRoot): ChatroomThreadRoot {
@@ -3643,7 +3868,7 @@ function meetingCards(content: readonly ContentBlock[]): readonly ChatroomMeetin
 }
 
 function legacyMeetingId(
-  conversationKind: 'room' | 'direct',
+  conversationKind: 'room' | 'thread' | 'direct',
   conversationId: string,
   meetingUrl: string,
 ): string {

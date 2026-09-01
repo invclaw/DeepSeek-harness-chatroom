@@ -7,8 +7,8 @@ import type { ChatroomView } from './store.js'
 import { ChatroomAvatarView } from './ChatroomAvatarView.js'
 import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
-
-const DIRECT_MESSAGE_EMOJIS = ['😀', '😄', '😂', '🥰', '😍', '🤔', '😮', '😭', '👍', '👏', '🙏', '🎉', '❤️', '🔥', '✨', '✅', '👀', '🚀'] as const
+import { ChatroomCopyButton } from './ChatroomMessageTools.js'
+import { CHATROOM_MESSAGE_EMOJIS } from './emojis.js'
 
 export interface ChatroomAccountPanelProps {
   readonly room: ChatroomView
@@ -438,7 +438,7 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
         <div ref={messagesRef} className="dsh-chatroom-direct-messages">{props.room.directMessages.map(message => {
           const own = message.senderId === props.room.identity?.participantId
           const sender = own ? props.room.identity : current.peer
-          return <article key={message.id} data-own={own}>
+          return <article key={message.id} data-own={own} data-dsh-chatroom-message-id={message.id}>
             {sender !== undefined && <ChatroomAvatarView className="dsh-chatroom-direct-message-avatar" {...sender} />}
             <div>
               <strong>{own ? '我' : current.peer.displayName}</strong>
@@ -454,6 +454,9 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
                       </a>
                 })}
               </div>}
+              <div className="dsh-chatroom-direct-message-actions">
+                <ChatroomCopyButton text={directMessageCopyText(message)} />
+              </div>
               <time>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
             </div>
           </article>
@@ -495,7 +498,7 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
             <div ref={emojiRootRef} className="dsh-chatroom-direct-emoji-root">
               <button type="button" aria-label="选择私聊表情" aria-expanded={emojiOpen} onClick={() => { setEmojiOpen(open => !open) }}>☺ <span>表情</span></button>
               {emojiOpen && <div className="dsh-chatroom-direct-emoji-picker" role="dialog" aria-label="选择私聊表情">
-                {DIRECT_MESSAGE_EMOJIS.map(emoji => <button type="button" key={emoji} aria-label={`插入 ${emoji}`} onClick={() => {
+                {CHATROOM_MESSAGE_EMOJIS.map(emoji => <button type="button" key={emoji} aria-label={`插入 ${emoji}`} onClick={() => {
                   setText(value => `${value}${emoji}`)
                   setEmojiOpen(false)
                   textareaRef.current?.focus()
@@ -522,6 +525,14 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
     {props.room.directError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.directError}</div>}
   </main>
   return host === undefined ? content : createPortal(content, host)
+}
+
+function directMessageCopyText(message: ChatroomView['directMessages'][number]): string {
+  if (message.text.trim() !== '') return message.text
+  if (message.card !== undefined) return message.card.kind === 'meeting'
+    ? `企微会议：${message.card.title}`
+    : `企微文档：${message.card.title}`
+  return message.files?.map(file => file.name).join('\n') ?? ''
 }
 
 function formatFileBytes(bytes: number): string {

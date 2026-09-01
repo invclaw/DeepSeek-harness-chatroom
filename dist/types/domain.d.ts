@@ -101,6 +101,7 @@ export interface ThreadMessageRecord {
     }[];
     readonly hasImages?: boolean;
     readonly reply?: ChatroomReplyReference;
+    readonly card?: ChatroomExternalCard;
     readonly createdAt: number;
     readonly modelMessageId?: string;
     readonly sessionSeq?: number;

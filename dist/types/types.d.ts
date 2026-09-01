@@ -235,6 +235,7 @@ export interface ChatroomDocumentCard {
 /** Explicit request for a default Enterprise WeChat online meeting. */
 export interface ChatroomQuickMeetingRequest {
     readonly roomId?: string;
+    readonly threadId?: string;
     readonly directConversationId?: string;
 }
 /** Deployment-wide Enterprise WeChat authorization state. */
@@ -248,7 +249,7 @@ export interface ChatroomWecomAuthorizationState {
 /** Durable state and AI summary for one Enterprise WeChat meeting. */
 export interface ChatroomMeetingSummary {
     readonly id: string;
-    readonly conversationKind: 'room' | 'direct';
+    readonly conversationKind: 'room' | 'thread' | 'direct';
     readonly conversationId: string;
     readonly title: string;
     readonly status: string;
@@ -305,6 +306,25 @@ export interface ChatroomDirectResponse {
     readonly conversations: readonly ChatroomDirectConversation[];
     readonly conversation?: ChatroomDirectConversation;
     readonly messages?: readonly ChatroomDirectMessage[];
+}
+/** One visibility-filtered global search result. */
+export interface ChatroomSearchResult {
+    readonly id: string;
+    readonly kind: 'account' | 'room' | 'thread' | 'direct' | 'message';
+    readonly title: string;
+    readonly subtitle: string;
+    readonly preview?: string;
+    readonly participantId?: string;
+    readonly conversationKind?: 'room' | 'thread' | 'direct';
+    readonly conversationId?: string;
+    readonly sessionId?: string;
+    readonly messageId?: string;
+    readonly createdAt?: number;
+}
+/** Global account, conversation, and message matches for one query. */
+export interface ChatroomSearchResponse {
+    readonly query: string;
+    readonly results: readonly ChatroomSearchResult[];
 }
 /** Room directory response. */
 export interface ChatroomRoomsResponse {
@@ -380,6 +400,7 @@ export interface ChatroomThreadMessage {
     readonly files?: readonly ChatroomFileReference[];
     readonly hasImages?: boolean;
     readonly reply?: ChatroomReplyReference;
+    readonly card?: ChatroomExternalCard;
     readonly createdAt: number;
 }
 /** Branch lookup or creation response. */

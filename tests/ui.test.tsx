@@ -353,20 +353,21 @@ describe('native chatroom integration', () => {
     expect(closeThread).toHaveBeenCalledOnce()
 
     rendered.rerender(entry({ ...room, thread: undefined }, overrides))
-    expect(screen.getByTestId('chatroom-thread-panel').getAttribute('data-open')).toBe('false')
-    expect(screen.getByTitle('分支回复：主题消息')).toBe(frame)
+    expect(screen.queryByTestId('chatroom-thread-panel')).toBeNull()
+    expect(screen.queryByTitle('分支回复：主题消息')).toBeNull()
     rendered.rerender(entry(room, overrides))
     expect(screen.getByTestId('chatroom-thread-panel').getAttribute('data-open')).toBe('true')
-    expect(screen.getByTitle('分支回复：主题消息')).toBe(frame)
+    expect(screen.getByTitle('分支回复：主题消息')).not.toBe(frame)
 
     const nextThread = {
       id: 'thread-2', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread-2', createdAt: 2,
       root: { messageId: 'assistant:2', displayName: 'DeepSeek', text: '一条较长的 AI 回复', role: 'ai' as const },
     }
+    rendered.rerender(entry({ ...room, thread: undefined }, overrides))
     rendered.rerender(entry({ ...room, thread: nextThread }, overrides))
-    const retainedFrame = screen.getByTitle('分支回复：一条较长的 AI 回复') as HTMLIFrameElement
-    expect(retainedFrame).toBe(frame)
-    const nextFrameUrl = new URL(retainedFrame.src)
+    const nextFrame = screen.getByTitle('分支回复：一条较长的 AI 回复') as HTMLIFrameElement
+    expect(nextFrame).not.toBe(frame)
+    const nextFrameUrl = new URL(nextFrame.src)
     expect(nextFrameUrl.searchParams.get('dsh-chatroom-thread')).toBe('thread-2')
     expect(nextFrameUrl.searchParams.get('dsh-chatroom-thread-session')).toBe('chatroom-thread-v1-thread-2')
   })
@@ -440,6 +441,44 @@ describe('native chatroom integration', () => {
 
     expect(screen.queryByTitle('分支回复：后续分支')).toBeNull()
     expect(screen.getByText('当前访问入口不允许嵌入完整 Agent，已切换到分支兼容模式。')).toBeTruthy()
+  })
+
+  it('closes a branch only when the drawer backdrop is pressed', () => {
+    const closeThread = vi.fn()
+    renderEntry(view({
+      thread: {
+        id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
+        root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
+      },
+    }), { closeThread })
+
+    fireEvent.pointerDown(screen.getByTestId('chatroom-thread-panel'))
+    expect(closeThread).not.toHaveBeenCalled()
+    fireEvent.pointerDown(screen.getByTestId('chatroom-thread-layer'))
+    expect(closeThread).toHaveBeenCalledOnce()
+  })
+
+  it('searches all visible content in a modal and opens the selected message', async () => {
+    const closeSearch = vi.fn()
+    const searchAll = vi.fn(async () => undefined)
+    const openSearchResult = vi.fn(async () => undefined)
+    const result = {
+      id: 'message:lobby:user:7', kind: 'message' as const, title: 'Bob', subtitle: '群聊 · AI 聊天室',
+      preview: '部署已经完成', conversationKind: 'room' as const, conversationId: 'lobby',
+      sessionId: 'chatroom-v1-lobby', messageId: 'user:7', createdAt: Date.now(),
+    }
+    renderEntry(view({ searchOpen: true, searchQuery: '部署', searchResults: [result] }), {
+      closeSearch, searchAll, openSearchResult,
+    })
+
+    expect(screen.getByTestId('chatroom-search-dialog')).toBeTruthy()
+    expect(screen.getByText('用户、群聊、私聊、分支与全部聊天内容')).toBeTruthy()
+    expect(screen.getByText('部署已经完成')).toBeTruthy()
+    fireEvent.click(screen.getByRole('option', { name: 'Bob，群聊 · AI 聊天室' }))
+    expect(openSearchResult).toHaveBeenCalledWith(result)
+    fireEvent.pointerDown(screen.getByTestId('chatroom-search-dialog'))
+    expect(closeSearch).toHaveBeenCalledOnce()
+    await waitFor(() => { expect(searchAll).toHaveBeenCalledWith('部署') })
   })
 
   it('opens a target chooser for a merged multi-message forward', () => {
@@ -534,6 +573,11 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     directMessages: [],
     directError: undefined,
     newSessionModes: {},
+    searchOpen: false,
+    searchQuery: '',
+    searchBusy: false,
+    searchResults: [],
+    searchError: undefined,
     ...patch,
   }
 }
@@ -616,6 +660,9 @@ function entry(
     openDirect={vi.fn(async () => undefined)}
     closeDirect={vi.fn()}
     sendDirect={vi.fn(async () => true)}
+    closeSearch={vi.fn()}
+    searchAll={vi.fn(async () => undefined)}
+    openSearchResult={vi.fn(async () => undefined)}
     {...overrides}
   />
 }

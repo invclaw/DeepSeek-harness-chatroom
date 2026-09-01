@@ -6,7 +6,7 @@ import { type ChatroomAgentAction, type ChatroomAgentActionInput } from './agent
 import type { Config } from './config.js';
 import { type ChatroomReactionEmoji } from './reactions.js';
 import { type WecomAuthorizationState } from './wecom.js';
-import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMeetingCard, ChatroomMeetingSummary, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
+import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMeetingCard, ChatroomMeetingSummary, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomSearchResponse, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
 /** Runtime validation failure safe to return to a browser. */
 export declare class ChatroomInputError extends Error {
 }
@@ -81,6 +81,8 @@ export declare class ChatroomRuntime {
             readonly role: 'human' | 'ai';
             readonly displayName: string;
             readonly text: string;
+            readonly sourceSessionId?: string;
+            readonly sourceSeq?: number;
         }>;
         readonly actions: ChatroomAgentAction[];
     }>;
@@ -118,6 +120,8 @@ export declare class ChatroomRuntime {
     renewRoomSession(roomId: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Create an Enterprise WeChat online meeting and post it to the room as a durable card. */
     createQuickMeeting(roomId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard>;
+    /** Create an Enterprise WeChat online meeting and post it to one branch. */
+    createThreadQuickMeeting(threadId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard>;
     /** Create an Enterprise WeChat online meeting and post it to one private conversation. */
     createDirectQuickMeeting(conversationId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard>;
     /** Read the deployment-wide Enterprise WeChat authorization state. */
@@ -178,6 +182,8 @@ export declare class ChatroomRuntime {
     subscribeNotifications(identity: ChatroomIdentity, response: ServerResponse): () => void;
     /** List active peers and private conversations visible only to the requesting account. */
     directDirectory(identity: ChatroomIdentity): ChatroomDirectResponse;
+    /** Search visible accounts, room names, branch names, and archived messages. */
+    search(query: string, identity: ChatroomIdentity): ChatroomSearchResponse;
     /** Create or reopen one two-account private conversation. */
     openDirect(peerId: string, identity: ChatroomIdentity): Promise<ChatroomDirectResponse>;
     /** Append one private message and notify only its two participants. */
@@ -188,7 +194,7 @@ export declare class ChatroomRuntime {
     private publishDirectMessage;
     /** Create or reopen a branch rooted at one native room message. */
     openThread(roomId: string, identity: ChatroomIdentity, root: ChatroomThreadRoot): Promise<ChatroomThreadResponse>;
-    /** Append one branch message durably and enqueue it in the independent branch Agent. */
+    /** Append one branch message immediately and evaluate optional automatic responses in a separate queue. */
     submitThread(threadId: string, identity: ChatroomIdentity, text: string, reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
     submitThread(threadId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
     /** Project committed AI output into its parent room or branch stream. */
@@ -211,6 +217,7 @@ export declare class ChatroomRuntime {
     private directoryPeers;
     private directoryPeer;
     private directMessageHistory;
+    private searchHit;
     private storeDirectFiles;
     private seedConfiguredRoom;
     private agentToolTarget;
@@ -239,6 +246,7 @@ export declare class ChatroomRuntime {
     private generateMeetingSummary;
     private postMeetingSummary;
     private canReadMeeting;
+    private appendThreadCard;
     private appendDirectCard;
     private appendRoomCard;
     /** Ensure one shared Session uses native Workspace navigation. */

@@ -23,6 +23,7 @@ import type {
   ChatroomRoomResponse,
   ChatroomRoomManageResponse,
   ChatroomRoomManagementResponse,
+  ChatroomSearchResponse,
   ChatroomRoomsResponse,
   ChatroomSessionResponse,
   ChatroomThreadPromptRequest,
@@ -83,6 +84,10 @@ export class ChatroomHttpController {
       }
       if (route.endpoint === '/direct/messages') {
         await this.handleDirectMessages(request, response)
+        return
+      }
+      if (route.endpoint === '/search') {
+        await this.handleSearch(request, response, url.searchParams)
         return
       }
       if (route.endpoint === '/rooms') {
@@ -576,6 +581,20 @@ export class ChatroomHttpController {
     json(response, 200, { room } satisfies ChatroomRoomResponse)
   }
 
+  private async handleSearch(
+    request: IncomingMessage,
+    response: ServerResponse,
+    search: URLSearchParams,
+  ): Promise<void> {
+    if (request.method !== 'GET') {
+      methodNotAllowed(response, 'GET')
+      return
+    }
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    json(response, 200, this.runtime.search(search.get('q') ?? '', identity) satisfies ChatroomSearchResponse)
+  }
+
   private async handleRoomSelection(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method !== 'POST') {
       methodNotAllowed(response, 'POST')
@@ -686,13 +705,16 @@ export class ChatroomHttpController {
     if (identity === undefined) return
     const body = await readJson(request, smallRequestLimit(this.config))
     const roomId = optionalFieldString(body, 'roomId')
+    const threadId = optionalFieldString(body, 'threadId')
     const directConversationId = optionalFieldString(body, 'directConversationId')
-    if ((roomId === undefined) === (directConversationId === undefined)) {
-      throw new ChatroomInputError('快速会议必须指定一个群聊或私聊。')
+    if ([roomId, threadId, directConversationId].filter(value => value !== undefined).length !== 1) {
+      throw new ChatroomInputError('快速会议必须指定一个群聊、分支或私聊。')
     }
-    const card = roomId === undefined
-      ? await this.runtime.createDirectQuickMeeting(directConversationId!, identity)
-      : await this.runtime.createQuickMeeting(roomId, identity)
+    const card = roomId !== undefined
+      ? await this.runtime.createQuickMeeting(roomId, identity)
+      : threadId !== undefined
+        ? await this.runtime.createThreadQuickMeeting(threadId, identity)
+        : await this.runtime.createDirectQuickMeeting(directConversationId!, identity)
     json(response, 201, { accepted: true, card } satisfies ChatroomQuickMeetingResponse)
   }
 

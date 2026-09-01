@@ -82,6 +82,7 @@ interface OriginalRowAttributes {
 // Native rows normally have no tooltip or explicit aria-label. Remembering the
 // original values lets a row be reused by React without leaving plugin text on it.
 const originalRowAttributes = new WeakMap<HTMLElement, OriginalRowAttributes>()
+const expandedBranchParents = new WeakMap<HTMLElement, Set<string>>()
 let activeNativeMenuRoomId: string | undefined
 let activeNativeMenuItem: HTMLElement | undefined
 
@@ -123,6 +124,17 @@ export function installSidebarRoomRows(store: ChatroomClientStore, sessions: ISe
   const observer = new MutationObserver(records => {
     if (records.some(mutationTouchesSidebar)) schedule()
   })
+  const openGlobalSearch = (event: MouseEvent): void => {
+    const target = event.target instanceof Element
+      ? event.target.closest('button[aria-label="搜索会话"]')
+      : null
+    if (target === null) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    store.openSearch()
+  }
+  document.addEventListener('click', openGlobalSearch, true)
   observer.observe(document.body, { childList: true, subtree: true, characterData: true })
   const unsubscribe = store.subscribe(schedule)
   const unsubscribeSessions = sessions.list.subscribe(schedule)
@@ -131,6 +143,7 @@ export function installSidebarRoomRows(store: ChatroomClientStore, sessions: ISe
     unsubscribe()
     unsubscribeSessions()
     observer.disconnect()
+    document.removeEventListener('click', openGlobalSearch, true)
     const decoratedRows = document.querySelectorAll<HTMLElement>(
       `${ROOM_ROW_SELECTOR}, [${BRANCH_ROW_ATTRIBUTE}], [${SESSION_ID_ATTRIBUTE}]`,
     )
@@ -196,28 +209,17 @@ export function reconcileSidebarRoomRows(
     bindings.push({ row, sessionId, summary, branch, room })
   }
 
-  // Count from the complete session projection so virtualized or collapsed
-  // branch rows still expose an accurate parent count.
+  // The parent badge reports the branches represented in this sidebar pass.
+  // Counting every session summary includes stale or non-rendered branch
+  // records and makes the badge disagree with the expandable branch rows.
   const branchCounts = new Map<string, number>()
   const countedBranches = new Set<string>()
-  if (sessionList !== undefined) {
-    for (const summary of Object.values(sessionList.byId)) {
-      if (!summaryLooksLikeBranch(summary) || summary.parentId === undefined) continue
-      const id = String(summary.id)
-      const parent = String(summary.parentId)
-      countedBranches.add(id)
-      branchCounts.set(parent, (branchCounts.get(parent) ?? 0) + 1)
-    }
-  }
   for (const binding of bindings) {
     const branch = binding.branch
     if (branch === undefined || branch.parentSessionId === undefined) continue
-    if (branch.sessionId !== undefined && countedBranches.has(branch.sessionId)) continue
-    if (branch.sessionId === undefined && sessionList !== undefined
-      && Object.values(sessionList.byId).some(summary =>
-        summaryLooksLikeBranch(summary)
-        && summary.displayTitle.trim() === branch.displayTitle
-        && String(summary.parentId ?? '') === branch.parentSessionId)) continue
+    const key = branch.sessionId ?? `${branch.parentSessionId}\u0000${branch.displayTitle}`
+    if (countedBranches.has(key)) continue
+    countedBranches.add(key)
     branchCounts.set(branch.parentSessionId, (branchCounts.get(branch.parentSessionId) ?? 0) + 1)
   }
 
@@ -724,7 +726,7 @@ function decorateSoloRow(row: HTMLElement, order: number): void {
   const avatar = row.ownerDocument.createElement('span')
   avatar.setAttribute(SOLO_AVATAR_ATTRIBUTE, '')
   avatar.setAttribute('aria-hidden', 'true')
-  avatar.textContent = '✦'
+  avatar.textContent = '✧'
   row.prepend(avatar)
 }
 
@@ -754,7 +756,13 @@ function reconcileWorkspaceCategories(
   const soloRows = rows.filter(row => row.getAttribute(CATEGORY_ATTRIBUTE) === 'solo')
   reconcileBranchOverflow(primary, groupRows)
   reconcileGroupOrder(primary, groupRows)
-  reconcileCategoryHeader(primary, 'group', '群聊', groupRows.length, -11_000)
+  reconcileCategoryHeader(
+    primary,
+    'group',
+    '群聊',
+    groupRows.filter(row => row.dataset.dshChatroomRoomRow !== undefined).length,
+    -11_000,
+  )
   reconcileCategoryOverflow(
     primary,
     'group',
@@ -824,6 +832,7 @@ function categoryExpandedAttribute(category: 'group' | 'solo'): string {
 // A retained control owns one room's expansion state. Reconciliation can then
 // follow live Session updates without collapsing a room the reader expanded.
 function reconcileBranchOverflow(root: HTMLElement, groupRows: readonly HTMLElement[]): void {
+  const expandedParents = expandedBranchParentsFor(root)
   const branches = groupRows.filter(row => row.dataset.dshChatroomBranchParentSessionId !== undefined)
   const byParent = new Map<string, HTMLElement[]>()
   for (const row of branches) {
@@ -843,6 +852,7 @@ function reconcileBranchOverflow(root: HTMLElement, groupRows: readonly HTMLElem
     let control = retained.get(parentSessionId)
     retained.delete(parentSessionId)
     if (sorted.length <= BRANCH_VISIBLE_LIMIT) {
+      expandedParents.delete(parentSessionId)
       control?.remove()
       continue
     }
@@ -854,16 +864,34 @@ function reconcileBranchOverflow(root: HTMLElement, groupRows: readonly HTMLElem
       button.type = 'button'
       const owner = control
       button.onclick = () => {
-        owner.dataset.expanded = String(owner.dataset.expanded !== 'true')
+        if (expandedParents.has(parentSessionId)) expandedParents.delete(parentSessionId)
+        else expandedParents.add(parentSessionId)
+        owner.dataset.expanded = String(expandedParents.has(parentSessionId))
         paintBranchOverflow(owner, sortBranchRows(branchRowsForParent(root, parentSessionId)))
       }
       control.append(button)
       root.append(control)
     }
+    control.dataset.expanded = String(expandedParents.has(parentSessionId))
     control.dataset.total = String(sorted.length)
     paintBranchOverflow(control, sorted)
   }
-  for (const control of retained.values()) control.remove()
+  for (const [parentSessionId, control] of retained) {
+    expandedParents.delete(parentSessionId)
+    control.remove()
+  }
+}
+
+function expandedBranchParentsFor(root: HTMLElement): Set<string> {
+  const retained = expandedBranchParents.get(root)
+  if (retained !== undefined) return retained
+  const initial = new Set(
+    [...root.querySelectorAll<HTMLElement>(`:scope > [${BRANCH_OVERFLOW_ATTRIBUTE}][data-expanded="true"]`)]
+      .map(control => control.dataset.parentSessionId)
+      .filter((parentSessionId): parentSessionId is string => parentSessionId !== undefined),
+  )
+  expandedBranchParents.set(root, initial)
+  return initial
 }
 
 // Native Sessions are globally ordered, but branch navigation is parent based.

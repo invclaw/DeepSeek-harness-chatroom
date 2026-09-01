@@ -1169,7 +1169,7 @@ import { homedir } from "os";
 import { readFileSync } from "fs";
 import { mkdir, rename, unlink, writeFile } from "fs/promises";
 import { dirname, isAbsolute as isAbsolute2, join, resolve } from "path";
-var SCHEMA_VERSION = 2;
+var SCHEMA_VERSION = 3;
 var NODE_SQLITE_MODULE = "node:sqlite";
 async function openChatArchive(configuredDirectory) {
   const memory = configuredDirectory === ":memory:";
@@ -1313,13 +1313,48 @@ var ChatArchive = class {
   pendingMeetings() {
     return this.database.prepare(`SELECT * FROM meetings
       WHERE status != 'end' OR summary_status != 'completed'
-        OR (conversation_kind = 'room' AND summary_posted_at IS NULL)
+        OR (conversation_kind IN ('room', 'thread') AND summary_posted_at IS NULL)
       ORDER BY updated_at ASC`).all().map(archivedMeeting);
   }
   /** List completed summaries for authenticated external consumers. */
   meetingSummaries(limit = 100) {
     return this.database.prepare(`SELECT * FROM meetings WHERE summary_status = 'completed'
       ORDER BY updated_at DESC LIMIT ?`).all(limit).map(archivedMeeting);
+  }
+  /** Search only conversations and messages visible to one participant. */
+  search(participantId, query, limit = 80) {
+    const pattern = `%${escapeLike(query)}%`;
+    const rows = this.database.prepare(`WITH visible AS (
+      SELECT c.* FROM conversations c
+      WHERE (c.kind IN ('room', 'direct') AND EXISTS (
+          SELECT 1 FROM conversation_members member
+          WHERE member.conversation_id = c.id AND member.participant_id = ? AND member.left_at IS NULL
+        )) OR (c.kind = 'thread' AND EXISTS (
+          SELECT 1 FROM conversation_members member
+          WHERE member.conversation_id = c.parent_id AND member.participant_id = ? AND member.left_at IS NULL
+        ))
+    ), matches AS (
+      SELECT 'conversation' AS result_kind, c.id AS conversation_id, c.kind AS conversation_kind,
+        c.title AS conversation_title, c.session_id, c.parent_id, NULL AS message_id,
+        NULL AS role, NULL AS display_name, NULL AS text, c.updated_at AS created_at
+      FROM visible c WHERE c.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+      UNION ALL
+      SELECT 'message' AS result_kind, c.id AS conversation_id, c.kind AS conversation_kind,
+        c.title AS conversation_title, c.session_id, c.parent_id,
+        CASE
+          WHEN m.role = 'ai' AND m.model_message_id IS NOT NULL THEN m.model_message_id
+          WHEN m.session_seq IS NOT NULL THEN 'user:' || m.session_seq
+          ELSE m.id
+        END AS message_id,
+        m.role, m.display_name, m.text, m.created_at
+      FROM visible c JOIN messages m ON m.conversation_id = c.id
+      WHERE m.recalled_at IS NULL AND (
+        m.text LIKE ? ESCAPE '\\' COLLATE NOCASE
+        OR m.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+      )
+    )
+    SELECT * FROM matches ORDER BY created_at DESC LIMIT ?`).all(participantId, participantId, pattern, pattern, pattern, limit);
+    return rows.map(archivedSearchHit);
   }
   /** Model message ids excluded from future requests after recall. */
   recalledMessageIds(sessionId) {
@@ -1446,7 +1481,7 @@ var ChatArchive = class {
       );
       CREATE TABLE IF NOT EXISTS meetings (
         id TEXT PRIMARY KEY,
-        conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('room', 'direct')),
+        conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('room', 'thread', 'direct')),
         conversation_id TEXT NOT NULL,
         external_meeting_id TEXT,
         meeting_url TEXT,
@@ -1473,14 +1508,44 @@ var ChatArchive = class {
     if (current !== void 0 && (!Number.isSafeInteger(Number(current.value)) || Number(current.value) > SCHEMA_VERSION)) {
       throw new Error(`unsupported chatroom archive schema ${String(current.value)}`);
     }
+    if (current !== void 0 && Number(current.value) < 3) this.migrateMeetingConversationKinds();
     this.database.prepare(`INSERT INTO archive_meta (key, value) VALUES ('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(SCHEMA_VERSION));
+  }
+  migrateMeetingConversationKinds() {
+    this.database.exec(`
+      BEGIN IMMEDIATE;
+      DROP INDEX IF EXISTS meetings_pending;
+      ALTER TABLE meetings RENAME TO meetings_before_thread_kind;
+      CREATE TABLE meetings (
+        id TEXT PRIMARY KEY,
+        conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('room', 'thread', 'direct')),
+        conversation_id TEXT NOT NULL,
+        external_meeting_id TEXT,
+        meeting_url TEXT,
+        title TEXT NOT NULL,
+        begin_time TEXT,
+        end_time TEXT,
+        status TEXT NOT NULL,
+        summary_status TEXT NOT NULL CHECK(summary_status IN ('pending', 'completed', 'failed')),
+        summary TEXT,
+        summary_error TEXT,
+        ended_at INTEGER,
+        summary_posted_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO meetings SELECT * FROM meetings_before_thread_kind;
+      DROP TABLE meetings_before_thread_kind;
+      CREATE INDEX meetings_pending ON meetings(status, summary_status, summary_posted_at, updated_at);
+      COMMIT;
+    `);
   }
 };
 function archivedMeeting(row) {
   return {
     id: String(row.id),
-    conversationKind: row.conversation_kind === "direct" ? "direct" : "room",
+    conversationKind: row.conversation_kind === "direct" ? "direct" : row.conversation_kind === "thread" ? "thread" : "room",
     conversationId: String(row.conversation_id),
     ...typeof row.external_meeting_id === "string" ? { externalMeetingId: row.external_meeting_id } : {},
     ...typeof row.meeting_url === "string" ? { meetingUrl: row.meeting_url } : {},
@@ -1497,6 +1562,22 @@ function archivedMeeting(row) {
     updatedAt: Number(row.updated_at)
   };
 }
+function archivedSearchHit(row) {
+  const conversationKind = row.conversation_kind === "thread" ? "thread" : row.conversation_kind === "direct" ? "direct" : "room";
+  return {
+    kind: row.result_kind === "message" ? "message" : "conversation",
+    conversationId: String(row.conversation_id),
+    conversationKind,
+    conversationTitle: String(row.conversation_title),
+    ...typeof row.session_id === "string" ? { sessionId: row.session_id } : {},
+    ...typeof row.parent_id === "string" ? { parentId: row.parent_id } : {},
+    ...typeof row.message_id === "string" ? { messageId: row.message_id } : {},
+    ...row.role === "human" || row.role === "ai" ? { role: row.role } : {},
+    ...typeof row.display_name === "string" ? { displayName: row.display_name } : {},
+    ...typeof row.text === "string" ? { text: row.text } : {},
+    createdAt: Number(row.created_at)
+  };
+}
 function resolveArchiveRoot(configuredDirectory) {
   if (configuredDirectory !== "") return configuredDirectory;
   const dshHome = process.env.DSH_HOME?.trim();
@@ -1508,6 +1589,9 @@ function visibleSequence(messageId) {
   if (match === null) return void 0;
   const value = Number(match[1]);
   return Number.isSafeInteger(value) ? value : void 0;
+}
+function escapeLike(value) {
+  return value.replace(/[\\%_]/gu, (match) => `\\${match}`);
 }
 function isAlreadyExists(error) {
   return error instanceof Error && "code" in error && error.code === "EEXIST";
@@ -1560,7 +1644,9 @@ function registerChatroomAgentTools(ctx, host, sessionId) {
                 messageId: { type: "string", required: true },
                 role: { type: "string", required: true, enum: ["human", "ai"] },
                 displayName: { type: "string", required: true },
-                text: { type: "string", required: true }
+                text: { type: "string", required: true },
+                sourceSessionId: { type: "string" },
+                sourceSeq: { type: "integer" }
               }
             }
           },
@@ -1728,6 +1814,27 @@ var replySchema = z2.object({
   displayName: z2.string().min(1),
   text: z2.string().min(1)
 });
+var externalCardSchema = z2.union([
+  z2.object({
+    kind: z2.literal("meeting"),
+    id: z2.string().min(1).optional(),
+    title: z2.string().min(1),
+    beginTime: z2.string().optional(),
+    endTime: z2.string().optional(),
+    url: z2.string().optional(),
+    location: z2.string().optional(),
+    status: z2.string().optional(),
+    attendees: z2.array(z2.string()).optional()
+  }),
+  z2.object({
+    kind: z2.literal("document"),
+    title: z2.string().min(1),
+    documentType: z2.string().optional(),
+    url: z2.string().optional(),
+    modifiedAt: z2.string().optional(),
+    owner: z2.string().optional()
+  })
+]);
 var threadSchema = z2.object({
   id: z2.uuid(),
   roomId: z2.string().min(1),
@@ -1755,6 +1862,7 @@ var threadMessageSchema = z2.object({
   })).optional(),
   hasImages: z2.boolean().optional(),
   reply: replySchema.optional(),
+  card: externalCardSchema.optional(),
   createdAt: nonNegativeSafeInteger,
   modelMessageId: z2.string().min(1).optional(),
   sessionSeq: nonNegativeSafeInteger.optional()
@@ -1840,27 +1948,7 @@ var directMessageSchema = z2.object({
     mediaType: z2.string().min(1),
     bytes: nonNegativeSafeInteger
   })).optional(),
-  card: z2.union([
-    z2.object({
-      kind: z2.literal("meeting"),
-      id: z2.string().min(1).optional(),
-      title: z2.string().min(1),
-      beginTime: z2.string().optional(),
-      endTime: z2.string().optional(),
-      url: z2.string().optional(),
-      location: z2.string().optional(),
-      status: z2.string().optional(),
-      attendees: z2.array(z2.string()).optional()
-    }),
-    z2.object({
-      kind: z2.literal("document"),
-      title: z2.string().min(1),
-      documentType: z2.string().optional(),
-      url: z2.string().optional(),
-      modifiedAt: z2.string().optional(),
-      owner: z2.string().optional()
-    })
-  ]).optional(),
+  card: externalCardSchema.optional(),
   createdAt: nonNegativeSafeInteger
 }).refine((record) => record.text.trim() !== "" || (record.files?.length ?? 0) > 0 || record.card !== void 0, {
   message: "direct message must include text, files, or a card"
@@ -3156,6 +3244,20 @@ var ChatroomRuntime = class {
     state.admission = task.then(() => void 0, () => void 0);
     return await task;
   }
+  /** Create an Enterprise WeChat online meeting and post it to one branch. */
+  async createThreadQuickMeeting(threadId, identity) {
+    this.assertReady();
+    const state = this.requireThreadState(threadId);
+    this.assertRoomMember(state.record.roomId, identity.participantId);
+    const task = state.admission.then(async () => {
+      const created = await this.createMeetingCard(identity);
+      this.trackMeeting(created.card, "thread", threadId, created.externalMeetingId);
+      await this.appendThreadCard(state, identity, created.card);
+      return created.card;
+    });
+    state.admission = task.then(() => void 0, () => void 0);
+    return await task;
+  }
   /** Create an Enterprise WeChat online meeting and post it to one private conversation. */
   async createDirectQuickMeeting(conversationId, identity) {
     this.assertReady();
@@ -3576,6 +3678,56 @@ var ChatroomRuntime = class {
     const conversations = [...this.requireDirectConversations().entries()].map(([, conversation]) => conversation).filter((conversation) => conversation.participantIds.includes(identity.participantId)).map((conversation) => this.publicDirectConversation(conversation, identity.participantId)).sort((left, right) => right.updatedAt - left.updatedAt);
     return { peers, conversations };
   }
+  /** Search visible accounts, room names, branch names, and archived messages. */
+  search(query, identity) {
+    this.assertReady();
+    const normalized = query.normalize("NFC").trim();
+    if (normalized === "") return { query: normalized, results: [] };
+    if ([...normalized].length > 120 || /\u0000/u.test(normalized)) {
+      throw new ChatroomInputError("\u641C\u7D22\u5173\u952E\u8BCD\u8FC7\u957F\u6216\u5305\u542B\u65E0\u6548\u5B57\u7B26\u3002");
+    }
+    const matches = (value) => value.localeCompare(normalized, void 0, { sensitivity: "accent" }) === 0 || value.toLocaleLowerCase("zh-CN").includes(normalized.toLocaleLowerCase("zh-CN"));
+    const visibleRooms = this.roomsFor(identity);
+    const roomById = new Map(visibleRooms.map((room) => [room.id, room]));
+    const direct = this.directDirectory(identity);
+    const directById = new Map(direct.conversations.map((conversation) => [conversation.id, conversation]));
+    const results = [];
+    for (const peer of direct.peers) {
+      if (!matches(peer.displayName) && !matches(peer.username)) continue;
+      const conversation = direct.conversations.find((item) => item.peer.participantId === peer.participantId);
+      results.push({
+        id: `account:${peer.participantId}`,
+        kind: conversation === void 0 ? "account" : "direct",
+        title: peer.displayName,
+        subtitle: `\u7528\u6237 \xB7 @${peer.username}`,
+        participantId: peer.participantId,
+        ...conversation === void 0 ? {} : {
+          conversationKind: "direct",
+          conversationId: conversation.id,
+          createdAt: conversation.updatedAt
+        }
+      });
+    }
+    for (const room of visibleRooms) {
+      if (!matches(room.title)) continue;
+      results.push({
+        id: `room:${room.id}`,
+        kind: "room",
+        title: room.title,
+        subtitle: "\u7FA4\u804A",
+        conversationKind: "room",
+        conversationId: room.id,
+        sessionId: room.sessionId,
+        ...room.updatedAt === void 0 ? {} : { createdAt: room.updatedAt }
+      });
+    }
+    for (const hit of this.requireArchive().search(identity.participantId, normalized)) {
+      const result = this.searchHit(hit, roomById, directById);
+      if (result !== void 0 && !results.some((item) => item.id === result.id)) results.push(result);
+    }
+    results.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0));
+    return { query: normalized, results: results.slice(0, 80) };
+  }
   /** Create or reopen one two-account private conversation. */
   async openDirect(peerId, identity) {
     this.assertReady();
@@ -3688,8 +3840,9 @@ var ChatroomRuntime = class {
       const binding = await this.ensureThread(threadId);
       const roomState = this.requireState(state.record.roomId);
       const room = roomState.record;
+      const aiTriggered = mentionsAi(content, room.aiDisplayName) || room.autoTriggerEnabled === true && addressesAi(content, room.aiDisplayName);
       const { provider, model: modelId } = binding.agent.options;
-      if (provider !== void 0 && modelId !== void 0 && content.some((part) => part.type === "image")) {
+      if (aiTriggered && provider !== void 0 && modelId !== void 0 && content.some((part) => part.type === "image")) {
         const model = await this.ctx.llm.resolveModelInfo(provider, modelId);
         if (model.inputModalities !== void 0 && !model.inputModalities.includes("image")) {
           throw new ChatroomInputError(`\u6A21\u578B ${JSON.stringify(modelId)} \u4E0D\u652F\u6301\u56FE\u7247\u8F93\u5165\u3002`);
@@ -3725,8 +3878,16 @@ var ChatroomRuntime = class {
       };
       await this.requireThreadMessages().put(record.id, record);
       this.archiveThreadMessage(state.record, record);
-      if (mode === "steer") binding.agent.steer(message);
-      else binding.agent.followup(message);
+      if (!aiTriggered) {
+        binding.agent.session.append("user/message", message, { surfaceOp: "append" });
+      } else if (mode === "steer") {
+        binding.agent.steer(message);
+      } else {
+        binding.agent.followup(message);
+      }
+      if (!aiTriggered && room.autoTriggerEnabled === true) {
+        this.scheduleAutomaticResponse(roomState, binding, content, state);
+      }
       await this.touchMember(state.record.roomId, identity);
       await this.touchRoom(state.record.roomId);
       const publicMessage = publicThreadMessage(record);
@@ -3746,7 +3907,7 @@ var ChatroomRuntime = class {
         text,
         createdAt: record.createdAt
       });
-      return { accepted: true, aiTriggered: true };
+      return { accepted: true, aiTriggered };
     });
     state.admission = task.then(() => void 0, () => void 0);
     return await task;
@@ -4022,6 +4183,41 @@ var ChatroomRuntime = class {
   }
   directMessageHistory(conversationId) {
     return [...this.requireDirectMessages().entries()].map(([, message]) => message).filter((message) => message.conversationId === conversationId).sort((left, right) => left.sequence - right.sequence).map(publicDirectMessage);
+  }
+  searchHit(hit, rooms, direct) {
+    const roomId = hit.conversationKind === "thread" ? hit.parentId : hit.conversationId;
+    const room = roomId === void 0 ? void 0 : rooms.get(roomId);
+    const directConversation = hit.conversationKind === "direct" ? direct.get(hit.conversationId) : void 0;
+    if (hit.conversationKind !== "direct" && room === void 0) return void 0;
+    if (hit.conversationKind === "direct" && directConversation === void 0) return void 0;
+    const title = hit.conversationKind === "direct" ? directConversation.peer.displayName : hit.conversationKind === "thread" ? projectThreadSearchTitle(hit.conversationTitle) : room.title;
+    const subtitle = hit.conversationKind === "direct" ? "\u79C1\u804A" : hit.conversationKind === "thread" ? `\u5206\u652F \xB7 ${room.title}` : "\u7FA4\u804A";
+    if (hit.kind === "conversation") {
+      if (hit.conversationKind === "room" || hit.conversationKind === "direct") return void 0;
+      return {
+        id: `thread:${hit.conversationId}`,
+        kind: "thread",
+        title,
+        subtitle,
+        conversationKind: hit.conversationKind,
+        conversationId: hit.conversationId,
+        ...hit.sessionId === void 0 ? {} : { sessionId: hit.sessionId },
+        createdAt: hit.createdAt
+      };
+    }
+    return {
+      id: `message:${hit.conversationId}:${hit.messageId ?? String(hit.createdAt)}`,
+      kind: "message",
+      title: hit.displayName ?? title,
+      subtitle: `${subtitle} \xB7 ${title}`,
+      preview: hit.text ?? "",
+      conversationKind: hit.conversationKind,
+      conversationId: hit.conversationId,
+      ...hit.sessionId === void 0 ? {} : { sessionId: hit.sessionId },
+      ...hit.messageId === void 0 ? {} : { messageId: hit.messageId },
+      ...directConversation === void 0 ? {} : { participantId: directConversation.peer.participantId },
+      createdAt: hit.createdAt
+    };
   }
   async storeDirectFiles(conversationId, identity, content) {
     const media = content.filter((part) => part.type !== "text");
@@ -4408,13 +4604,16 @@ var ChatroomRuntime = class {
   }
   async prepareAgentWecomCard(sessionId, card, operation) {
     if (card.kind !== "meeting" || operation.service !== "meeting" || operation.method !== "create") return card;
-    const room = [...this.states.values()].find((state) => state.record.sessionId === sessionId) ?? (() => {
-      const thread = [...this.threadStates.values()].find((state) => state.record.sessionId === sessionId);
-      return thread === void 0 ? void 0 : this.states.get(thread.record.roomId);
-    })();
-    if (room === void 0) return card;
     const tracked = { ...card, id: randomUUID3(), status: card.status ?? "init" };
-    this.trackMeeting(tracked, "room", room.record.id, findStringField(operation.result, ["meeting_id"]));
+    const externalMeetingId = findStringField(operation.result, ["meeting_id"]);
+    const thread = [...this.threadStates.values()].find((state) => state.record.sessionId === sessionId);
+    if (thread !== void 0) {
+      this.trackMeeting(tracked, "thread", thread.record.id, externalMeetingId);
+      return tracked;
+    }
+    const room = [...this.states.values()].find((state) => state.record.sessionId === sessionId);
+    if (room === void 0) return card;
+    this.trackMeeting(tracked, "room", room.record.id, externalMeetingId);
     return tracked;
   }
   trackMeeting(card, conversationKind, conversationId, externalMeetingId) {
@@ -4437,7 +4636,7 @@ var ChatroomRuntime = class {
   }
   async backfillMeetingCards() {
     const archive = this.requireArchive();
-    if (archive.projectionMigrationComplete("meeting-cards-v1")) return;
+    if (archive.projectionMigrationComplete("meeting-cards-v2")) return;
     for (const [, message] of this.requireDirectMessages().entries()) {
       if (message.card?.kind === "meeting") {
         this.backfillMeetingCard(message.card, "direct", message.conversationId, message.createdAt);
@@ -4464,7 +4663,26 @@ var ChatroomRuntime = class {
         }
       }
     }
-    if (complete) archive.completeProjectionMigration("meeting-cards-v1");
+    for (const state of this.threadStates.values()) {
+      let events = state.binding?.agent.session.events;
+      if (events === void 0 && persisted.has(state.record.sessionId)) {
+        try {
+          events = (await this.ctx.sessionPersistence.inspect(SessionId(state.record.sessionId))).events;
+        } catch (error) {
+          complete = false;
+          this.log.warn("Unable to inspect branch %s while recovering meeting cards: %s", state.record.id, String(error));
+        }
+      }
+      if (events === void 0) continue;
+      for (const event of events) {
+        if (event.type !== "user/message" && event.type !== "assistant/message") continue;
+        const message = event.type === "assistant/message" ? event.data.message : event.data;
+        for (const card of meetingCards(message.content)) {
+          this.backfillMeetingCard(card, "thread", state.record.id, event.time);
+        }
+      }
+    }
+    if (complete) archive.completeProjectionMigration("meeting-cards-v2");
   }
   backfillMeetingCard(card, conversationKind, conversationId, createdAt) {
     if (card.url === void 0) return;
@@ -4555,7 +4773,7 @@ var ChatroomRuntime = class {
       }
       this.requireArchive().upsertMeeting(current);
     }
-    if (current.conversationKind === "room" && current.summaryStatus === "completed" && current.summary !== void 0 && current.summaryPostedAt === void 0) {
+    if ((current.conversationKind === "room" || current.conversationKind === "thread") && current.summaryStatus === "completed" && current.summary !== void 0 && current.summaryPostedAt === void 0) {
       await this.postMeetingSummary(current);
       current = { ...current, summaryPostedAt: Date.now(), updatedAt: Date.now() };
       this.requireArchive().upsertMeeting(current);
@@ -4584,8 +4802,7 @@ var ChatroomRuntime = class {
     return summary;
   }
   async postMeetingSummary(meeting) {
-    const room = this.requireState(meeting.conversationId);
-    const binding = await this.ensureRoom(room.record.id);
+    const binding = meeting.conversationKind === "thread" ? await this.ensureThread(meeting.conversationId) : await this.ensureRoom(this.requireState(meeting.conversationId).record.id);
     const settings = this.resolvedAutomationSettings();
     const message = createAssistantMessage({
       content: [{ type: "text", text: `## \u4F1A\u8BAE\u603B\u7ED3 \xB7 ${meeting.title}
@@ -4597,7 +4814,57 @@ ${meeting.summary ?? ""}` }],
   }
   canReadMeeting(meeting, participantId) {
     if (meeting.conversationKind === "room") return this.isRoomMember(meeting.conversationId, participantId);
+    if (meeting.conversationKind === "thread") {
+      const thread = this.threadStates.get(meeting.conversationId);
+      return thread !== void 0 && this.isRoomMember(thread.record.roomId, participantId);
+    }
     return this.requireDirectConversations().get(meeting.conversationId)?.participantIds.includes(participantId) ?? false;
+  }
+  async appendThreadCard(state, identity, card) {
+    const binding = await this.ensureThread(state.record.id);
+    const durable = await this.durableContent(
+      state.record.roomId,
+      identity,
+      identifyPrompt([{ type: "text", text: identifyExternalCardText(card) }], identity)
+    );
+    const message = createUserMessage3({ content: durable, source: { kind: "user" } });
+    const now = Date.now();
+    const record = {
+      id: randomUUID3(),
+      threadId: state.record.id,
+      sequence: this.nextThreadSequence(state.record.id),
+      role: "human",
+      participantId: identity.participantId,
+      displayName: identity.displayName,
+      avatarId: identity.avatarId,
+      ...identity.avatarUrl === void 0 ? {} : { avatarUrl: identity.avatarUrl },
+      text: `\u521B\u5EFA\u4E86\u4F01\u5FAE\u4F1A\u8BAE\u300C${card.title}\u300D`,
+      card,
+      createdAt: now,
+      modelMessageId: String(message.id)
+    };
+    await this.requireThreadMessages().put(record.id, record);
+    this.archiveThreadMessage(state.record, record);
+    binding.agent.session.append("user/message", message, { surfaceOp: "append" });
+    await this.touchMember(state.record.roomId, identity);
+    await this.touchRoom(state.record.roomId);
+    const room = this.requireState(state.record.roomId);
+    this.broadcast(room, {
+      type: "thread-message",
+      message: publicThreadMessage(record),
+      preview: this.threadPreview(state.record)
+    });
+    this.notify({
+      id: record.id,
+      roomId: state.record.roomId,
+      roomTitle: room.record.title,
+      threadId: state.record.id,
+      participantId: identity.participantId,
+      displayName: identity.displayName,
+      role: "human",
+      text: record.text,
+      createdAt: now
+    });
   }
   async appendDirectCard(conversation, identity, card) {
     const now = Date.now();
@@ -4653,6 +4920,9 @@ ${meeting.summary ?? ""}` }],
     await workspace.attachSession(SessionId(sessionId));
   }
   async durableContent(roomId, identity, content) {
+    if (content.every((part) => part.type === "text")) {
+      return content.map((part) => ({ type: "text", text: part.text }));
+    }
     const prepared = content.map((part) => part.type === "text" ? part : { part, data: decodeBase64(part.data, part.type === "image" ? "\u56FE\u7247" : "\u6587\u4EF6") });
     const images = prepared.filter((item) => "data" in item && item.part.type === "image");
     const files = prepared.filter((item) => "data" in item && item.part.type === "file");
@@ -4925,7 +5195,13 @@ ${meeting.summary ?? ""}` }],
       ...record.sessionSeq === void 0 ? {} : { sessionSeq: record.sessionSeq },
       ...record.modelMessageId === void 0 ? {} : { modelMessageId: record.modelMessageId },
       ...record.reply === void 0 ? {} : { replyTo: record.reply.messageId },
-      content: { text: record.text, files: record.files ?? [], hasImages: record.hasImages ?? false, reply: record.reply }
+      content: {
+        text: record.text,
+        files: record.files ?? [],
+        hasImages: record.hasImages ?? false,
+        reply: record.reply,
+        card: record.card
+      }
     });
   }
   archiveRoomSession(state, session) {
@@ -5318,6 +5594,7 @@ function publicThreadMessage(record) {
     ...record.files === void 0 ? {} : { files: record.files },
     ...record.hasImages === void 0 ? {} : { hasImages: record.hasImages },
     ...record.reply === void 0 ? {} : { reply: record.reply },
+    ...record.card === void 0 ? {} : { card: record.card },
     createdAt: record.createdAt,
     ...record.avatarId === void 0 ? {} : { avatarId: record.avatarId },
     ...record.avatarUrl === void 0 ? {} : { avatarUrl: record.avatarUrl }
@@ -5336,6 +5613,13 @@ function normalizeRoomTitle(value, maxChars) {
   if ([...normalized].length > maxChars) throw new ChatroomInputError(`\u5171\u4EAB\u4F1A\u8BDD\u540D\u79F0\u4E0D\u80FD\u8D85\u8FC7 ${maxChars} \u4E2A\u5B57\u7B26\u3002`);
   if (/\p{Cc}/u.test(normalized)) throw new ChatroomInputError("\u5171\u4EAB\u4F1A\u8BDD\u540D\u79F0\u4E0D\u80FD\u5305\u542B\u63A7\u5236\u5B57\u7B26\u3002");
   return normalized;
+}
+function projectThreadSearchTitle(value) {
+  const raw = value.replace(/^分支：/u, "").trim();
+  const projected = projectExternalCardText(raw);
+  const visible = projected.text.replace(/\s+/gu, " ").trim();
+  const cardTitle = projected.cards.map((card) => card.title.trim()).find((title) => title !== "");
+  return [...visible || cardTitle || "\u5206\u652F\u6D88\u606F"].slice(0, 80).join("");
 }
 function normalizeThreadRoot(root) {
   const messageId = root.messageId.trim();
@@ -5767,6 +6051,10 @@ var ChatroomHttpController = class {
       }
       if (route.endpoint === "/direct/messages") {
         await this.handleDirectMessages(request, response);
+        return;
+      }
+      if (route.endpoint === "/search") {
+        await this.handleSearch(request, response, url.searchParams);
         return;
       }
       if (route.endpoint === "/rooms") {
@@ -6239,6 +6527,15 @@ var ChatroomHttpController = class {
     );
     json(response, 200, { room });
   }
+  async handleSearch(request, response, search) {
+    if (request.method !== "GET") {
+      methodNotAllowed(response, "GET");
+      return;
+    }
+    const identity = await this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    json(response, 200, this.runtime.search(search.get("q") ?? "", identity));
+  }
   async handleRoomSelection(request, response) {
     if (request.method !== "POST") {
       methodNotAllowed(response, "POST");
@@ -6342,11 +6639,12 @@ var ChatroomHttpController = class {
     if (identity === void 0) return;
     const body = await readJson(request, smallRequestLimit(this.config));
     const roomId = optionalFieldString(body, "roomId");
+    const threadId = optionalFieldString(body, "threadId");
     const directConversationId = optionalFieldString(body, "directConversationId");
-    if (roomId === void 0 === (directConversationId === void 0)) {
-      throw new ChatroomInputError("\u5FEB\u901F\u4F1A\u8BAE\u5FC5\u987B\u6307\u5B9A\u4E00\u4E2A\u7FA4\u804A\u6216\u79C1\u804A\u3002");
+    if ([roomId, threadId, directConversationId].filter((value) => value !== void 0).length !== 1) {
+      throw new ChatroomInputError("\u5FEB\u901F\u4F1A\u8BAE\u5FC5\u987B\u6307\u5B9A\u4E00\u4E2A\u7FA4\u804A\u3001\u5206\u652F\u6216\u79C1\u804A\u3002");
     }
-    const card = roomId === void 0 ? await this.runtime.createDirectQuickMeeting(directConversationId, identity) : await this.runtime.createQuickMeeting(roomId, identity);
+    const card = roomId !== void 0 ? await this.runtime.createQuickMeeting(roomId, identity) : threadId !== void 0 ? await this.runtime.createThreadQuickMeeting(threadId, identity) : await this.runtime.createDirectQuickMeeting(directConversationId, identity);
     json(response, 201, { accepted: true, card });
   }
   async handleWecomAuthorization(request, response) {

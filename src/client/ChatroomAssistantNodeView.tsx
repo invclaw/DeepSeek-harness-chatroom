@@ -2,14 +2,29 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentType } from 'react'
 import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatroomAgentTarget } from './store.js'
+import type { ChatroomView } from './store.js'
+import type {
+  ChatroomForwardItem,
+  ChatroomReplyReference,
+  ChatroomThreadRoot,
+} from '../types.js'
+import type { ChatroomReactionEmoji } from '../reactions.js'
 import { projectExternalCardText } from '../message.js'
 import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
+import { ChatroomAssistantReplyAction } from './ChatroomAssistantReplyAction.js'
 
 const COLLAPSIBLE_PROCESS_KINDS = new Set(['assistant-step', 'context', 'retry', 'tool-call'])
 
 export interface ChatroomAssistantNodeViewProps extends ChatNodeViewProps<'assistant-step'> {
+  useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
   nativeMessageView: ComponentType<ChatNodeViewProps<'assistant-step'>>
   resolveTarget?(sessionId: string): ChatroomAgentTarget | undefined
+  setReply(roomId: string, reply: ChatroomReplyReference): void
+  openThread(roomId: string, root: ChatroomThreadRoot): Promise<void>
+  toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>
+  openForward(roomId: string, message: ChatroomForwardItem): void
+  toggleMessageSelection(roomId: string, message: ChatroomForwardItem): void
+  recallMessage(roomId: string, messageId: string): Promise<boolean>
 }
 
 /** Keep a completed shared-room turn compact while preserving its native process rows. */
@@ -23,6 +38,14 @@ export function ChatroomAssistantNodeView(props: ChatroomAssistantNodeViewProps)
   const closing = shared
     && finalNode !== undefined
     && tail?.closing?.finalNode.seq === finalNode.seq
+  const standaloneMeetingSummaryMessageId = shared
+    && finalNode !== undefined
+    && !closing
+    && props.node.data.blocks.some(block => block.kind === 'text'
+      && block.text.trimStart().startsWith('## 会议总结 ·'))
+    ? finalNode.messageId
+    : undefined
+  const standaloneMeetingSummary = standaloneMeetingSummaryMessageId !== undefined
   const processSignature = props.useSession((snapshot) => {
     if (!closing) return ''
     const turn = props.node.data.turn
@@ -90,7 +113,12 @@ export function ChatroomAssistantNodeView(props: ChatroomAssistantNodeViewProps)
   }, [closing, expanded, processKeys])
 
   return (
-    <div className="dsh-chatroom-assistant-turn" ref={rootRef}>
+    <div
+      className="dsh-chatroom-assistant-turn"
+      ref={rootRef}
+      data-time-hover-root={standaloneMeetingSummary || undefined}
+      data-dsh-chatroom-standalone-assistant={standaloneMeetingSummary || undefined}
+    >
       {closing && processItemCount > 0 && (
         <button
           type="button"
@@ -104,6 +132,10 @@ export function ChatroomAssistantNodeView(props: ChatroomAssistantNodeViewProps)
       )}
       <NativeMessageView {...props} node={projectedNode} />
       {cards.map((card, index) => <ChatroomExternalCardView card={card} key={`${card.kind}:${card.title}:${index}`} />)}
+      {standaloneMeetingSummary && <ChatroomAssistantReplyAction
+        {...props}
+        messageId={standaloneMeetingSummaryMessageId}
+      />}
     </div>
   )
 }

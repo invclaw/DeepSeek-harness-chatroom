@@ -3,7 +3,7 @@ import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { CHATROOM_AVATARS, type ChatroomAvatarId } from '../avatars.js'
 import { authProviderStartLocation } from '../auth-redirect.js'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
-import type { ChatroomAuthState, ChatroomForwardItem, ChatroomReplyReference } from '../types.js'
+import type { ChatroomAuthState, ChatroomForwardItem, ChatroomReplyReference, ChatroomSearchResult } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
 import { ChatroomPanels } from './ChatroomPanels.js'
@@ -60,6 +60,9 @@ interface ChatroomEntryInjected {
   startWecomAuthorization?(): Promise<boolean>
   disconnectWecomAuthorization?(): Promise<boolean>
   rebindWecomAuthorization?(): Promise<boolean>
+  closeSearch(): void
+  searchAll(query: string): Promise<void>
+  openSearchResult(result: ChatroomSearchResult): Promise<void>
 }
 
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected

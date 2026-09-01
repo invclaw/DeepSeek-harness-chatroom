@@ -7,7 +7,7 @@ import { mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 const NODE_SQLITE_MODULE: string = 'node:sqlite'
 
 export type ArchiveConversationKind = 'room' | 'thread' | 'direct'
@@ -33,6 +33,21 @@ export interface ArchivedMessageOwner {
   readonly modelMessageId?: string
 }
 
+/** One SQLite conversation or message match after membership filtering. */
+export interface ArchivedSearchHit {
+  readonly kind: 'conversation' | 'message'
+  readonly conversationId: string
+  readonly conversationKind: ArchiveConversationKind
+  readonly conversationTitle: string
+  readonly sessionId?: string
+  readonly parentId?: string
+  readonly messageId?: string
+  readonly role?: 'human' | 'ai'
+  readonly displayName?: string
+  readonly text?: string
+  readonly createdAt: number
+}
+
 export interface StoredBlob {
   readonly sha256: string
   readonly storageKey: string
@@ -54,7 +69,7 @@ export type ArchivedMeetingSummaryStatus = 'pending' | 'completed' | 'failed'
 /** Durable meeting lifecycle record shared by UI cards, automation, and external APIs. */
 export interface ArchivedMeeting {
   readonly id: string
-  readonly conversationKind: 'room' | 'direct'
+  readonly conversationKind: 'room' | 'thread' | 'direct'
   readonly conversationId: string
   readonly externalMeetingId?: string
   readonly meetingUrl?: string
@@ -237,7 +252,7 @@ export class ChatArchive {
   pendingMeetings(): readonly ArchivedMeeting[] {
     return this.database.prepare(`SELECT * FROM meetings
       WHERE status != 'end' OR summary_status != 'completed'
-        OR (conversation_kind = 'room' AND summary_posted_at IS NULL)
+        OR (conversation_kind IN ('room', 'thread') AND summary_posted_at IS NULL)
       ORDER BY updated_at ASC`).all().map(archivedMeeting)
   }
 
@@ -245,6 +260,43 @@ export class ChatArchive {
   meetingSummaries(limit = 100): readonly ArchivedMeeting[] {
     return this.database.prepare(`SELECT * FROM meetings WHERE summary_status = 'completed'
       ORDER BY updated_at DESC LIMIT ?`).all(limit).map(archivedMeeting)
+  }
+
+  /** Search only conversations and messages visible to one participant. */
+  search(participantId: string, query: string, limit = 80): readonly ArchivedSearchHit[] {
+    const pattern = `%${escapeLike(query)}%`
+    const rows = this.database.prepare(`WITH visible AS (
+      SELECT c.* FROM conversations c
+      WHERE (c.kind IN ('room', 'direct') AND EXISTS (
+          SELECT 1 FROM conversation_members member
+          WHERE member.conversation_id = c.id AND member.participant_id = ? AND member.left_at IS NULL
+        )) OR (c.kind = 'thread' AND EXISTS (
+          SELECT 1 FROM conversation_members member
+          WHERE member.conversation_id = c.parent_id AND member.participant_id = ? AND member.left_at IS NULL
+        ))
+    ), matches AS (
+      SELECT 'conversation' AS result_kind, c.id AS conversation_id, c.kind AS conversation_kind,
+        c.title AS conversation_title, c.session_id, c.parent_id, NULL AS message_id,
+        NULL AS role, NULL AS display_name, NULL AS text, c.updated_at AS created_at
+      FROM visible c WHERE c.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+      UNION ALL
+      SELECT 'message' AS result_kind, c.id AS conversation_id, c.kind AS conversation_kind,
+        c.title AS conversation_title, c.session_id, c.parent_id,
+        CASE
+          WHEN m.role = 'ai' AND m.model_message_id IS NOT NULL THEN m.model_message_id
+          WHEN m.session_seq IS NOT NULL THEN 'user:' || m.session_seq
+          ELSE m.id
+        END AS message_id,
+        m.role, m.display_name, m.text, m.created_at
+      FROM visible c JOIN messages m ON m.conversation_id = c.id
+      WHERE m.recalled_at IS NULL AND (
+        m.text LIKE ? ESCAPE '\\' COLLATE NOCASE
+        OR m.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+      )
+    )
+    SELECT * FROM matches ORDER BY created_at DESC LIMIT ?`)
+      .all(participantId, participantId, pattern, pattern, pattern, limit)
+    return rows.map(archivedSearchHit)
   }
 
   /** Model message ids excluded from future requests after recall. */
@@ -375,7 +427,7 @@ export class ChatArchive {
       );
       CREATE TABLE IF NOT EXISTS meetings (
         id TEXT PRIMARY KEY,
-        conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('room', 'direct')),
+        conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('room', 'thread', 'direct')),
         conversation_id TEXT NOT NULL,
         external_meeting_id TEXT,
         meeting_url TEXT,
@@ -404,15 +456,48 @@ export class ChatArchive {
     if (current !== undefined && (!Number.isSafeInteger(Number(current.value)) || Number(current.value) > SCHEMA_VERSION)) {
       throw new Error(`unsupported chatroom archive schema ${String(current.value)}`)
     }
+    if (current !== undefined && Number(current.value) < 3) this.migrateMeetingConversationKinds()
     this.database.prepare(`INSERT INTO archive_meta (key, value) VALUES ('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(SCHEMA_VERSION))
+  }
+
+  private migrateMeetingConversationKinds(): void {
+    this.database.exec(`
+      BEGIN IMMEDIATE;
+      DROP INDEX IF EXISTS meetings_pending;
+      ALTER TABLE meetings RENAME TO meetings_before_thread_kind;
+      CREATE TABLE meetings (
+        id TEXT PRIMARY KEY,
+        conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('room', 'thread', 'direct')),
+        conversation_id TEXT NOT NULL,
+        external_meeting_id TEXT,
+        meeting_url TEXT,
+        title TEXT NOT NULL,
+        begin_time TEXT,
+        end_time TEXT,
+        status TEXT NOT NULL,
+        summary_status TEXT NOT NULL CHECK(summary_status IN ('pending', 'completed', 'failed')),
+        summary TEXT,
+        summary_error TEXT,
+        ended_at INTEGER,
+        summary_posted_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO meetings SELECT * FROM meetings_before_thread_kind;
+      DROP TABLE meetings_before_thread_kind;
+      CREATE INDEX meetings_pending ON meetings(status, summary_status, summary_posted_at, updated_at);
+      COMMIT;
+    `)
   }
 }
 
 function archivedMeeting(row: Record<string, unknown>): ArchivedMeeting {
   return {
     id: String(row.id),
-    conversationKind: row.conversation_kind === 'direct' ? 'direct' : 'room',
+    conversationKind: row.conversation_kind === 'direct'
+      ? 'direct'
+      : row.conversation_kind === 'thread' ? 'thread' : 'room',
     conversationId: String(row.conversation_id),
     ...(typeof row.external_meeting_id === 'string' ? { externalMeetingId: row.external_meeting_id } : {}),
     ...(typeof row.meeting_url === 'string' ? { meetingUrl: row.meeting_url } : {}),
@@ -430,6 +515,25 @@ function archivedMeeting(row: Record<string, unknown>): ArchivedMeeting {
   }
 }
 
+function archivedSearchHit(row: Record<string, unknown>): ArchivedSearchHit {
+  const conversationKind = row.conversation_kind === 'thread'
+    ? 'thread'
+    : row.conversation_kind === 'direct' ? 'direct' : 'room'
+  return {
+    kind: row.result_kind === 'message' ? 'message' : 'conversation',
+    conversationId: String(row.conversation_id),
+    conversationKind,
+    conversationTitle: String(row.conversation_title),
+    ...(typeof row.session_id === 'string' ? { sessionId: row.session_id } : {}),
+    ...(typeof row.parent_id === 'string' ? { parentId: row.parent_id } : {}),
+    ...(typeof row.message_id === 'string' ? { messageId: row.message_id } : {}),
+    ...(row.role === 'human' || row.role === 'ai' ? { role: row.role } : {}),
+    ...(typeof row.display_name === 'string' ? { displayName: row.display_name } : {}),
+    ...(typeof row.text === 'string' ? { text: row.text } : {}),
+    createdAt: Number(row.created_at),
+  }
+}
+
 function resolveArchiveRoot(configuredDirectory: string): string {
   if (configuredDirectory !== '') return configuredDirectory
   const dshHome = process.env.DSH_HOME?.trim()
@@ -442,6 +546,10 @@ function visibleSequence(messageId: string): number | undefined {
   if (match === null) return undefined
   const value = Number(match[1])
   return Number.isSafeInteger(value) ? value : undefined
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/gu, match => `\\${match}`)
 }
 
 function isAlreadyExists(error: unknown): boolean {

@@ -1,6 +1,6 @@
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots';
 import type { ChatroomClientStore, ChatroomView } from './store.js';
-import type { ChatroomForwardItem, ChatroomReplyReference } from '../types.js';
+import type { ChatroomForwardItem, ChatroomReplyReference, ChatroomSearchResult } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 interface ChatroomEntryInjected {
     useChatroom<T>(selector: (snapshot: ChatroomView) => T): T;
@@ -79,6 +79,9 @@ interface ChatroomEntryInjected {
     startWecomAuthorization?(): Promise<boolean>;
     disconnectWecomAuthorization?(): Promise<boolean>;
     rebindWecomAuthorization?(): Promise<boolean>;
+    closeSearch(): void;
+    searchAll(query: string): Promise<void>;
+    openSearchResult(result: ChatroomSearchResult): Promise<void>;
 }
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected;
 /** Authentication and first-identity overlays plus persistent chatroom panels. */

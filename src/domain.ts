@@ -127,6 +127,7 @@ export interface ThreadMessageRecord {
   }[]
   readonly hasImages?: boolean
   readonly reply?: ChatroomReplyReference
+  readonly card?: ChatroomExternalCard
   readonly createdAt: number
   readonly modelMessageId?: string
   readonly sessionSeq?: number
@@ -324,6 +325,28 @@ const replySchema = z.object({
   text: z.string().min(1),
 })
 
+const externalCardSchema = z.union([
+  z.object({
+    kind: z.literal('meeting'),
+    id: z.string().min(1).optional(),
+    title: z.string().min(1),
+    beginTime: z.string().optional(),
+    endTime: z.string().optional(),
+    url: z.string().optional(),
+    location: z.string().optional(),
+    status: z.string().optional(),
+    attendees: z.array(z.string()).optional(),
+  }),
+  z.object({
+    kind: z.literal('document'),
+    title: z.string().min(1),
+    documentType: z.string().optional(),
+    url: z.string().optional(),
+    modifiedAt: z.string().optional(),
+    owner: z.string().optional(),
+  }),
+])
+
 const threadSchema = z.object({
   id: z.uuid(),
   roomId: z.string().min(1),
@@ -352,6 +375,7 @@ const threadMessageSchema = z.object({
   })).optional(),
   hasImages: z.boolean().optional(),
   reply: replySchema.optional(),
+  card: externalCardSchema.optional(),
   createdAt: nonNegativeSafeInteger,
   modelMessageId: z.string().min(1).optional(),
   sessionSeq: nonNegativeSafeInteger.optional(),
@@ -446,27 +470,7 @@ const directMessageSchema = z.object({
     mediaType: z.string().min(1),
     bytes: nonNegativeSafeInteger,
   })).optional(),
-  card: z.union([
-    z.object({
-      kind: z.literal('meeting'),
-      id: z.string().min(1).optional(),
-      title: z.string().min(1),
-      beginTime: z.string().optional(),
-      endTime: z.string().optional(),
-      url: z.string().optional(),
-      location: z.string().optional(),
-      status: z.string().optional(),
-      attendees: z.array(z.string()).optional(),
-    }),
-    z.object({
-      kind: z.literal('document'),
-      title: z.string().min(1),
-      documentType: z.string().optional(),
-      url: z.string().optional(),
-      modifiedAt: z.string().optional(),
-      owner: z.string().optional(),
-    }),
-  ]).optional(),
+  card: externalCardSchema.optional(),
   createdAt: nonNegativeSafeInteger,
 }).refine(record => record.text.trim() !== '' || (record.files?.length ?? 0) > 0 || record.card !== undefined, {
   message: 'direct message must include text, files, or a card',
