@@ -23,8 +23,9 @@ export interface ChatroomMessageToolsProps {
     recallMessage(roomId: string, messageId: string): Promise<boolean>;
 }
 /** Capability-driven actions reused by main-room and branch message rows. */
-export declare function ChatroomInlineMessageActions({ tools, }: {
+export declare function ChatroomInlineMessageActions({ tools, showTime, }: {
     readonly tools: ChatroomMessageToolsProps;
+    readonly showTime?: boolean;
 }): JSX.Element | null;
 /** Checkbox shown on every message while the room is in multi-select mode. */
 export declare function ChatroomSelectionCheckbox({ tools }: {

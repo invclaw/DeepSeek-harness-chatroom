@@ -86,6 +86,10 @@ export class ChatroomHttpController {
         await this.handleDirectMessages(request, response)
         return
       }
+      if (route.endpoint === '/direct/reactions/toggle') {
+        await this.handleDirectReactionToggle(request, response)
+        return
+      }
       if (route.endpoint === '/search') {
         await this.handleSearch(request, response, url.searchParams)
         return
@@ -130,6 +134,10 @@ export class ChatroomHttpController {
         await this.handleMeetingResolution(request, response, url.searchParams)
         return
       }
+      if (route.endpoint === '/documents/resolve') {
+        await this.handleDocumentResolution(request, response, url.searchParams)
+        return
+      }
       if (route.endpoint.startsWith('/meetings/')) {
         await this.handleMeetingSummary(request, response, route.endpoint.slice('/meetings/'.length))
         return
@@ -156,6 +164,10 @@ export class ChatroomHttpController {
       }
       if (route.endpoint === '/messages/recall') {
         await this.handleMessageRecall(request, response)
+        return
+      }
+      if (route.endpoint === '/queue') {
+        await this.handleQueuedPrompt(request, response)
         return
       }
       if (route.endpoint === '/forward') {
@@ -542,6 +554,26 @@ export class ChatroomHttpController {
       fieldString(body, 'conversationId'),
       parsed.content,
       identity,
+      parsed.reply,
+    ))
+  }
+
+  private async handleDirectReactionToggle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, smallRequestLimit(this.config))
+    const emoji = body.emoji
+    if (!isChatroomReactionEmoji(emoji)) throw new ChatroomInputError('请选择支持的消息表情。')
+    json(response, 200, await this.runtime.toggleDirectReaction(
+      fieldString(body, 'conversationId'),
+      fieldString(body, 'messageId'),
+      emoji,
+      identity,
     ))
   }
 
@@ -780,6 +812,22 @@ export class ChatroomHttpController {
     json(response, 200, this.runtime.meetingSummaryByUrl(meetingUrl, identity))
   }
 
+  private async handleDocumentResolution(
+    request: IncomingMessage,
+    response: ServerResponse,
+    search: URLSearchParams,
+  ): Promise<void> {
+    if (request.method !== 'GET') {
+      methodNotAllowed(response, 'GET')
+      return
+    }
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const documentUrl = search.get('url')?.trim() ?? ''
+    if (documentUrl === '' || documentUrl.length > 4_096) throw new ChatroomInputError('企业微信文档链接无效。')
+    json(response, 200, await this.runtime.resolveWecomDocument(documentUrl, identity))
+  }
+
   private async handleMeetingSummaries(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method !== 'GET') {
       methodNotAllowed(response, 'GET')
@@ -910,6 +958,31 @@ export class ChatroomHttpController {
       identity,
     )
     json(response, 200, recall)
+  }
+
+  private async handleQueuedPrompt(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'POST')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    const body = await readJson(request, smallRequestLimit(this.config))
+    const action = body.action
+    if (action !== 'guide' && action !== 'delete' && action !== 'edit') {
+      throw new ChatroomInputError('排队消息操作无效。')
+    }
+    const target = typeof body.threadId === 'string'
+      ? { threadId: body.threadId }
+      : { roomId: fieldString(body, 'roomId') }
+    const result = await this.runtime.updateQueuedPrompt(
+      target,
+      fieldString(body, 'messageId'),
+      action,
+      identity,
+    )
+    json(response, 200, result)
   }
 
   private async handleForward(request: IncomingMessage, response: ServerResponse): Promise<void> {

@@ -54,7 +54,8 @@ interface ChatroomEntryInjected {
   saveAutomation?(provider: string, model: string, meetingSummaryProvider: string, meetingSummaryModel: string, mainAgentPrompt: string, controllerPrompt: string): Promise<boolean>
   openDirect(peerId?: string): Promise<void>
   closeDirect(): void
-  sendDirect(text: string, files?: readonly File[]): Promise<boolean>
+  sendDirect(text: string, files?: readonly File[], reply?: ChatroomReplyReference): Promise<boolean>
+  toggleDirectReaction?(conversationId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>
   quickDirectMeeting?(conversationId: string): Promise<boolean>
   loadWecomAuthorization?(): Promise<ChatroomView['wecomAuthorization']>
   startWecomAuthorization?(): Promise<boolean>

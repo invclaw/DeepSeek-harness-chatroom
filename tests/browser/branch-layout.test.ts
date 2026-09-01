@@ -157,6 +157,38 @@ describe('branch surfaces in a real browser', () => {
     expect(getComputedStyle(fallback).display).toBe('none')
     expect(getComputedStyle(button, '::before').maskImage).toContain('data:image/svg+xml')
   })
+
+  it('shows one stable chatroom queue rail and suppresses the native duplicate', () => {
+    document.documentElement.dataset.dshChatroomActive = ''
+    const style = document.createElement('style')
+    style.textContent = `${CHATROOM_STYLES}
+      body { margin: 0; width: 760px; }
+      .host-dock { width: 720px; }
+    `
+    document.head.append(style)
+    document.body.innerHTML = `
+      <div class="host-dock">
+        <div class="dsh-chatroom-composer-dock" data-dsh-chatroom-queue-dock="true">
+          <div class="dsh-chatroom-queued-prompts" aria-label="排队消息">
+            <div class="dsh-chatroom-queued-prompt">
+              <div class="dsh-chatroom-queued-prompt-status"><span class="dsh-chatroom-queue-dot"></span><span>正在排队 · 等待当前回复完成</span></div>
+              <div class="dsh-chatroom-queued-prompt-content">请在当前回复完成后总结</div>
+              <div class="dsh-chatroom-queued-prompt-actions"><button>引导对话</button><button>编辑</button><button>删除</button></div>
+            </div>
+          </div>
+        </div>
+        <div data-queue-dock>native duplicate</div>
+      </div>
+    `
+    const custom = requiredElement<HTMLElement>('.dsh-chatroom-queued-prompt')
+    const native = requiredElement<HTMLElement>('[data-queue-dock]')
+    const actions = requiredElement<HTMLElement>('.dsh-chatroom-queued-prompt-actions')
+
+    expect(getComputedStyle(native).display).toBe('none')
+    expect(getComputedStyle(custom).display).toBe('grid')
+    expect(actions.getBoundingClientRect().right).toBeLessThanOrEqual(custom.getBoundingClientRect().right)
+    expect(custom.getBoundingClientRect().height).toBeLessThan(80)
+  })
 })
 
 function mountFixture(scheme: string, markNativeActions = true): void {

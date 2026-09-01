@@ -4,11 +4,22 @@ import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { CHATROOM_AVATARS, type ChatroomAvatarId } from '../avatars.js'
 import { ChatroomAvatar } from './ChatroomAvatar.js'
 import type { ChatroomView } from './store.js'
+import type { ChatroomDirectMessage, ChatroomForwardItem, ChatroomReplyReference } from '../types.js'
+import type { ChatroomReactionEmoji } from '../reactions.js'
 import { ChatroomAvatarView } from './ChatroomAvatarView.js'
 import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
-import { ChatroomCopyButton } from './ChatroomMessageTools.js'
-import { CHATROOM_MESSAGE_EMOJIS } from './emojis.js'
+import {
+  type ChatroomMessageToolsProps,
+} from './ChatroomMessageTools.js'
+import { ChatroomDocumentLinkCards, ChatroomLinkedText } from './ChatroomLinkedText.js'
+import {
+  chatroomMessageActionGroup,
+  chatroomMessageGroupPosition,
+  type ChatroomMessageGroupPosition,
+} from './message-grouping.js'
+import { ChatroomMessageFrame } from './ChatroomMessageFrame.js'
+import { ChatroomEmojiPicker, ChatroomPendingFiles, ChatroomReplyPreview } from './ChatroomComposer.js'
 
 export interface ChatroomAccountPanelProps {
   readonly room: ChatroomView
@@ -26,7 +37,10 @@ export interface ChatroomAccountPanelProps {
   saveAutomation?(provider: string, model: string, meetingSummaryProvider: string, meetingSummaryModel: string, mainAgentPrompt: string, controllerPrompt: string): Promise<boolean>
   openDirect(peerId?: string): Promise<void>
   closeDirect(): void
-  sendDirect(text: string, files?: readonly File[]): Promise<boolean>
+  sendDirect(text: string, files?: readonly File[], reply?: ChatroomReplyReference): Promise<boolean>
+  toggleDirectReaction?(conversationId: string, messageId: string, emoji: ChatroomReactionEmoji): Promise<void>
+  openForward?(conversationId: string, message?: ChatroomForwardItem): void
+  toggleMessageSelection?(conversationId: string, message: ChatroomForwardItem): void
   quickDirectMeeting?(conversationId: string): Promise<boolean>
   loadWecomAuthorization?(): Promise<ChatroomView['wecomAuthorization']>
   startWecomAuthorization?(): Promise<boolean>
@@ -396,12 +410,12 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
   const [text, setText] = useState('')
   const [files, setFiles] = useState<readonly File[]>([])
   const [emojiOpen, setEmojiOpen] = useState(false)
+  const [reply, setReply] = useState<ChatroomReplyReference>()
   const [host] = useState(() => nativeConversationHost())
   const messagesRef = useRef<HTMLDivElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const emojiRootRef = useRef<HTMLDivElement>(null)
   const current = props.room.directConversation
   useLayoutEffect(() => {
     if (host === undefined) return
@@ -416,59 +430,39 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
     setText('')
     setFiles([])
     setEmojiOpen(false)
+    setReply(undefined)
   }, [current?.id])
-  useEffect(() => {
-    if (!emojiOpen) return
-    const close = (event: PointerEvent) => {
-      if (!emojiRootRef.current?.contains(event.target as Node)) setEmojiOpen(false)
-    }
-    document.addEventListener('pointerdown', close)
-    return () => { document.removeEventListener('pointerdown', close) }
-  }, [emojiOpen])
   const canSend = !props.room.directBusy && (text.trim() !== '' || files.length > 0)
   const content = <main className="dsh-chatroom-direct-panel" aria-label="私聊" data-testid="chatroom-direct">
     <header>
       {current !== undefined && <ChatroomAvatarView className="dsh-chatroom-direct-header-avatar" {...current.peer} />}
       <div><strong>{current?.peer.displayName ?? '私聊'}</strong><small>{current === undefined ? '从左侧通讯录选择联系人' : `@${current.peer.username}`}</small></div>
-      <button aria-label="关闭私聊" type="button" onClick={props.closeDirect}>×</button>
     </header>
     {current === undefined
       ? <div className="dsh-chatroom-direct-empty">从左侧“私聊”通讯录选择一位联系人</div>
       : <>
-        <div ref={messagesRef} className="dsh-chatroom-direct-messages">{props.room.directMessages.map(message => {
-          const own = message.senderId === props.room.identity?.participantId
-          const sender = own ? props.room.identity : current.peer
-          return <article key={message.id} data-own={own} data-dsh-chatroom-message-id={message.id}>
-            {sender !== undefined && <ChatroomAvatarView className="dsh-chatroom-direct-message-avatar" {...sender} />}
-            <div>
-              <strong>{own ? '我' : current.peer.displayName}</strong>
-              {message.text !== '' && <p>{message.text}</p>}
-              {message.card !== undefined && <ChatroomExternalCardView card={message.card} />}
-              {message.files !== undefined && message.files.length > 0 && <div className="dsh-chatroom-direct-media">
-                {message.files.map(file => {
-                  const url = `${CHATROOM_API_PREFIX}/files/${encodeURIComponent(file.id)}`
-                  return file.mediaType.startsWith('image/')
-                    ? <a key={file.id} href={url} target="_blank" rel="noreferrer"><img src={url} alt={file.name} /></a>
-                    : <a className="dsh-chatroom-direct-file" key={file.id} href={url} download={file.name}>
-                        <span aria-hidden>📎</span><span><strong>{file.name}</strong><small>{formatFileBytes(file.bytes)}</small></span><span aria-hidden>↓</span>
-                      </a>
-                })}
-              </div>}
-              <div className="dsh-chatroom-direct-message-actions">
-                <ChatroomCopyButton text={directMessageCopyText(message)} />
-              </div>
-              <time>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
-            </div>
-          </article>
-        })}</div>
+        <div ref={messagesRef} className="dsh-chatroom-direct-messages">{props.room.directMessages.map((message, index, messages) => <DirectMessageView
+          key={message.id}
+          message={message}
+          groupPosition={chatroomMessageGroupPosition(messages, index, item => item.senderId, item => item.createdAt)}
+          actionGroup={chatroomMessageActionGroup(messages, index, item => item.senderId, item => item.createdAt)}
+          peer={current.peer}
+          props={props}
+          setReply={setReply}
+        />)}</div>
         <form ref={formRef} className="dsh-chatroom-direct-composer" onSubmit={async (event) => {
           event.preventDefault()
           if (!canSend) return
-          if (await props.sendDirect(text, files)) {
+          const sent = reply === undefined
+            ? await props.sendDirect(text, files)
+            : await props.sendDirect(text, files, reply)
+          if (sent) {
             setText('')
             setFiles([])
+            setReply(undefined)
           }
         }}>
+          {reply !== undefined && <ChatroomReplyPreview reply={reply} cancelLabel="取消私聊引用" clear={() => { setReply(undefined) }} />}
           <textarea
             ref={textareaRef}
             data-dsh-chatroom-direct-input
@@ -487,28 +481,23 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
             }}
             enterKeyHint="send"
           />
-          {files.length > 0 && <div className="dsh-chatroom-direct-pending-files">
-            {files.map((file, index) => <span key={`${file.name}-${file.lastModified}-${index}`}>
-              <span aria-hidden>{file.type.startsWith('image/') ? '🖼️' : '📎'}</span>
-              <span title={file.name}>{file.name}</span>
-              <button type="button" aria-label={`移除 ${file.name}`} onClick={() => { setFiles(currentFiles => currentFiles.filter((_, fileIndex) => fileIndex !== index)) }}>×</button>
-            </span>)}
-          </div>}
+          {files.length > 0 && <ChatroomPendingFiles
+            files={files.map((file, index) => ({ id: `${file.name}-${file.lastModified}-${index}`, file }))}
+            remove={itemId => {
+              setFiles(currentFiles => currentFiles.filter((file, index) => `${file.name}-${file.lastModified}-${index}` !== itemId))
+            }}
+          />}
           <div className="dsh-chatroom-direct-composer-tools">
-            <div ref={emojiRootRef} className="dsh-chatroom-direct-emoji-root">
-              <button type="button" aria-label="选择私聊表情" aria-expanded={emojiOpen} onClick={() => { setEmojiOpen(open => !open) }}>☺ <span>表情</span></button>
-              {emojiOpen && <div className="dsh-chatroom-direct-emoji-picker" role="dialog" aria-label="选择私聊表情">
-                {CHATROOM_MESSAGE_EMOJIS.map(emoji => <button type="button" key={emoji} aria-label={`插入 ${emoji}`} onClick={() => {
-                  setText(value => `${value}${emoji}`)
-                  setEmojiOpen(false)
-                  textareaRef.current?.focus()
-                }}>{emoji}</button>)}
-              </div>}
-            </div>
-            <button type="button" aria-label="选择私聊图片或文件" onClick={() => { fileInputRef.current?.click() }}>📎 <span>附件</span></button>
+            <ChatroomEmojiPicker
+              open={emojiOpen}
+              toggle={() => { setEmojiOpen(open => !open) }}
+              close={() => { setEmojiOpen(false) }}
+              pick={emoji => { setText(value => `${value}${emoji}`); textareaRef.current?.focus() }}
+            />
+            <button className="dsh-chatroom-file-button" type="button" aria-label="选择私聊图片或文件" onClick={() => { fileInputRef.current?.click() }}>📎 <span>附件</span></button>
             <button
               type="button"
-              className="dsh-chatroom-direct-meeting"
+              className="dsh-chatroom-quick-meeting"
               disabled={props.room.wecomBusy}
               onClick={() => { void props.quickDirectMeeting?.(current.id) }}
             >⚡ <span>快速会议</span></button>
@@ -526,6 +515,81 @@ function DirectPanel(props: ChatroomAccountPanelProps): JSX.Element {
   </main>
   return host === undefined ? content : createPortal(content, host)
 }
+
+function DirectMessageView({ message, groupPosition, actionGroup, peer, props, setReply }: {
+  readonly message: ChatroomDirectMessage
+  readonly groupPosition: ChatroomMessageGroupPosition
+  readonly actionGroup: string
+  readonly peer: ChatroomView['directPeers'][number]
+  readonly props: ChatroomAccountPanelProps
+  setReply(reply: ChatroomReplyReference): void
+}): JSX.Element {
+  const own = message.senderId === props.room.identity?.participantId
+  const sender = own ? props.room.identity : peer
+  const forward = directForwardItem(message, own ? '我' : peer.displayName)
+  const tools: ChatroomMessageToolsProps = {
+    roomId: message.conversationId,
+    message: forward,
+    reactions: (message.reactions ?? []).map(reaction => ({
+      roomId: message.conversationId,
+      messageId: message.id,
+      emoji: reaction.emoji,
+      participantIds: reaction.participantIds,
+    })),
+    identity: props.room.identity,
+    selecting: props.room.selectionRoomId === message.conversationId,
+    selected: props.room.selectionRoomId === message.conversationId
+      && props.room.selectedMessages.some(item => item.messageId === message.id),
+    recalled: false,
+    canRecall: false,
+    copyText: directMessageCopyText(message),
+    onReply: () => { setReply({ messageId: message.id, displayName: forward.displayName, text: forward.text }) },
+    toggleReaction: props.toggleDirectReaction ?? unavailableDirectReaction,
+    openForward: props.openForward ?? unavailableOpenForward,
+    toggleSelection: props.toggleMessageSelection ?? unavailableToggleSelection,
+    recallMessage: unavailableRecall,
+  }
+  return <ChatroomMessageFrame
+    className="dsh-chatroom-direct-message"
+    own={own}
+    groupPosition={groupPosition}
+    actionGroup={actionGroup}
+    avatar={sender === undefined ? null : <ChatroomAvatarView className="dsh-chatroom-avatar dsh-chatroom-direct-message-avatar" {...sender} />}
+    displayName={forward.displayName}
+    reply={message.reply}
+    tools={tools}
+    body={<>
+      {message.text !== '' && <ChatroomLinkedText className="dsh-chatroom-human-bubble" text={message.text} />}
+      {message.card !== undefined && <ChatroomExternalCardView card={message.card} />}
+      <ChatroomDocumentLinkCards text={message.text} existingUrls={message.card?.url === undefined ? [] : [message.card.url]} />
+      {message.files !== undefined && message.files.length > 0 && <div className="dsh-chatroom-direct-media">
+        {message.files.map(file => {
+          const url = `${CHATROOM_API_PREFIX}/files/${encodeURIComponent(file.id)}`
+          return file.mediaType.startsWith('image/')
+            ? <a key={file.id} href={url} target="_blank" rel="noreferrer"><img src={url} alt={file.name} /></a>
+            : <a className="dsh-chatroom-direct-file" key={file.id} href={url} download={file.name}>
+                <span aria-hidden>📎</span><span><strong>{file.name}</strong><small>{formatFileBytes(file.bytes)}</small></span><span aria-hidden>↓</span>
+              </a>
+        })}
+      </div>}
+    </>}
+  />
+}
+
+function directForwardItem(message: ChatroomDirectMessage, displayName: string): ChatroomForwardItem {
+  return {
+    messageId: message.id,
+    role: 'human',
+    displayName,
+    text: directMessageCopyText(message) || '私聊消息',
+    createdAt: message.createdAt,
+  }
+}
+
+const unavailableDirectReaction = async (): Promise<void> => undefined
+const unavailableOpenForward = (): void => undefined
+const unavailableToggleSelection = (): void => undefined
+const unavailableRecall = async (): Promise<boolean> => false
 
 function directMessageCopyText(message: ChatroomView['directMessages'][number]): string {
   if (message.text.trim() !== '') return message.text

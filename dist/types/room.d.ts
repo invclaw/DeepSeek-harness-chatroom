@@ -6,7 +6,7 @@ import { type ChatroomAgentAction, type ChatroomAgentActionInput } from './agent
 import type { Config } from './config.js';
 import { type ChatroomReactionEmoji } from './reactions.js';
 import { type WecomAuthorizationState } from './wecom.js';
-import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMeetingCard, ChatroomMeetingSummary, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomSearchResponse, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
+import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomDocumentCard, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMeetingCard, ChatroomMeetingSummary, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomSearchResponse, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
 /** Runtime validation failure safe to return to a browser. */
 export declare class ChatroomInputError extends Error {
 }
@@ -36,6 +36,7 @@ export declare class ChatroomRuntime {
     private readonly threadStates;
     private readonly notificationClients;
     private readonly ignoredAssistantMessageIds;
+    private readonly activeTurnDeferredMessageIds;
     private readonly aiContextStartWrites;
     private readonly chatroomAgentContexts;
     private readonly wecom;
@@ -66,7 +67,7 @@ export declare class ChatroomRuntime {
     get auth(): ChatroomAuth;
     /** Whether one model request belongs to a room or branch Session owned by this runtime. */
     ownsSession(sessionId: string): boolean;
-    /** Stable model message ids omitted after recalls or an AI-context reset. */
+    /** Model message ids omitted after recalls, a context reset, or until the active turn finishes. */
     hiddenModelMessageIds(sessionId: string): ReadonlySet<string>;
     /** Stable model message ids omitted from future requests after a chat recall. */
     recalledMessageIds(sessionId: string): ReadonlySet<string>;
@@ -142,6 +143,8 @@ export declare class ChatroomRuntime {
     meetingSummary(id: string, identity: ChatroomIdentity): ChatroomMeetingSummary;
     /** Resolve a legacy meeting card by URL after enforcing conversation visibility. */
     meetingSummaryByUrl(meetingUrl: string, identity: ChatroomIdentity): ChatroomMeetingSummary;
+    /** Resolve one Tencent Docs URL through the deployment-shared Enterprise WeChat account. */
+    resolveWecomDocument(documentUrl: string, identity: ChatroomIdentity): Promise<ChatroomDocumentCard>;
     /** List completed meeting summaries visible to one authenticated participant. */
     meetingSummaries(identity: ChatroomIdentity): readonly ChatroomMeetingSummary[];
     /** Poll tracked meetings immediately; used by the scheduler and operational checks. */
@@ -154,6 +157,15 @@ export declare class ChatroomRuntime {
     addRoomMembers(roomId: string, participantIds: readonly string[], identity: ChatroomIdentity): Promise<readonly ChatroomMember[]>;
     /** Append human chat immediately and evaluate optional automatic responses in a separate queue. */
     submit(roomId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
+    /** Guide, remove, or take back one queued AI prompt before the Agent claims it. */
+    updateQueuedPrompt(target: {
+        readonly roomId: string;
+    } | {
+        readonly threadId: string;
+    }, messageId: string, action: 'guide' | 'delete' | 'edit', identity: ChatroomIdentity): Promise<{
+        readonly accepted: true;
+        readonly text: string;
+    }>;
     /** Persist one participant's personal sidebar pin for a room. */
     setRoomPinned(roomId: string, pinned: boolean, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Enable or disable model-controlled automatic AI responses as a room member. */
@@ -164,6 +176,7 @@ export declare class ChatroomRuntime {
     toggleReaction(roomId: string, messageId: string, emoji: ChatroomReactionEmoji, identity: ChatroomIdentity): Promise<ChatroomReaction>;
     /** Append selected messages as one merged-forward card in another room. */
     forwardMessages(sourceRoomId: string, targetRoomId: string, messages: readonly ChatroomForwardItem[], identity: ChatroomIdentity): Promise<ChatroomPromptResponse>;
+    private resolveDirectForwardItem;
     private resolveForwardItem;
     private forwardSourceBinding;
     /** Resolve one authenticated room-file download. */
@@ -187,10 +200,12 @@ export declare class ChatroomRuntime {
     /** Create or reopen one two-account private conversation. */
     openDirect(peerId: string, identity: ChatroomIdentity): Promise<ChatroomDirectResponse>;
     /** Append one private message and notify only its two participants. */
-    sendDirect(conversationId: string, content: readonly ChatroomPromptContentPart[], identity: ChatroomIdentity): Promise<{
+    sendDirect(conversationId: string, content: readonly ChatroomPromptContentPart[], identity: ChatroomIdentity, reply?: ChatroomReplyReference): Promise<{
         conversation: ChatroomDirectConversation;
         message: ChatroomDirectMessage;
     }>;
+    /** Toggle one reaction on a private message and notify both participants. */
+    toggleDirectReaction(conversationId: string, messageId: string, emoji: ChatroomReactionEmoji, identity: ChatroomIdentity): Promise<ChatroomDirectMessage>;
     private publishDirectMessage;
     /** Create or reopen a branch rooted at one native room message. */
     openThread(roomId: string, identity: ChatroomIdentity, root: ChatroomThreadRoot): Promise<ChatroomThreadResponse>;
@@ -217,6 +232,7 @@ export declare class ChatroomRuntime {
     private directoryPeers;
     private directoryPeer;
     private directMessageHistory;
+    private findDirectMessage;
     private searchHit;
     private storeDirectFiles;
     private seedConfiguredRoom;
@@ -256,6 +272,10 @@ export declare class ChatroomRuntime {
     private fileRecord;
     private resizeImage;
     private broadcastPresence;
+    private publishPendingMessage;
+    private removePendingMessage;
+    private pendingMessagesForRoom;
+    private broadcastPendingMessages;
     private broadcast;
     private assertReady;
     private requireRoom;
@@ -276,6 +296,7 @@ export declare class ChatroomRuntime {
     private appendThreadRoot;
     private shouldAutoTrigger;
     private scheduleAutomaticResponse;
+    private deferMessageFromActiveTurn;
     private acceptSessionTitle;
     private requireState;
     private requireIdentities;

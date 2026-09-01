@@ -44,6 +44,40 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
+  it('lets queued AI prompts be guided, edited back to draft, or deleted before a model turn', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const agent = harness.agents[0]!
+    Object.assign(agent, { status: 'running' })
+
+    await runtime.submit('lobby', identity, [{ type: 'text', text: '@AI 排队回复' }], 'queue')
+    const edited = agent.inbox.nextTurn[0]
+    expect(edited).toBeDefined()
+    const bob = { participantId: 'bob-id', displayName: 'Bob', avatarId: 'panda' as const }
+    await runtime.selectRoom('lobby', bob)
+    await expect(runtime.updateQueuedPrompt({ roomId: 'lobby' }, String(edited!.id), 'delete', bob))
+      .rejects.toThrow('只能修改自己排队的消息')
+    await expect(runtime.updateQueuedPrompt({ roomId: 'lobby' }, String(edited!.id), 'edit', identity))
+      .resolves.toEqual({ accepted: true, text: '@AI 排队回复' })
+    expect(agent.inbox.nextTurn).toHaveLength(0)
+    expect(agent.steer).not.toHaveBeenCalled()
+
+    await runtime.submit('lobby', identity, [{ type: 'text', text: '@AI 引导当前回复' }], 'queue')
+    const guided = agent.inbox.nextTurn[0]!
+    await expect(runtime.updateQueuedPrompt({ roomId: 'lobby' }, String(guided.id), 'guide', identity))
+      .resolves.toEqual({ accepted: true, text: '@AI 引导当前回复' })
+    expect(agent.inbox.nextTurn).toHaveLength(0)
+    expect(agent.steer).toHaveBeenCalledWith(guided)
+
+    await runtime.submit('lobby', identity, [{ type: 'text', text: '@AI 删除排队' }], 'queue')
+    const deleted = agent.inbox.nextTurn[0]!
+    await runtime.updateQueuedPrompt({ roomId: 'lobby' }, String(deleted.id), 'delete', identity)
+    expect(agent.inbox.nextTurn).toHaveLength(0)
+    await runtime.stop()
+  })
+
   it('stops the current turn and coalesces AI-context resets without replacing room history', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
@@ -140,6 +174,56 @@ describe('ChatroomRuntime', () => {
     expect(JSON.stringify(message)).toContain('dsh-chatroom-card:')
     expect(harness.agents[0]?.followup).not.toHaveBeenCalled()
     await runtime.stop()
+  })
+
+  it('falls back to the shared Enterprise WeChat CLI when Tencent Docs blocks title lookup', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('blocked'))
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const wecom = (runtime as unknown as {
+      wecom: { client: ReturnType<typeof vi.fn> }
+    }).wecom
+    const invoke = vi.fn().mockResolvedValue({ name: 'Lighthouse 发布清单' })
+    wecom.client = vi.fn(() => ({ invoke }))
+
+    try {
+      await expect(runtime.resolveWecomDocument(
+        'https://docs.qq.com/doc/DT2JxRE5xd3JPRVh6',
+        identity,
+      )).resolves.toEqual({
+        kind: 'document',
+        title: 'Lighthouse 发布清单',
+        documentType: 'doc',
+        url: 'https://docs.qq.com/doc/DT2JxRE5xd3JPRVh6',
+      })
+      expect(invoke).toHaveBeenCalledWith('doc', [], 'get', {
+        docid: 'DT2JxRE5xd3JPRVh6',
+        content_type: 'text',
+      })
+      await expect(runtime.resolveWecomDocument(
+        'https://docs.qq.com/aio/DYnhEWFJhekJVS3RB',
+        identity,
+      )).resolves.toEqual({
+        kind: 'document',
+        title: 'Lighthouse 发布清单',
+        documentType: 'smartpage',
+        url: 'https://docs.qq.com/aio/DYnhEWFJhekJVS3RB',
+      })
+      expect(invoke).toHaveBeenLastCalledWith('smartpage', [], 'get', {
+        docid: 'DYnhEWFJhekJVS3RB',
+        content_type: 'text',
+      })
+      invoke.mockResolvedValueOnce({ name: '腾讯文档' })
+      await expect(runtime.resolveWecomDocument(
+        'https://docs.qq.com/doc/DGenericPlaceholder',
+        identity,
+      )).rejects.toThrow('暂时无法获取文档标题')
+    } finally {
+      fetchSpy.mockRestore()
+      await runtime.stop()
+    }
   })
 
   it('publishes branch meetings and their completed summaries to the branch Session', async () => {
@@ -357,28 +441,168 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
-  it('accepts and appends ordinary chat before the automatic-response controller finishes', async () => {
+  it('queues a controller-selected message after the active reply instead of appending it into that reply', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
     await runtime.start()
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     await runtime.selectRoom('lobby', identity)
     await runtime.setRoomAutoTrigger('lobby', true, identity)
+    const writes: string[] = []
+    runtime.subscribe('lobby', identity, {
+      destroyed: false,
+      writableEnded: false,
+      write: vi.fn((value: string) => { writes.push(value); return true }),
+      end: vi.fn(),
+    } as never)
+    Object.assign(harness.agents[0]!, { status: 'running' })
     let releaseController!: () => void
     const controller = new Promise<void>((resolve) => { releaseController = resolve })
     harness.llmStream.mockImplementationOnce(async function* () {
       await controller
-      yield { type: 'text-delta', index: 0, text: '{"wake":false}' }
+      yield { type: 'text-delta', index: 0, text: '{"wake":true}' }
       yield { type: 'finish', reason: { kind: 'stop' } }
     })
 
     await expect(runtime.submit(
-      'lobby', identity, [{ type: 'text', text: '这条消息必须立即显示' }], 'queue',
+      'lobby', identity, [{ type: 'text', text: '这是第二个需要回复的问题' }], 'queue',
     )).resolves.toEqual({ accepted: true, aiTriggered: false })
-    expect(harness.agents[0]?.session.append).toHaveBeenCalledOnce()
+    expect(harness.agents[0]?.session.append).not.toHaveBeenCalled()
     expect(harness.agents[0]?.followup).not.toHaveBeenCalled()
+    expect(harness.agents[0]?.steer).not.toHaveBeenCalled()
+    expect(harness.agents[0]?.status).toBe('running')
+    expect(harness.agents[0]?.inbox.nextTurn).toHaveLength(0)
+    const pendingEvent = writes.map(value => JSON.parse(value.slice('data: '.length)) as { type: string })
+      .filter(event => event.type === 'pending-messages').at(-1)
+    expect(pendingEvent).toMatchObject({
+      type: 'pending-messages',
+      messages: [{ participantId: 'alice-id', text: '这是第二个需要回复的问题', status: 'deciding' }],
+    })
+    const reconnectWrites: string[] = []
+    runtime.subscribe('lobby', identity, {
+      destroyed: false,
+      writableEnded: false,
+      write: vi.fn((value: string) => { reconnectWrites.push(value); return true }),
+      end: vi.fn(),
+    } as never)
+    expect(JSON.parse(reconnectWrites[0]!.slice('data: '.length))).toMatchObject({
+      type: 'snapshot',
+      pendingMessages: [{ text: '这是第二个需要回复的问题', status: 'deciding' }],
+    })
 
     releaseController()
+    await vi.waitFor(() => expect(harness.agents[0]?.followup).toHaveBeenCalledOnce())
+    const queued = harness.agents[0]!.inbox.nextTurn[0]
+    expect(queued?.source).toEqual({ kind: 'user' })
+    expect(queued?.content[0]).toMatchObject({
+      type: 'text',
+      text: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：这是第二个需要回复的问题',
+    })
+    expect(harness.agents[0]?.session.append).not.toHaveBeenCalled()
+    const queuedEvent = writes.map(value => JSON.parse(value.slice('data: '.length)) as { type: string })
+      .filter(event => event.type === 'pending-messages').at(-1)
+    expect(queuedEvent).toMatchObject({
+      type: 'pending-messages',
+      messages: [{ text: '这是第二个需要回复的问题', status: 'queued' }],
+    })
+    await runtime.stop()
+  })
+
+  it('appends a controller-skipped message only after the active reply becomes idle', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', identity)
+    await runtime.setRoomAutoTrigger('lobby', true, identity)
+    const agent = harness.agents[0]!
+    Object.assign(agent, { status: 'running' })
+    let releaseIdle!: () => void
+    agent.whenIdle = vi.fn(async () => await new Promise<void>((resolve) => { releaseIdle = resolve }))
+    harness.llmStream.mockImplementationOnce(async function* () {
+      yield { type: 'text-delta', index: 0, text: '{"wake":false}' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+
+    await runtime.submit('lobby', identity, [{ type: 'text', text: '大家继续讨论' }], 'queue')
+    await vi.waitFor(() => expect(agent.whenIdle).toHaveBeenCalledOnce())
+    expect(agent.session.append).not.toHaveBeenCalled()
+
+    releaseIdle()
+    await vi.waitFor(() => expect(agent.session.append).toHaveBeenCalledOnce())
+    expect(agent.followup).not.toHaveBeenCalled()
+    expect(agent.session.append.mock.calls[0]?.[1]?.content[0]).toMatchObject({
+      type: 'text',
+      text: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：大家继续讨论',
+    })
+    await runtime.stop()
+  })
+
+  it('cancels a still-deciding shared message before the controller can queue it', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', identity)
+    await runtime.setRoomAutoTrigger('lobby', true, identity)
+    Object.assign(harness.agents[0]!, { status: 'running' })
+    let releaseController!: () => void
+    harness.llmStream.mockImplementationOnce(async function* () {
+      await new Promise<void>((resolve) => { releaseController = resolve })
+      yield { type: 'text-delta', index: 0, text: '{"wake":true}' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+    const writes: string[] = []
+    runtime.subscribe('lobby', identity, {
+      destroyed: false,
+      writableEnded: false,
+      write: vi.fn((value: string) => { writes.push(value); return true }),
+      end: vi.fn(),
+    } as never)
+
+    await runtime.submit('lobby', identity, [{ type: 'text', text: '先发出但随后编辑' }], 'queue')
+    await vi.waitFor(() => expect(harness.llmStream).toHaveBeenCalledOnce())
+    const pending = writes.map(value => JSON.parse(value.slice('data: '.length)) as {
+      type: string
+      messages: Array<{ messageId: string }>
+    }).filter(event => event.type === 'pending-messages').at(-1)!
+    await expect(runtime.updateQueuedPrompt(
+      { roomId: 'lobby' }, pending.messages[0]!.messageId, 'edit', identity,
+    )).resolves.toEqual({ accepted: true, text: '先发出但随后编辑' })
+    const removed = writes.map(value => JSON.parse(value.slice('data: '.length)) as { type: string })
+      .filter(event => event.type === 'pending-messages').at(-1)
+    expect(removed).toMatchObject({
+      type: 'pending-messages', messages: [],
+    })
+
+    releaseController()
+    await vi.waitFor(() => expect(harness.llmStream).toHaveBeenCalledOnce())
+    expect(harness.agents[0]?.followup).not.toHaveBeenCalled()
+    expect(harness.agents[0]?.session.append).not.toHaveBeenCalled()
+    await runtime.stop()
+  })
+
+  it('recalls an automatic-response source when its queued prompt is edited', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', identity)
+    await runtime.setRoomAutoTrigger('lobby', true, identity)
+    harness.llmStream.mockImplementationOnce(async function* () {
+      yield { type: 'text-delta', index: 0, text: '{"wake":true}' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+
+    await runtime.submit('lobby', identity, [{ type: 'text', text: '请在当前回复完成后总结' }], 'queue')
+    await vi.waitFor(() => expect(harness.agents[0]?.inbox.nextTurn).toHaveLength(1))
+    const queued = harness.agents[0]!.inbox.nextTurn[0]!
+    await expect(runtime.updateQueuedPrompt({ roomId: 'lobby' }, String(queued.id), 'edit', identity))
+      .resolves.toEqual({ accepted: true, text: '请在当前回复完成后总结' })
+
+    const recalls = harness.tables.get('recalls') as MemoryTable<string, { messageId: string }> | undefined
+    expect([...recalls!.entries()].map(([, record]) => record.messageId)).toContain('user:1')
+    expect(harness.agents[0]?.inbox.nextTurn).toHaveLength(0)
     await runtime.stop()
   })
 
@@ -699,7 +923,27 @@ describe('ChatroomRuntime', () => {
     })
     const opened = await runtime.openDirect(bob.identity.participantId, alice.identity)
     const sent = await runtime.sendDirect(opened.conversation!.id, [{ type: 'text', text: '你好 Bob' }], alice.identity)
-    expect((await runtime.openDirect(alice.identity.participantId, bob.identity)).messages).toEqual([sent.message])
+    const reply = { messageId: sent.message.id, displayName: 'Alice', text: sent.message.text }
+    const replied = await runtime.sendDirect(
+      opened.conversation!.id,
+      [{ type: 'text', text: '收到' }],
+      bob.identity,
+      reply,
+    )
+    expect(replied.message.reply).toEqual(reply)
+    const reacted = await runtime.toggleDirectReaction(opened.conversation!.id, sent.message.id, '👍', bob.identity)
+    expect(reacted.reactions).toEqual([{ emoji: '👍', participantIds: [bob.identity.participantId] }])
+    await expect(runtime.forwardMessages(opened.conversation!.id, 'lobby', [{
+      messageId: sent.message.id,
+      role: 'human',
+      displayName: '伪造昵称',
+      text: '伪造正文',
+      createdAt: sent.message.createdAt,
+    }], alice.identity)).resolves.toEqual({ accepted: true, aiTriggered: false })
+    expect((await runtime.openDirect(alice.identity.participantId, bob.identity)).messages).toEqual([
+      reacted,
+      replied.message,
+    ])
     await runtime.stop()
   })
 
@@ -1244,6 +1488,7 @@ function fakeHarness(initialEvents: SessionEvent[] = []): {
   agents: Array<Agent & {
     followup: ReturnType<typeof vi.fn>
     steer: ReturnType<typeof vi.fn>
+    inbox: Agent['inbox']
     session: Agent['session'] & { append: ReturnType<typeof vi.fn> }
   }>
   attached: string[]
@@ -1258,6 +1503,7 @@ function fakeHarness(initialEvents: SessionEvent[] = []): {
   const agents: Array<Agent & {
     followup: ReturnType<typeof vi.fn>
     steer: ReturnType<typeof vi.fn>
+    inbox: Agent['inbox']
     session: Agent['session'] & { append: ReturnType<typeof vi.fn> }
   }> = []
   const attached: string[] = []
@@ -1310,12 +1556,34 @@ function fakeHarness(initialEvents: SessionEvent[] = []): {
       create: vi.fn(async ({ sessionId, setup }: { sessionId: string; setup?: (ctx: Context) => Promise<void> }) => {
         const agentCtx = makeAgentContext()
         await setup?.(agentCtx)
+        const events = [...initialEvents]
+        const queued: Array<ReturnType<typeof createUserMessage>> = []
+        const inbox = {
+          nextTurn: queued,
+          remove: vi.fn((id: unknown) => {
+            const index = queued.findIndex(message => message.id === id)
+            if (index < 0) return false
+            queued.splice(index, 1)
+            return true
+          }),
+        }
+        const session = {
+          id: sessionId,
+          events,
+          append: vi.fn((type: string, data: unknown, options: Record<string, unknown> = {}) => {
+            const event = { type, seq: Math.max(0, ...session.events.map(item => item.seq)) + 1, time: Date.now(), data, ...options }
+            session.events.push(event as SessionEvent)
+            return event
+          }),
+        }
         const agent = {
           id: sessionId,
+          status: 'idle',
           options: { provider: 'deepseek', model: 'chat' },
-          session: { id: sessionId, events: [...initialEvents], append: vi.fn() },
+          session,
+          inbox,
           ctx: agentCtx,
-          followup: vi.fn(),
+          followup: vi.fn(message => { queued.push(message) }),
           steer: vi.fn(),
           cancel: vi.fn(),
           whenIdle: vi.fn(async () => undefined),

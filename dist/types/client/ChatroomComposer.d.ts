@@ -1,10 +1,18 @@
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import type { ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots';
+import type { ChatroomReplyReference } from '../types.js';
 import type { ChatroomAgentTarget, ChatroomClientStore, ChatroomView } from './store.js';
 interface ChatroomComposerBaseInjected {
     useChatroom<T>(selector: (snapshot: ChatroomView) => T): T;
     resolveTarget(sessionId: string): ChatroomAgentTarget | undefined;
+}
+interface ChatroomQueueInjected {
+    updateQueuedPrompt(target: {
+        readonly roomId: string;
+    } | {
+        readonly threadId: string;
+    }, messageId: string, action: 'guide' | 'delete' | 'edit'): Promise<string | undefined>;
 }
 interface ChatroomFileInjected extends ChatroomComposerBaseInjected {
     addFiles(roomId: string, files: readonly File[]): void;
@@ -19,12 +27,34 @@ interface ChatroomSessionInjected extends ChatroomComposerBaseInjected {
     quickThreadMeeting(threadId: string): Promise<boolean>;
 }
 type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomFileInjected;
-type ComposerDockProps = PropsRuntime<'conversation.input.dock'> & ChatroomFileInjected;
+type ComposerDockProps = PropsRuntime<'conversation.input.dock'> & ChatroomFileInjected & ChatroomQueueInjected;
 type ComposerRightProps = PropsRuntime<'conversation.input.right'> & ChatroomSessionInjected;
 type ComposerAttachmentsInjected = ChatroomComposerBaseInjected & Pick<ChatroomFileInjected, 'clearReply'> & {
     nativeAttachmentsView: ComponentType<ComposerAttachmentsProps>;
 };
 export type ChatroomComposerAttachmentsProps = ComposerAttachmentsProps & ComposerAttachmentsInjected;
+/** Shared emoji chooser used by native room/thread and private composers. */
+export declare function ChatroomEmojiPicker({ open, toggle, close, pick, }: {
+    readonly open: boolean;
+    toggle(): void;
+    close(): void;
+    pick(emoji: string): void;
+}): JSX.Element;
+/** Shared reply preview used by native room/thread and private composers. */
+export declare function ChatroomReplyPreview({ reply, clear, cancelLabel, }: {
+    readonly reply: ChatroomReplyReference;
+    readonly cancelLabel?: string;
+    clear(): void;
+}): JSX.Element;
+/** Shared pending-file rail used by native room/thread and private composers. */
+export declare function ChatroomPendingFiles({ files, remove, trailing }: {
+    readonly files: readonly {
+        readonly id: string;
+        readonly file: File;
+    }[];
+    remove(id: string): void;
+    readonly trailing?: ReactNode;
+}): JSX.Element;
 /** Small file chooser inside the native composer tool row. */
 export declare function ChatroomFileAction(props: FileActionProps): JSX.Element | null;
 /** Native-composer controls for stopping work or rotating the room Session. */

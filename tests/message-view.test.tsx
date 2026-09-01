@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
@@ -11,13 +11,17 @@ import {
 } from '../src/client/ChatroomMessageNodeView.js'
 import { ChatroomAssistantReplyAction } from '../src/client/ChatroomAssistantReplyAction.js'
 import { ChatroomAssistantNodeView } from '../src/client/ChatroomAssistantNodeView.js'
+import { subscribeChatroomDraftRestore } from '../src/client/draft-restore.js'
 import type { ChatroomIdentity } from '../src/types.js'
 import { identifyFileText, identifyForwardText, identifyReplyText } from '../src/message.js'
 
 const alice: ChatroomIdentity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' }
 const bob: ChatroomIdentity = { participantId: 'bob-id', displayName: 'Bob', avatarId: 'fox' }
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 describe('participant-specific native message projection', () => {
   it('uses the durable participant id and removes its invisible display marker', () => {
@@ -91,6 +95,30 @@ describe('participant-specific native message projection', () => {
     expect(screen.getByText('Bob').className).toBe('dsh-chatroom-display-name')
     expect(screen.getByTestId('native').closest('.dsh-chatroom-participant-message')?.getAttribute('data-dsh-chatroom-own')).toBe('false')
     expect(screen.getByTestId('native').textContent).toBe('别人的消息')
+  })
+
+  it('renders the URL immediately and adds a Tencent Docs card only after title resolution', async () => {
+    const url = 'https://docs.qq.com/doc/DT2JxRE5xd3JPRVh6'
+    let resolveFetch: ((value: Response) => void) | undefined
+    const fetchMock = vi.fn<typeof fetch>(() => new Promise(resolve => { resolveFetch = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+    const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>
+    render(<ChatroomUserMessageNodeView {...messageProps(
+      userNode(identifyChatroomText(`请看 ${url}`, bob)),
+      alice,
+      Native,
+    )} />)
+
+    expect(screen.getByRole('link', { name: url }).getAttribute('href')).toBe(url)
+    expect(screen.queryByTestId('native')).toBeNull()
+    expect(screen.queryByRole('link', { name: '打开文档' })).toBeNull()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    resolveFetch?.(new Response(JSON.stringify({ kind: 'document', title: 'Lighthouse 发布清单', url, documentType: 'doc' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    expect(await screen.findByText('Lighthouse 发布清单')).toBeTruthy()
+    expect(screen.getByRole('link', { name: '打开文档' }).getAttribute('href')).toBe(url)
   })
 
   it('keeps the AI-context divider before the first participant message after reset', () => {
@@ -391,6 +419,97 @@ describe('participant-specific native message projection', () => {
     }))
   })
 
+  it('renders an immediately shared pending message on the latest AI reply with mutable sender controls', async () => {
+    const pending = {
+      messageId: 'pending:second', roomId: 'lobby', participantId: 'alice-id', displayName: 'Alice',
+      avatarId: 'whale' as const, text: '第二个问题立即可见',
+      content: [{ type: 'text' as const, text: '第二个问题立即可见', markdown: false }],
+      createdAt: 20, status: 'deciding' as const,
+    }
+    const useChatroom = messageProps(userNode(identifyChatroomText('参考', bob)), alice, () => null, {
+      pendingMessages: [pending],
+    }).useChatroom
+    const node = {
+      key: 'assistant-running', kind: 'assistant-step', seq: 10,
+      location: { kind: 'step', turn: { turn: 1 } },
+      data: { status: 'streaming', turn: 1, step: 1, blocks: [{ kind: 'text', text: '第一问正在回复' }], time: 10 },
+    }
+    const nodes = new Map([[node.key, node]])
+    const updateQueuedPrompt = vi.fn(async () => '第二个问题立即可见')
+    let restored = ''
+    const unsubscribe = subscribeChatroomDraftRestore('chatroom-v1-lobby', text => { restored = text })
+    const props = {
+      node,
+      sessionId: 'chatroom-v1-lobby',
+      nativeMessageView: () => <div>第一问正在回复</div>,
+      useChatroom,
+      resolveTarget: () => ({
+        kind: 'room' as const,
+        room: { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' },
+      }),
+      useTurnData: () => undefined,
+      useSession: (selector: (snapshot: unknown) => unknown) => selector({ chat: { order: [node.key], nodes } }),
+      updateQueuedPrompt,
+    } as unknown as Parameters<typeof ChatroomAssistantNodeView>[0]
+
+    render(<ChatroomAssistantNodeView {...props} />)
+    expect(screen.getByText('第一问正在回复')).toBeTruthy()
+    expect(screen.getByText('第二个问题立即可见')).toBeTruthy()
+    expect(screen.getByText('正在判断是否需要 AI 回复')).toBeTruthy()
+    expect(document.querySelector('[data-dsh-chatroom-message-id="pending:second"]')?.getAttribute('data-dsh-chatroom-own')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    await waitFor(() => expect(updateQueuedPrompt).toHaveBeenCalledWith(
+      { roomId: 'lobby' }, 'pending:second', 'edit',
+    ))
+    expect(restored).toBe('第二个问题立即可见')
+    fireEvent.click(screen.getByRole('button', { name: '撤回' }))
+    await waitFor(() => expect(updateQueuedPrompt).toHaveBeenCalledWith(
+      { roomId: 'lobby' }, 'pending:second', 'delete',
+    ))
+    fireEvent.click(screen.getByRole('button', { name: '引导' }))
+    await waitFor(() => expect(updateQueuedPrompt).toHaveBeenCalledWith(
+      { roomId: 'lobby' }, 'pending:second', 'guide',
+    ))
+    unsubscribe()
+  })
+
+  it('shows pending state to another participant without exposing sender controls', () => {
+    const pending = {
+      messageId: 'pending:peer', roomId: 'lobby', participantId: 'alice-id', displayName: 'Alice',
+      avatarId: 'whale' as const, text: '所有人立即可见',
+      content: [{ type: 'text' as const, text: '所有人立即可见', markdown: false }],
+      createdAt: 20, status: 'queued' as const,
+    }
+    const useChatroom = messageProps(userNode(identifyChatroomText('参考', alice)), bob, () => null, {
+      pendingMessages: [pending],
+    }).useChatroom
+    const node = {
+      key: 'assistant-running-peer', kind: 'assistant-step', seq: 10,
+      location: { kind: 'step', turn: { turn: 1 } },
+      data: { status: 'streaming', turn: 1, step: 1, blocks: [{ kind: 'text', text: '当前回答' }], time: 10 },
+    }
+    const nodes = new Map([[node.key, node]])
+    render(<ChatroomAssistantNodeView {...{
+      node,
+      sessionId: 'chatroom-v1-lobby',
+      nativeMessageView: () => <div>当前回答</div>,
+      useChatroom,
+      resolveTarget: () => ({
+        kind: 'room' as const,
+        room: { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' },
+      }),
+      useTurnData: () => undefined,
+      useSession: (selector: (snapshot: unknown) => unknown) => selector({ chat: { order: [node.key], nodes } }),
+      updateQueuedPrompt: vi.fn(),
+    } as unknown as Parameters<typeof ChatroomAssistantNodeView>[0]} />)
+
+    expect(screen.getByText('所有人立即可见')).toBeTruthy()
+    expect(screen.getByText('正在排队 · 等待当前回复完成')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '引导' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '撤回' })).toBeNull()
+  })
+
   it('folds completed Think and tool rows into one expandable process summary', () => {
     const finalNode = {
       key: 'assistant-final',
@@ -413,6 +532,9 @@ describe('participant-specific native message projection', () => {
       node: finalNode,
       sessionId: 'chatroom-v1-lobby',
       nativeMessageView: Native,
+      useChatroom: (selector: (snapshot: import('../src/client/store.js').ChatroomView) => unknown) => selector({
+        pendingMessages: [], identity: alice,
+      } as unknown as import('../src/client/store.js').ChatroomView),
       resolveTarget: () => ({ kind: 'thread', room: { id: 'lobby' }, threadId: 'thread-id' }),
       useTurnData: () => ({ closing: { finalNode: { seq: 4 } } }),
       useSession: (selector: (snapshot: unknown) => unknown) => selector({
@@ -494,6 +616,7 @@ function messageProps(
       reactions: [],
       recalls: [],
       threadPreviews: [],
+      pendingMessages: [],
       membersOpen: false,
       error: undefined,
       composerRoomId: undefined,

@@ -17,6 +17,7 @@ export declare class ChatroomHttpController {
     private handleAccount;
     private handleDirect;
     private handleDirectMessages;
+    private handleDirectReactionToggle;
     private handleRooms;
     private handleRoomEnsure;
     private handleSearch;
@@ -28,6 +29,7 @@ export declare class ChatroomHttpController {
     private handleWecomAuthorizationQr;
     private handleMeetingSummary;
     private handleMeetingResolution;
+    private handleDocumentResolution;
     private handleMeetingSummaries;
     private handleAutomation;
     private handleThreadOpen;
@@ -35,6 +37,7 @@ export declare class ChatroomHttpController {
     private handlePrompt;
     private handleReactionToggle;
     private handleMessageRecall;
+    private handleQueuedPrompt;
     private handleForward;
     private handleFile;
     private handleImage;

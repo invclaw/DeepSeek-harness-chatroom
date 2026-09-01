@@ -118,6 +118,8 @@ describe('native chatroom integration', () => {
       },
       directMessages: [{
         id: 'message-1', conversationId: 'direct-1', sequence: 1, senderId: 'bob-id', text: '私聊内容', createdAt: 2,
+      }, {
+        id: 'message-2', conversationId: 'direct-1', sequence: 2, senderId: 'bob-id', text: 'https://example.com/guide', createdAt: 3,
       }],
     })
     renderEntry(accountView, { adminUpdateUser, adminCreateUser, adminSetAutoRedirectProvider, adminSaveProvider, sendDirect })
@@ -146,9 +148,18 @@ describe('native chatroom integration', () => {
       id: 'company', label: '企业统一登录', issuer: 'https://id.example.com', clientId: 'client-id',
     }))
     expect(screen.getByText('私聊内容')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '关闭私聊' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'https://example.com/guide' })).toBeTruthy()
+    const directMessages = [...document.querySelectorAll<HTMLElement>('.dsh-chatroom-direct-messages > .dsh-chatroom-participant-message')]
+    expect(directMessages.map(message => message.dataset.dshChatroomGroupPosition)).toEqual(['start', 'end'])
+    expect(directMessages[0]?.dataset.dshChatroomActionsVisible).toBe('false')
+    expect(directMessages[1]?.dataset.dshChatroomActionsVisible).toBe('true')
+    expect(directMessages[1]?.querySelector('.dsh-chatroom-message-actions time')).toBeTruthy()
+    expect(directMessages[1]?.querySelector('button[aria-label="回复"]')).toBeTruthy()
+    expect(directMessages[1]?.querySelector('button[aria-label="转发"]')).toBeTruthy()
     const directInput = screen.getByPlaceholderText('给 Bob 发消息') as HTMLTextAreaElement
     fireEvent.change(directInput, { target: { value: '收到' } })
-    fireEvent.click(screen.getByRole('button', { name: '选择私聊表情' }))
+    fireEvent.click(screen.getByRole('button', { name: '发送表情' }))
     fireEvent.click(screen.getByRole('button', { name: '插入 🎉' }))
     expect(directInput.value).toBe('收到🎉')
     const attachment = new File(['private'], 'private.txt', { type: 'text/plain' })
@@ -429,6 +440,9 @@ describe('native chatroom integration', () => {
       threadMessages: [{
         id: 'thread-message', threadId: 'thread', sequence: 1, participantId: 'bob-id',
         displayName: 'Bob', role: 'human', text: '兼容模式消息', createdAt: 2,
+      }, {
+        id: 'thread-message-2', threadId: 'thread', sequence: 2, participantId: 'bob-id',
+        displayName: 'Bob', role: 'human', text: 'https://example.com/thread', createdAt: 3,
       }],
     }), { sendThreadMessage })
 
@@ -442,6 +456,10 @@ describe('native chatroom integration', () => {
     expect(screen.getByText('分支无法在当前页面完整显示，请在新标签中打开。')).toBeTruthy()
     expect(sessionStorage.getItem('dsh-chatroom:branch-frame-compatibility')).toBe('1')
     expect(screen.getByText('兼容模式消息')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'https://example.com/thread' })).toBeTruthy()
+    const groupedThreadMessages = [...document.querySelectorAll<HTMLElement>('.dsh-chatroom-thread-message')]
+    expect(groupedThreadMessages.map(message => message.dataset.dshChatroomGroupPosition)).toEqual(['start', 'end'])
+    expect(groupedThreadMessages[1]?.querySelector('.dsh-chatroom-message-actions time')).toBeTruthy()
     const fullAgent = screen.getByRole('link', { name: '在新标签打开分支' }) as HTMLAnchorElement
     expect(new URL(fullAgent.href).searchParams.get('dsh-chatroom-thread')).toBe('thread')
     fireEvent.change(screen.getByPlaceholderText('给分支 AI 发消息'), { target: { value: '你好' } })
@@ -550,6 +568,7 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     reactions: [],
     recalls: [],
     threadPreviews: [],
+    pendingMessages: [],
     membersOpen: false,
     error: undefined,
     composerRoomId: undefined,
@@ -679,6 +698,7 @@ function entry(
     openDirect={vi.fn(async () => undefined)}
     closeDirect={vi.fn()}
     sendDirect={vi.fn(async () => true)}
+    toggleDirectReaction={vi.fn(async () => undefined)}
     closeSearch={vi.fn()}
     searchAll={vi.fn(async () => undefined)}
     openSearchResult={vi.fn(async () => undefined)}

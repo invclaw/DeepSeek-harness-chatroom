@@ -1,5 +1,5 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomAutomationOverview, ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomSearchResult, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot, ChatroomWecomAuthorizationState } from '../types.js';
+import type { ChatroomAutomationOverview, ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPendingMessage, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomSearchResult, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot, ChatroomWecomAuthorizationState } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 export type ChatroomPhase = 'loading' | 'auth-required' | 'identity-required' | 'ready' | 'error';
 export type ChatroomConnection = 'offline' | 'connecting' | 'online';
@@ -51,6 +51,7 @@ export interface ChatroomView {
     readonly reactions: readonly ChatroomReaction[];
     readonly recalls: readonly ChatroomRecall[];
     readonly threadPreviews: readonly ChatroomThreadPreview[];
+    readonly pendingMessages: readonly ChatroomPendingMessage[];
     readonly membersOpen: boolean;
     readonly managementBusy?: boolean;
     readonly managementError?: string | undefined;
@@ -216,7 +217,9 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     /** Open one search result and reveal its message when it identifies a message block. */
     openSearchResult: (result: ChatroomSearchResult) => Promise<void>;
     /** Send one text/media message inside the selected private conversation. */
-    sendDirect: (text: string, files?: readonly File[]) => Promise<boolean>;
+    sendDirect: (text: string, files?: readonly File[], reply?: ChatroomReplyReference) => Promise<boolean>;
+    /** Toggle one private-message reaction and replace its durable projection. */
+    toggleDirectReaction: (conversationId: string, messageId: string, emoji: ChatroomReactionEmoji) => Promise<void>;
     /** Open group management for the active room. */
     openMembers: () => void;
     /** Load active platform accounts available to the current room creation or management surface. */
@@ -273,6 +276,12 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     completeComposition: (composition: ChatroomComposition) => void;
     /** Send selected files without requiring placeholder text in the native composer. */
     sendFiles: (roomId: string) => Promise<void>;
+    /** Mutate one still-pending AI prompt without disturbing the active turn. */
+    updateQueuedPrompt: (target: {
+        readonly roomId: string;
+    } | {
+        readonly threadId: string;
+    }, messageId: string, action: "guide" | "delete" | "edit") => Promise<string | undefined>;
     /** Activate and navigate to an existing shared room. */
     selectRoom: (roomId: string) => Promise<void>;
     /** Create, activate, and navigate to a new independent shared room. */

@@ -7,7 +7,7 @@ import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
 import { AttachmentError, type ImageAttachmentRef, type ImageMediaType } from '@deepseek-ai/dsh-attachment'
-import { BlockAssembler, createAssistantMessage, createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import { BlockAssembler, createAssistantMessage, createUserMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-title'
@@ -56,6 +56,7 @@ import {
 } from './message.js'
 import { CHATROOM_REACTION_EMOJIS, type ChatroomReactionEmoji } from './reactions.js'
 import { WecomCliManager, inferWecomCard, type WecomAuthorizationState, type WecomService } from './wecom.js'
+import { fetchTencentDocumentTitle, normalizeDocumentTitle, parseWecomDocumentUrl } from './wecom-document.js'
 import { registerWecomAgentTools } from './wecom-tools.js'
 import type {
   ChatroomAutomationOverview,
@@ -64,6 +65,7 @@ import type {
   ChatroomDirectMessageEvent,
   ChatroomDirectPeer,
   ChatroomDirectResponse,
+  ChatroomDocumentCard,
   ChatroomExternalCard,
   ChatroomFileReference,
   ChatroomForwardBundle,
@@ -78,6 +80,7 @@ import type {
   ChatroomMemberRole,
   ChatroomNotification,
   ChatroomNotificationEvent,
+  ChatroomPendingMessage,
   ChatroomPromptContentPart,
   ChatroomPromptResponse,
   ChatroomReaction,
@@ -113,11 +116,17 @@ interface NotificationClient {
 interface RoomState {
   record: RoomRecord
   readonly clients: Set<SseClient>
+  readonly pendingMessages: Map<string, PendingRoomMessage>
   binding: AgentBinding | undefined
   activation: Promise<AgentBinding> | undefined
   admission: Promise<void>
   automation: Promise<void>
   rotation: Promise<void> | undefined
+}
+
+interface PendingRoomMessage {
+  readonly message: UserMessage
+  view: ChatroomPendingMessage
 }
 
 interface ThreadState {
@@ -166,6 +175,7 @@ export class ChatroomRuntime {
   private readonly threadStates = new Map<string, ThreadState>()
   private readonly notificationClients = new Set<NotificationClient>()
   private readonly ignoredAssistantMessageIds = new Set<string>()
+  private readonly activeTurnDeferredMessageIds = new Map<string, Set<string>>()
   private readonly aiContextStartWrites = new Map<string, Promise<void>>()
   private readonly chatroomAgentContexts = new WeakSet<Context>()
   private readonly wecom: WecomCliManager
@@ -304,9 +314,10 @@ export class ChatroomRuntime {
       || [...this.threadStates.values()].some(state => state.record.sessionId === sessionId)
   }
 
-  /** Stable model message ids omitted after recalls or an AI-context reset. */
+  /** Model message ids omitted after recalls, a context reset, or until the active turn finishes. */
   hiddenModelMessageIds(sessionId: string): ReadonlySet<string> {
     const hidden = new Set(this.archive?.recalledMessageIds(sessionId) ?? [])
+    for (const messageId of this.activeTurnDeferredMessageIds.get(sessionId) ?? []) hidden.add(messageId)
     const state = [...this.states.values()].find(candidate => candidate.record.sessionId === sessionId)
     const resetSeq = state?.record.aiContextResetSeq
     const events = state?.binding?.agent.session.events
@@ -486,6 +497,7 @@ export class ChatroomRuntime {
     this.roomTitleWrites.clear()
     await Promise.allSettled(this.aiContextStartWrites.values())
     this.aiContextStartWrites.clear()
+    this.activeTurnDeferredMessageIds.clear()
     await Promise.allSettled([...this.states.values()].map(async (state) => {
       await state.admission
       await state.automation
@@ -840,6 +852,36 @@ export class ChatroomRuntime {
     return publicMeetingSummary(meeting)
   }
 
+  /** Resolve one Tencent Docs URL through the deployment-shared Enterprise WeChat account. */
+  async resolveWecomDocument(documentUrl: string, identity: ChatroomIdentity): Promise<ChatroomDocumentCard> {
+    this.assertReady()
+    void identity
+    const reference = parseWecomDocumentUrl(documentUrl)
+    if (reference === undefined) {
+      throw new ChatroomInputError('企业微信文档链接无效。')
+    }
+    if (reference.source === 'tencent-docs') {
+      const title = await fetchTencentDocumentTitle(reference.url)
+      if (title !== undefined) {
+        return { kind: 'document', title, documentType: reference.documentType, url: reference.url }
+      }
+    }
+    try {
+      const result = await this.wecom.client().invoke(reference.service, [], 'get', {
+        docid: reference.documentId,
+        content_type: 'text',
+      })
+      const card = inferWecomCard(reference.service, 'get', { docid: reference.documentId, url: reference.url }, result)
+      if (card?.kind === 'document') {
+        const title = normalizeDocumentTitle(card.title)
+        if (title !== undefined) return { ...card, title, documentType: reference.documentType, url: reference.url }
+      }
+    } catch {
+      // A metadata miss leaves the already-delivered URL message unchanged.
+    }
+    throw new ChatroomInputError('暂时无法获取文档标题。')
+  }
+
   /** List completed meeting summaries visible to one authenticated participant. */
   meetingSummaries(identity: ChatroomIdentity): readonly ChatroomMeetingSummary[] {
     this.assertReady()
@@ -968,15 +1010,33 @@ export class ChatroomRuntime {
       }
       const durable = await this.durableContent(roomId, identity, identifyPrompt(content, identity, reply))
       const message = createUserMessage({ content: durable, source: { kind: 'user' } })
+      const pending = binding.agent.status === 'running'
+        && mode === 'queue'
+        && (aiTriggered || state.record.autoTriggerEnabled === true)
+        ? this.publishPendingMessage(state, identity, message, aiTriggered ? 'queued' : 'deciding')
+        : undefined
+      let automaticSourceMessageId: string | undefined
       if (!aiTriggered) {
-        binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
+        if (pending === undefined) {
+          const deferFromActiveTurn = binding.agent.status === 'running'
+          const event = binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
+          automaticSourceMessageId = `user:${event.seq}`
+          if (deferFromActiveTurn) this.deferMessageFromActiveTurn(binding.agent, String(message.id))
+        }
       } else if (mode === 'steer') {
         binding.agent.steer(message)
       } else {
         binding.agent.followup(message)
       }
       if (!aiTriggered && state.record.autoTriggerEnabled === true) {
-        this.scheduleAutomaticResponse(state, binding, content)
+        this.scheduleAutomaticResponse(
+          state,
+          binding,
+          content,
+          undefined,
+          automaticSourceMessageId,
+          pending,
+        )
       }
       await this.touchMember(roomId, identity)
       await this.touchRoom(roomId)
@@ -994,6 +1054,71 @@ export class ChatroomRuntime {
     })
     state.admission = task.then(() => undefined, () => undefined)
     return await task
+  }
+
+  /** Guide, remove, or take back one queued AI prompt before the Agent claims it. */
+  async updateQueuedPrompt(
+    target: { readonly roomId: string } | { readonly threadId: string },
+    messageId: string,
+    action: 'guide' | 'delete' | 'edit',
+    identity: ChatroomIdentity,
+  ): Promise<{ readonly accepted: true; readonly text: string }> {
+    this.assertReady()
+    const resolved = 'threadId' in target
+      ? { room: this.requireState(this.requireThreadState(target.threadId).record.roomId), thread: this.requireThreadState(target.threadId) }
+      : { room: this.requireState(target.roomId), thread: undefined }
+    this.assertRoomMember(resolved.room.record.id, identity.participantId)
+    const binding = resolved.thread === undefined
+      ? await this.ensureRoom(resolved.room.record.id)
+      : await this.ensureThread(resolved.thread.record.id)
+    const pending = resolved.thread === undefined
+      ? resolved.room.pendingMessages.get(messageId)
+      : undefined
+    if (pending !== undefined) {
+      if (pending.view.participantId !== identity.participantId) {
+        throw new ChatroomInputError('只能修改自己排队的消息。')
+      }
+      if (pending.view.status === 'passive' || pending.view.status === 'guiding') {
+        throw new ChatroomInputError('这条消息已经开始发送，无法再修改。')
+      }
+      if (action === 'guide' && binding.agent.status !== 'running') {
+        throw new ChatroomInputError('当前回复已经结束，无需再引导对话。')
+      }
+      if (pending.view.status === 'queued' && !binding.agent.inbox.remove(pending.message.id)) {
+        throw new ChatroomInputError('这条消息已经开始发送，无法再修改。')
+      }
+      if (action === 'guide') {
+        pending.view = { ...pending.view, status: 'guiding' }
+        this.broadcastPendingMessages(resolved.room)
+        binding.agent.steer(pending.message)
+      } else {
+        this.removePendingMessage(resolved.room, messageId)
+      }
+      return { accepted: true, text: pending.view.text }
+    }
+    const message = binding.agent.inbox.nextTurn.find(candidate => String(candidate.id) === messageId)
+    if (message === undefined) throw new ChatroomInputError('这条消息已经开始发送，无法再修改。')
+    const queued = projectQueuedChatroomPrompt(message.content)
+    if (queued?.sourceMessageId !== undefined) {
+      this.assertRecallOwner(resolved.room, queued.sourceMessageId, identity.participantId)
+    } else {
+      const firstText = message.content.find((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')?.text
+      if (firstText === undefined || participantMarker(firstText)?.participantId !== identity.participantId) {
+        throw new ChatroomInputError('只能修改自己排队的消息。')
+      }
+    }
+    const text = queued?.text ?? projectForwardContent(message.content, 'human').text
+    if (action === 'guide' && binding.agent.status !== 'running') {
+      throw new ChatroomInputError('当前回复已经结束，无需再引导对话。')
+    }
+    if (!binding.agent.inbox.remove(message.id)) {
+      throw new ChatroomInputError('这条消息已经开始发送，无法再修改。')
+    }
+    if (action === 'guide') binding.agent.steer(message)
+    if (action !== 'guide' && queued?.sourceMessageId !== undefined) {
+      await this.recallMessage(resolved.room.record.id, queued.sourceMessageId, identity)
+    }
+    return { accepted: true, text }
   }
 
   /** Persist one participant's personal sidebar pin for a room. */
@@ -1108,18 +1233,25 @@ export class ChatroomRuntime {
   ): Promise<ChatroomPromptResponse> {
     this.assertReady()
     if (sourceRoomId === targetRoomId) throw new ChatroomInputError('请选择其他群聊进行转发。')
-    const source = this.requireState(sourceRoomId)
+    const directSource = this.requireDirectConversations().get(sourceRoomId)
+    if (directSource !== undefined && !directSource.participantIds.includes(identity.participantId)) {
+      throw new ChatroomInputError('私聊不存在或你无权访问。')
+    }
+    const source = directSource === undefined ? this.requireState(sourceRoomId) : undefined
     const target = this.requireState(targetRoomId)
     const requested = normalizeForwardItems(messages)
-    const normalized = await Promise.all(requested.map(async item =>
-      item.sourceSessionId === undefined || item.sourceSeq === undefined
-        ? item
-        : await this.resolveForwardItem(sourceRoomId, item)))
+    const normalized = directSource === undefined
+      ? await Promise.all(requested.map(async item =>
+          item.sourceSessionId === undefined || item.sourceSeq === undefined
+            ? item
+            : await this.resolveForwardItem(sourceRoomId, item)))
+      : requested.map(item => this.resolveDirectForwardItem(sourceRoomId, item))
     const task = target.admission.then(async () => {
       const binding = await this.ensureRoom(targetRoomId)
       const bundle: ChatroomForwardBundle = {
         sourceRoomId,
-        sourceRoomTitle: source.record.title,
+        sourceRoomTitle: source?.record.title
+          ?? `与 ${this.publicDirectConversation(directSource!, identity.participantId).peer.displayName} 的私聊`,
         items: normalized,
       }
       const identified = identifyPrompt([{ type: 'text', text: identifyForwardText(bundle) }], identity)
@@ -1143,6 +1275,30 @@ export class ChatroomRuntime {
     })
     target.admission = task.then(() => undefined, () => undefined)
     return await task
+  }
+
+  private resolveDirectForwardItem(conversationId: string, item: ChatroomForwardItem): ChatroomForwardItem {
+    const found = this.findDirectMessage(conversationId, item.messageId)
+    if (found === undefined) throw new ChatroomInputError('转发来源私聊消息不存在或已变化。')
+    const record = found.message
+    const displayName = this.directoryPeer(record.senderId)?.displayName ?? item.displayName
+    const content: ChatroomForwardContentPart[] = [
+      ...(record.text === '' ? [] : [{ type: 'text' as const, text: record.text, markdown: false }]),
+      ...(record.files ?? []).map(file => ({ type: 'file' as const, file })),
+    ]
+    const text = record.text || record.files?.map(file => file.name).join('、') || record.card?.title || '私聊消息'
+    return {
+      messageId: record.id,
+      role: 'human',
+      displayName,
+      text,
+      createdAt: record.createdAt,
+      ...(content.length === 0 ? {} : { content }),
+      ...(record.reply === undefined ? {} : { reply: record.reply }),
+      ...(record.reactions === undefined ? {} : {
+        reactions: record.reactions.map(reaction => ({ emoji: reaction.emoji, count: reaction.participantIds.length })),
+      }),
+    }
   }
 
   private async resolveForwardItem(sourceRoomId: string, item: ChatroomForwardItem): Promise<ChatroomForwardItem> {
@@ -1254,6 +1410,7 @@ export class ChatroomRuntime {
       reactions: this.reactionsForRoom(roomId),
       recalls: this.recallsForRoom(roomId),
       threadPreviews: this.threadPreviewsForRoom(roomId),
+      pendingMessages: this.pendingMessagesForRoom(state),
     }
     writeSse(response, snapshot)
     this.broadcastPresence(state)
@@ -1372,6 +1529,7 @@ export class ChatroomRuntime {
     conversationId: string,
     content: readonly ChatroomPromptContentPart[],
     identity: ChatroomIdentity,
+    reply?: ChatroomReplyReference,
   ): Promise<{
     conversation: ChatroomDirectConversation
     message: ChatroomDirectMessage
@@ -1405,6 +1563,7 @@ export class ChatroomRuntime {
       senderId: identity.participantId,
       text: normalized,
       ...(files.length === 0 ? {} : { files }),
+      ...(reply === undefined ? {} : { reply }),
       createdAt: now,
     }
     await this.requireDirectMessages().put(
@@ -1415,6 +1574,39 @@ export class ChatroomRuntime {
     this.archiveDirectMessage(message)
     const event = this.publishDirectMessage(updated, identity.participantId, message)
     return { conversation: event.conversation, message: event.message }
+  }
+
+  /** Toggle one reaction on a private message and notify both participants. */
+  async toggleDirectReaction(
+    conversationId: string,
+    messageId: string,
+    emoji: ChatroomReactionEmoji,
+    identity: ChatroomIdentity,
+  ): Promise<ChatroomDirectMessage> {
+    this.assertReady()
+    const conversation = this.requireDirectConversations().get(conversationId)
+    if (conversation === undefined || !conversation.participantIds.includes(identity.participantId)) {
+      throw new ChatroomInputError('私聊不存在或你无权访问。')
+    }
+    const found = this.findDirectMessage(conversationId, normalizeMessageId(messageId))
+    if (found === undefined) throw new ChatroomInputError('私聊消息不存在。')
+    const current = found.message.reactions ?? []
+    const existing = current.find(reaction => reaction.emoji === emoji)
+    const participants = new Set(existing?.participantIds ?? [])
+    if (participants.has(identity.participantId)) participants.delete(identity.participantId)
+    else participants.add(identity.participantId)
+    const reactions = [
+      ...current.filter(reaction => reaction.emoji !== emoji),
+      ...(participants.size === 0 ? [] : [{ emoji, participantIds: [...participants].sort() }]),
+    ].sort((left, right) => CHATROOM_REACTION_EMOJIS.indexOf(left.emoji) - CHATROOM_REACTION_EMOJIS.indexOf(right.emoji))
+    const { reactions: _previousReactions, ...messageWithoutReactions } = found.message
+    const updated: DirectMessageRecord = {
+      ...messageWithoutReactions,
+      ...(reactions.length === 0 ? {} : { reactions }),
+    }
+    await this.requireDirectMessages().put(found.key, updated)
+    this.archiveDirectMessage(updated)
+    return this.publishDirectMessage(conversation, identity.participantId, updated).message
   }
 
   private publishDirectMessage(
@@ -1540,14 +1732,16 @@ export class ChatroomRuntime {
       await this.requireThreadMessages().put(record.id, record)
       this.archiveThreadMessage(state.record, record)
       if (!aiTriggered) {
+        const deferFromActiveTurn = binding.agent.status === 'running'
         binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
+        if (deferFromActiveTurn) this.deferMessageFromActiveTurn(binding.agent, String(message.id))
       } else if (mode === 'steer') {
         binding.agent.steer(message)
       } else {
         binding.agent.followup(message)
       }
       if (!aiTriggered && room.autoTriggerEnabled === true) {
-        this.scheduleAutomaticResponse(roomState, binding, content, state)
+        this.scheduleAutomaticResponse(roomState, binding, content, state, record.id)
       }
       await this.touchMember(state.record.roomId, identity)
       await this.touchRoom(state.record.roomId)
@@ -1577,10 +1771,16 @@ export class ChatroomRuntime {
   /** Project committed AI output into its parent room or branch stream. */
   handleSessionEvent(session: Session, event: SessionEvent): void {
     if (!this.isReady) return
+    if (event.type === 'turn/end') this.activeTurnDeferredMessageIds.delete(String(session.id))
     this.captureAiContextStart(session, event)
     this.archiveSessionEvent(session, event)
     if (event.type === 'session/title') {
       this.acceptSessionTitle(session, event.data.title)
+      return
+    }
+    if (event.type === 'user/message') {
+      const room = [...this.states.values()].find(state => state.record.sessionId === String(session.id))
+      if (room !== undefined) this.removePendingMessage(room, String(event.data.id))
       return
     }
     if (event.type !== 'assistant/message') return
@@ -1900,6 +2100,16 @@ export class ChatroomRuntime {
       .filter(message => message.conversationId === conversationId)
       .sort((left, right) => left.sequence - right.sequence)
       .map(publicDirectMessage)
+  }
+
+  private findDirectMessage(
+    conversationId: string,
+    messageId: string,
+  ): { readonly key: string; readonly message: DirectMessageRecord } | undefined {
+    for (const [key, message] of this.requireDirectMessages().entries()) {
+      if (message.conversationId === conversationId && message.id === messageId) return { key, message }
+    }
+    return undefined
   }
 
   private searchHit(
@@ -2860,6 +3070,50 @@ export class ChatroomRuntime {
     this.broadcast(state, { type: 'presence', online: onlineCount(state), members: this.roomMembers(state) })
   }
 
+  private publishPendingMessage(
+    state: RoomState,
+    identity: ChatroomIdentity,
+    message: UserMessage,
+    status: ChatroomPendingMessage['status'],
+  ): PendingRoomMessage {
+    const projection = projectForwardContent(message.content, 'human')
+    const pending: PendingRoomMessage = {
+      message,
+      view: {
+        messageId: String(message.id),
+        roomId: state.record.id,
+        participantId: identity.participantId,
+        displayName: identity.displayName,
+        avatarId: identity.avatarId,
+        ...(identity.avatarUrl === undefined ? {} : { avatarUrl: identity.avatarUrl }),
+        text: projection.text,
+        content: projection.content,
+        ...(projection.reply === undefined ? {} : { reply: projection.reply }),
+        ...(projection.forward === undefined ? {} : { forward: projection.forward }),
+        createdAt: Date.now(),
+        status,
+      },
+    }
+    state.pendingMessages.set(pending.view.messageId, pending)
+    this.broadcastPendingMessages(state)
+    return pending
+  }
+
+  private removePendingMessage(state: RoomState, messageId: string): void {
+    if (!state.pendingMessages.delete(messageId)) return
+    this.broadcastPendingMessages(state)
+  }
+
+  private pendingMessagesForRoom(state: RoomState): readonly ChatroomPendingMessage[] {
+    return [...state.pendingMessages.values()]
+      .map(pending => pending.view)
+      .sort((left, right) => left.createdAt - right.createdAt || left.messageId.localeCompare(right.messageId))
+  }
+
+  private broadcastPendingMessages(state: RoomState): void {
+    this.broadcast(state, { type: 'pending-messages', messages: this.pendingMessagesForRoom(state) })
+  }
+
   private broadcast(state: RoomState, event: ChatroomServerEvent): void {
     for (const client of [...state.clients]) {
       if (!writeSse(client.response, event)) state.clients.delete(client)
@@ -3153,14 +3407,34 @@ export class ChatroomRuntime {
     binding: AgentBinding,
     content: readonly ChatroomPromptContentPart[],
     thread?: ThreadState,
+    sourceMessageId?: string,
+    pending?: PendingRoomMessage,
   ): void {
     const owner = thread ?? room
     const task = owner.automation.then(async () => {
-      if (!await this.shouldAutoTrigger(room, binding, content, thread)) return
+      const wake = await this.shouldAutoTrigger(room, binding, content, thread)
+      if (pending !== undefined
+        && (room.pendingMessages.get(pending.view.messageId) !== pending || pending.view.status !== 'deciding')) return
+      if (!wake) {
+        if (pending !== undefined) {
+          pending.view = { ...pending.view, status: 'passive' }
+          this.broadcastPendingMessages(room)
+          await binding.agent.whenIdle()
+          if (room.pendingMessages.get(pending.view.messageId) !== pending || pending.view.status !== 'passive') return
+          binding.agent.session.append('user/message', pending.message, { surfaceOp: 'append' })
+        }
+        return
+      }
+      if (pending !== undefined) {
+        pending.view = { ...pending.view, status: 'queued' }
+        this.broadcastPendingMessages(room)
+        binding.agent.followup(pending.message)
+        return
+      }
       binding.agent.followup(createUserMessage({
         content: [{
           type: 'text',
-          text: `The automatic-response controller selected this chatroom message for an AI response: ${JSON.stringify(promptPreview(content))}. Respond to that message now. Do not mention this controller notice.`,
+          text: `The automatic-response controller selected this chatroom message for an AI response: ${JSON.stringify(promptPreview(content))}\nChatroom pending source: ${sourceMessageId ?? 'none'}\nRespond to that message now. Do not mention this controller notice.`,
         }],
         source: {
           kind: 'plugin',
@@ -3172,6 +3446,18 @@ export class ChatroomRuntime {
     })
     owner.automation = task.catch((error: unknown) => {
       this.log.warn('Automatic-response wake failed: %s', String(error))
+    })
+  }
+
+  private deferMessageFromActiveTurn(agent: Agent, messageId: string): void {
+    const sessionId = String(agent.session.id)
+    const deferred = this.activeTurnDeferredMessageIds.get(sessionId) ?? new Set<string>()
+    deferred.add(messageId)
+    this.activeTurnDeferredMessageIds.set(sessionId, deferred)
+    void agent.whenIdle().then(() => {
+      if (agent.status === 'idle') this.activeTurnDeferredMessageIds.delete(sessionId)
+    }).catch((error: unknown) => {
+      this.log.warn('Unable to release deferred chatroom messages for %s: %s', sessionId, String(error))
     })
   }
 
@@ -3356,6 +3642,7 @@ function newRoomState(record: RoomRecord): RoomState {
   return {
     record,
     clients: new Set(),
+    pendingMessages: new Map(),
     binding: undefined,
     activation: undefined,
     admission: Promise.resolve(),
@@ -3744,6 +4031,27 @@ function promptPreview(content: readonly ChatroomPromptContentPart[]): string {
   return '发送了图片'
 }
 
+function projectQueuedChatroomPrompt(
+  content: readonly ContentBlock[],
+): { readonly text: string; readonly sourceMessageId?: string } | undefined {
+  const notice = content.find((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')?.text
+  if (notice === undefined) return undefined
+  const match = /^The automatic-response controller selected this chatroom message for an AI response: (.+)\nChatroom pending source: ([^\n]+)\nRespond to that message now\./su.exec(notice)
+  if (match === null) return undefined
+  let text: unknown
+  try {
+    text = JSON.parse(match[1]!)
+  } catch {
+    return undefined
+  }
+  if (typeof text !== 'string') return undefined
+  const sourceMessageId = match[2] === 'none' ? undefined : match[2]
+  return {
+    text,
+    ...(sourceMessageId === undefined ? {} : { sourceMessageId }),
+  }
+}
+
 function formatWecomTime(value: Date, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -3978,6 +4286,8 @@ function publicDirectMessage(record: DirectMessageRecord): ChatroomDirectMessage
     senderId: record.senderId,
     text: record.text,
     ...(record.files === undefined ? {} : { files: record.files }),
+    ...(record.reply === undefined ? {} : { reply: record.reply }),
+    ...(record.reactions === undefined ? {} : { reactions: record.reactions }),
     ...(record.card === undefined ? {} : { card: record.card }),
     createdAt: record.createdAt,
   }

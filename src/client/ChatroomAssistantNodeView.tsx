@@ -12,6 +12,7 @@ import type { ChatroomReactionEmoji } from '../reactions.js'
 import { projectExternalCardText } from '../message.js'
 import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
 import { ChatroomAssistantReplyAction } from './ChatroomAssistantReplyAction.js'
+import { ChatroomPendingMessageView } from './ChatroomPendingMessage.js'
 
 const COLLAPSIBLE_PROCESS_KINDS = new Set(['assistant-step', 'context', 'retry', 'tool-call'])
 
@@ -25,6 +26,11 @@ export interface ChatroomAssistantNodeViewProps extends ChatNodeViewProps<'assis
   openForward(roomId: string, message: ChatroomForwardItem): void
   toggleMessageSelection(roomId: string, message: ChatroomForwardItem): void
   recallMessage(roomId: string, messageId: string): Promise<boolean>
+  updateQueuedPrompt(
+    target: { readonly roomId: string } | { readonly threadId: string },
+    messageId: string,
+    action: 'guide' | 'delete' | 'edit',
+  ): Promise<string | undefined>
 }
 
 /** Keep a completed shared-room turn compact while preserving its native process rows. */
@@ -34,7 +40,8 @@ export function ChatroomAssistantNodeView(props: ChatroomAssistantNodeViewProps)
   const [expanded, setExpanded] = useState(false)
   const finalNode = props.node.data.finalNode
   const tail = props.useTurnData('turn-tail')
-  const shared = props.resolveTarget?.(String(props.sessionId)) !== undefined
+  const target = props.resolveTarget?.(String(props.sessionId))
+  const shared = target !== undefined
   const closing = shared
     && finalNode !== undefined
     && tail?.closing?.finalNode.seq === finalNode.seq
@@ -46,6 +53,16 @@ export function ChatroomAssistantNodeView(props: ChatroomAssistantNodeViewProps)
     ? finalNode.messageId
     : undefined
   const standaloneMeetingSummary = standaloneMeetingSummaryMessageId !== undefined
+  const latestAssistant = props.useSession((snapshot) => {
+    const index = snapshot.chat.order.indexOf(props.node.key)
+    if (index < 0) return false
+    return snapshot.chat.order.slice(index + 1).every((key) =>
+      snapshot.chat.nodes.get(key)?.kind !== 'assistant-step')
+  })
+  const pendingMessages = props.useChatroom(snapshot => target?.kind === 'room' && latestAssistant
+    ? snapshot.pendingMessages.filter(message => message.roomId === target.room.id)
+    : [])
+  const identity = props.useChatroom(snapshot => snapshot.identity)
   const processSignature = props.useSession((snapshot) => {
     if (!closing) return ''
     const turn = props.node.data.turn
@@ -136,6 +153,15 @@ export function ChatroomAssistantNodeView(props: ChatroomAssistantNodeViewProps)
         {...props}
         messageId={standaloneMeetingSummaryMessageId}
       />}
+      {pendingMessages.length > 0 && <div className="dsh-chatroom-pending-stream" aria-label="已发送的排队消息">
+        {pendingMessages.map(message => <ChatroomPendingMessageView
+          key={message.messageId}
+          message={message}
+          own={message.participantId === identity?.participantId}
+          sessionId={String(props.sessionId)}
+          update={props.updateQueuedPrompt}
+        />)}
+      </div>}
     </div>
   )
 }

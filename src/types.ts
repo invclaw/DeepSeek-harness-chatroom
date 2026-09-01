@@ -321,6 +321,12 @@ export interface ChatroomDirectConversation {
   readonly updatedAt: number
 }
 
+/** One reaction summary attached to a durable private message. */
+export interface ChatroomDirectReaction {
+  readonly emoji: ChatroomReactionEmoji
+  readonly participantIds: readonly string[]
+}
+
 /** One durable private message with optional downloadable media. */
 export interface ChatroomDirectMessage {
   readonly id: string
@@ -329,6 +335,8 @@ export interface ChatroomDirectMessage {
   readonly senderId: string
   readonly text: string
   readonly files?: readonly ChatroomFileReference[]
+  readonly reply?: ChatroomReplyReference
+  readonly reactions?: readonly ChatroomDirectReaction[]
   readonly card?: ChatroomExternalCard
   readonly createdAt: number
 }
@@ -399,6 +407,12 @@ export interface ChatroomPromptRequest {
 export interface ChatroomPromptResponse {
   readonly accepted: true
   readonly aiTriggered: boolean
+}
+
+/** Mutation result for one AI prompt that has not entered a model turn yet. */
+export interface ChatroomQueuedPromptActionResponse {
+  readonly accepted: true
+  readonly text: string
 }
 
 /** Toggle request for one participant and message reaction. */
@@ -483,6 +497,22 @@ export interface ChatroomNotification {
   readonly createdAt: number
 }
 
+/** Human room message already shared with participants while AI admission remains unsettled. */
+export interface ChatroomPendingMessage {
+  readonly messageId: string
+  readonly roomId: string
+  readonly participantId: string
+  readonly displayName: string
+  readonly avatarId?: ChatroomAvatarId
+  readonly avatarUrl?: string
+  readonly text: string
+  readonly content: readonly ChatroomForwardContentPart[]
+  readonly reply?: ChatroomReplyReference
+  readonly forward?: ChatroomForwardBundle
+  readonly createdAt: number
+  readonly status: 'deciding' | 'queued' | 'passive' | 'guiding'
+}
+
 /** Full synchronization point sent when one SSE connection opens. */
 export interface ChatroomSnapshotEvent {
   readonly type: 'snapshot'
@@ -493,6 +523,13 @@ export interface ChatroomSnapshotEvent {
   readonly reactions: readonly ChatroomReaction[]
   readonly recalls?: readonly ChatroomRecall[]
   readonly threadPreviews: readonly ChatroomThreadPreview[]
+  readonly pendingMessages?: readonly ChatroomPendingMessage[]
+}
+
+/** Complete replacement of transient room messages visible below the active AI reply. */
+export interface ChatroomPendingMessagesEvent {
+  readonly type: 'pending-messages'
+  readonly messages: readonly ChatroomPendingMessage[]
 }
 
 /** Online connection count event. */
@@ -546,6 +583,7 @@ export type ChatroomGlobalEvent = ChatroomNotificationEvent | ChatroomDirectMess
 export type ChatroomServerEvent =
   | ChatroomSnapshotEvent
   | ChatroomPresenceEvent
+  | ChatroomPendingMessagesEvent
   | ChatroomThreadMessageEvent
   | ChatroomReactionEvent
   | ChatroomRecallEvent

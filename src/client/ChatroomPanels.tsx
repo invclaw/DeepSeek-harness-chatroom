@@ -22,14 +22,10 @@ import { ChatroomAccountPanels, type ChatroomAccountPanelProps } from './Chatroo
 import { ChatroomAvatarView } from './ChatroomAvatarView.js'
 import { ChatroomMarkdown } from './ChatroomMarkdown.js'
 import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
-import {
-  ChatroomInlineMessageActions,
-  ChatroomMessageContextMenu,
-  ChatroomReactionBar,
-  ChatroomSelectionCheckbox,
-  useChatroomMessageMenu,
-  type ChatroomMessageToolsProps,
-} from './ChatroomMessageTools.js'
+import { ChatroomDocumentLinkCards, ChatroomLinkedText } from './ChatroomLinkedText.js'
+import { chatroomMessageActionGroup, chatroomMessageGroupPosition, type ChatroomMessageGroupPosition } from './message-grouping.js'
+import { type ChatroomMessageToolsProps } from './ChatroomMessageTools.js'
+import { ChatroomMessageFrame } from './ChatroomMessageFrame.js'
 
 interface ChatroomPanelsProps extends ChatroomAccountPanelProps {
   closeMembers(): void
@@ -533,7 +529,24 @@ function ThreadCompatibilityPanel(props: ChatroomPanelsProps & {
     </div>
     <div className="dsh-chatroom-thread-messages">
       {props.room.threadMessages.length === 0 && <p className="dsh-chatroom-thread-empty">从这里开始与分支 AI 对话；回复只会进入当前分支。</p>}
-      {props.room.threadMessages.map(message => <ThreadMessage key={message.id} message={message} roomId={props.thread.roomId} props={props} />)}
+      {props.room.threadMessages.map((message, index, messages) => <ThreadMessage
+        key={message.id}
+        message={message}
+        roomId={props.thread.roomId}
+        props={props}
+        groupPosition={chatroomMessageGroupPosition(
+          messages,
+          index,
+          item => `${item.role}:${item.participantId}`,
+          item => item.createdAt,
+        )}
+        actionGroup={chatroomMessageActionGroup(
+          messages,
+          index,
+          item => `${item.role}:${item.participantId}`,
+          item => item.createdAt,
+        )}
+      />)}
       <div ref={endRef} />
     </div>
     <form className="dsh-chatroom-thread-composer" onSubmit={(event) => {
@@ -608,10 +621,14 @@ function ThreadMessage({
   message,
   roomId,
   props,
+  groupPosition,
+  actionGroup,
 }: {
   readonly message: ChatroomThreadMessage
   readonly roomId: string
   readonly props: ChatroomPanelsProps
+  readonly groupPosition: ChatroomMessageGroupPosition
+  readonly actionGroup: string
 }): JSX.Element {
   const own = message.participantId === props.room.identity?.participantId
   const knownMember = props.room.members.find(member => member.participantId === message.participantId)
@@ -637,18 +654,13 @@ function ThreadMessage({
     toggleSelection: props.toggleMessageSelection,
     recallMessage: props.recallMessage,
   }
-  const menu = useChatroomMessageMenu()
-  return <article
+  return <ChatroomMessageFrame
     className="dsh-chatroom-thread-message"
-    data-dsh-chatroom-message-id={message.id}
-    data-own={own}
-    data-role={message.role}
-    data-dsh-chatroom-selection-mode={tools.selecting || undefined}
-    data-dsh-chatroom-selected={tools.selected || undefined}
-    onContextMenu={menu.open}
-  >
-    <ChatroomSelectionCheckbox tools={tools} />
-    {message.role === 'ai'
+    own={own}
+    role={message.role}
+    groupPosition={groupPosition}
+    actionGroup={actionGroup}
+    avatar={message.role === 'ai'
       ? <span className="dsh-chatroom-member-avatar" data-avatar={avatar.id} aria-hidden>{avatar.emoji}</span>
       : <ChatroomAvatarView
           className="dsh-chatroom-member-avatar"
@@ -656,24 +668,19 @@ function ThreadMessage({
           avatarId={avatarId}
           {...(avatarUrl === undefined ? {} : { avatarUrl })}
         />}
-    <div className="dsh-chatroom-thread-message-column">
-      <strong>{message.displayName}<time>{formatTime(message.createdAt)}</time></strong>
-      {!tools.recalled && message.reply !== undefined && <div className="dsh-chatroom-thread-reply-quote">
-        <strong>回复 {message.reply.displayName}</strong><span>{message.reply.text}</span>
-      </div>}
-      <div className="dsh-chatroom-thread-message-body">
-        {tools.recalled
-          ? <div className="dsh-chatroom-recalled-message">消息已撤回</div>
-          : message.role === 'ai'
-            ? <ChatroomMarkdown text={message.text} />
-            : <div className="dsh-chatroom-thread-literal-text">{message.text}</div>}
-        {!tools.recalled && message.card !== undefined && <ChatroomExternalCardView card={message.card} />}
-      </div>
-      <ChatroomReactionBar {...tools} />
-      <ChatroomInlineMessageActions tools={tools} />
-    </div>
-    <ChatroomMessageContextMenu tools={tools} position={menu.position} close={menu.close} />
-  </article>
+    displayName={message.displayName}
+    reply={message.reply}
+    tools={tools}
+    body={<div className="dsh-chatroom-thread-message-body">
+      {tools.recalled
+        ? <div className="dsh-chatroom-recalled-message">消息已撤回</div>
+        : message.role === 'ai'
+          ? <ChatroomMarkdown text={message.text} />
+          : <ChatroomLinkedText className="dsh-chatroom-thread-literal-text" text={message.text} />}
+      {!tools.recalled && message.card !== undefined && <ChatroomExternalCardView card={message.card} />}
+      {!tools.recalled && <ChatroomDocumentLinkCards text={message.text} existingUrls={message.card?.url === undefined ? [] : [message.card.url]} />}
+    </div>}
+  />
 }
 
 function threadMessageTarget(message: ChatroomThreadMessage): ChatroomReplyReference {

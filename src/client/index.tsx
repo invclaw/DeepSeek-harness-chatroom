@@ -218,6 +218,7 @@ export function apply(ctx: ClientContext): void {
       openDirect: store.openDirect,
       closeDirect: store.closeDirect,
       sendDirect: store.sendDirect,
+      toggleDirectReaction: store.toggleDirectReaction,
       quickDirectMeeting: store.quickDirectMeeting,
       loadWecomAuthorization: store.loadWecomAuthorization,
       startWecomAuthorization: store.startWecomAuthorization,
@@ -328,6 +329,7 @@ export function apply(ctx: ClientContext): void {
       removeFile: store.removeFile,
       clearReply: store.clearReply,
       sendFiles: store.sendFiles,
+      updateQueuedPrompt: store.updateQueuedPrompt,
       resolveTarget: store.agentTargetForSession.bind(store),
     }),
   }, ChatroomComposerDock))
@@ -384,6 +386,7 @@ export function apply(ctx: ClientContext): void {
         openThread: store.openThread,
         toggleReaction: store.toggleReaction,
         recallMessage: store.recallMessage,
+        updateQueuedPrompt: store.updateQueuedPrompt,
         openForward: store.openForward,
         toggleMessageSelection: store.toggleMessageSelection,
       }),
