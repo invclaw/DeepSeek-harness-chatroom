@@ -9,7 +9,7 @@ export function ChatroomExternalCardView({ card }: { card: ChatroomExternalCard 
     <article className="dsh-chatroom-external-card dsh-chatroom-document-card">
       <div className="dsh-chatroom-external-icon" aria-hidden>📄</div>
       <div className="dsh-chatroom-external-copy">
-        <small>企业微信 · {documentTypeLabel(card.documentType)}</small>
+        <small>{documentProviderLabel(card.url)} · {documentTypeLabel(card.documentType)}</small>
         <strong>{card.title}</strong>
         {card.owner !== undefined && <span>创建者 · {card.owner}</span>}
         {card.modifiedAt !== undefined && <span>更新于 {card.modifiedAt}</span>}
@@ -17,6 +17,15 @@ export function ChatroomExternalCardView({ card }: { card: ChatroomExternalCard 
       {card.url !== undefined && <a href={card.url} target="_blank" rel="noreferrer">打开文档</a>}
     </article>
   )
+}
+
+function documentProviderLabel(value: string | undefined): string {
+  if (value === undefined) return '企业微信'
+  try {
+    return new URL(value).hostname.toLocaleLowerCase() === 'docs.qq.com' ? '腾讯文档' : '企业微信'
+  } catch {
+    return '企业微信'
+  }
 }
 
 function MeetingCard({ card }: { card: Extract<ChatroomExternalCard, { kind: 'meeting' }> }): JSX.Element {

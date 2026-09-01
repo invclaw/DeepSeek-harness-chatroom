@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ComponentProps } from 'react'
 import type { ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -12,6 +12,7 @@ import {
   type ChatroomComposerAttachmentsProps,
 } from '../src/client/ChatroomComposer.js'
 import type { ChatroomView } from '../src/client/store.js'
+import { restoreChatroomDraft } from '../src/client/draft-restore.js'
 
 afterEach(cleanup)
 
@@ -140,5 +141,66 @@ describe('chatroom composer attachments', () => {
       addFiles: vi.fn(), removeFile: vi.fn(), clearReply: vi.fn(), sendFiles: vi.fn(),
     } as unknown as ComponentProps<typeof ChatroomComposerDock>} />)
     expect(container.firstChild).toBeNull()
+  })
+
+  it('renders queued AI prompts on the sent message with guide, edit, and delete actions', async () => {
+    const setDraft = vi.fn()
+    const updateQueuedPrompt = vi.fn(async (_target, _messageId: string, action: string) =>
+      action === 'edit' ? '@AI 修改后的问题' : '')
+    const props = {
+      sessionId: 'chatroom-v1-lobby',
+      session: {
+        running: true,
+        queue: [{
+          id: 'queue-row',
+          messageId: 'queued-message',
+          placement: 'queued',
+          text: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：@AI 原问题',
+          preview: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：@AI 原问题',
+        }],
+      },
+      input: { draft: '', imageIds: [] },
+      inputActions: { setDraft },
+      useChatroom: (selector: (snapshot: ChatroomView) => unknown) => selector({
+        composerRoomId: undefined, pendingFiles: [], composerError: undefined,
+      } as unknown as ChatroomView),
+      resolveTarget: () => ({ kind: 'room', room: { id: 'lobby' } }),
+      updateQueuedPrompt,
+      addFiles: vi.fn(), removeFile: vi.fn(), clearReply: vi.fn(), sendFiles: vi.fn(),
+    }
+    render(<ChatroomComposerDock {...props as unknown as ComponentProps<typeof ChatroomComposerDock>} />)
+
+    expect(screen.getByText('正在排队 · 等待当前回复完成')).not.toBeNull()
+    expect(screen.getByText('@AI 原问题')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '编辑排队消息' }))
+    await waitFor(() => expect(setDraft).toHaveBeenCalledWith('@AI 修改后的问题'))
+    expect(updateQueuedPrompt).toHaveBeenCalledWith({ roomId: 'lobby' }, 'queued-message', 'edit')
+
+    await waitFor(() => expect((screen.getByRole('button', { name: '删除排队消息' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: '删除排队消息' }))
+    await waitFor(() => expect(updateQueuedPrompt).toHaveBeenCalledWith({ roomId: 'lobby' }, 'queued-message', 'delete'))
+    await waitFor(() => expect((screen.getByRole('button', { name: '引导对话' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: '引导对话' }))
+    await waitFor(() => expect(updateQueuedPrompt).toHaveBeenCalledWith({ roomId: 'lobby' }, 'queued-message', 'guide'))
+  })
+
+  it('restores text edited from a pending message bubble into the matching native composer', () => {
+    const setDraft = vi.fn()
+    render(<ChatroomComposerDock {...{
+      sessionId: 'chatroom-v1-lobby',
+      input: { draft: '', imageIds: [] },
+      inputActions: { setDraft },
+      useChatroom: (selector: (snapshot: ChatroomView) => unknown) => selector({
+        composerRoomId: undefined, pendingFiles: [], pendingMessages: [], composerError: undefined,
+      } as unknown as ChatroomView),
+      resolveTarget: () => ({ kind: 'room', room: { id: 'lobby' } }),
+      updateQueuedPrompt: vi.fn(),
+      addFiles: vi.fn(), removeFile: vi.fn(), clearReply: vi.fn(), sendFiles: vi.fn(),
+    } as unknown as ComponentProps<typeof ChatroomComposerDock>} />)
+
+    restoreChatroomDraft('chatroom-v1-lobby', '恢复到输入框')
+    expect(setDraft).toHaveBeenCalledWith('恢复到输入框')
+    restoreChatroomDraft('another-session', '不应恢复')
+    expect(setDraft).toHaveBeenCalledTimes(1)
   })
 })

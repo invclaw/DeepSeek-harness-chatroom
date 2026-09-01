@@ -366,6 +366,7 @@ function documentCard(service: WecomService, parameters: unknown, result: unknow
   const title = firstString(result, ['doc_name', 'name', 'title', 'file_name'])
     ?? firstString(parameters, ['doc_name', 'name', 'title'])
   const url = firstUrl(result, ['doc_url', 'url', 'share_url'])
+    ?? firstUrl(parameters, ['doc_url', 'url', 'share_url', 'docid'])
   if (title === undefined || url === undefined) return undefined
   const documentType = firstString(result, ['doc_type', 'type']) ?? service
   const modifiedAt = firstString(result, ['update_time', 'modified_at', 'updated_at'])

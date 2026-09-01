@@ -17,10 +17,12 @@ import type {
   ChatroomMember,
   ChatroomNotification,
   ChatroomGlobalEvent,
+  ChatroomPendingMessage,
   ChatroomPromptContentPart,
   ChatroomPromptRequest,
   ChatroomPromptResponse,
   ChatroomQuickMeetingResponse,
+  ChatroomQueuedPromptActionResponse,
   ChatroomReaction,
   ChatroomRecall,
   ChatroomReplyReference,
@@ -105,6 +107,7 @@ export interface ChatroomView {
   readonly reactions: readonly ChatroomReaction[]
   readonly recalls: readonly ChatroomRecall[]
   readonly threadPreviews: readonly ChatroomThreadPreview[]
+  readonly pendingMessages: readonly ChatroomPendingMessage[]
   readonly membersOpen: boolean
   readonly managementBusy?: boolean
   readonly managementError?: string | undefined
@@ -182,6 +185,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     reactions: [],
     recalls: [],
     threadPreviews: [],
+    pendingMessages: [],
     membersOpen: false,
     managementBusy: false,
     managementError: undefined,
@@ -696,7 +700,11 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   }
 
   /** Send one text/media message inside the selected private conversation. */
-  sendDirect = async (text: string, files: readonly File[] = []): Promise<boolean> => {
+  sendDirect = async (
+    text: string,
+    files: readonly File[] = [],
+    reply?: ChatroomReplyReference,
+  ): Promise<boolean> => {
     const conversation = this.snapshot.directConversation
     if (conversation === undefined || (text.trim() === '' && files.length === 0) || this.snapshot.directBusy) return false
     this.set({ directBusy: true, directError: undefined })
@@ -712,7 +720,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       }>(`${CHATROOM_API_PREFIX}/direct/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: conversation.id, content }),
+        body: JSON.stringify({ conversationId: conversation.id, content, ...(reply === undefined ? {} : { reply }) }),
       })
       const messages = this.snapshot.directMessages.some(message => message.id === response.message.id)
         ? this.snapshot.directMessages
@@ -727,6 +735,27 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     } catch (error) {
       this.set({ directBusy: false, directError: errorMessage(error) })
       return false
+    }
+  }
+
+  /** Toggle one private-message reaction and replace its durable projection. */
+  toggleDirectReaction = async (
+    conversationId: string,
+    messageId: string,
+    emoji: ChatroomReactionEmoji,
+  ): Promise<void> => {
+    try {
+      const message = await requestJson<ChatroomDirectMessage>(`${CHATROOM_API_PREFIX}/direct/reactions/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId, messageId, emoji }),
+      })
+      this.set({
+        directMessages: this.snapshot.directMessages.map(current => current.id === message.id ? message : current),
+        directError: undefined,
+      })
+    } catch (error) {
+      this.set({ directError: errorMessage(error) })
     }
   }
 
@@ -944,6 +973,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         reactions: [],
         recalls: [],
         threadPreviews: [],
+        pendingMessages: [],
         membersOpen: false,
         thread: undefined,
         threadMessages: [],
@@ -962,7 +992,10 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       this.set({ open: true })
     }
     if (this.snapshot.room?.id === room.id
-      && (this.eventSource !== undefined || this.snapshot.branchFrame !== undefined)) return
+      && (this.eventSource !== undefined || this.snapshot.branchFrame !== undefined)) {
+      if (this.snapshot.directOpen) this.set({ directOpen: false, directError: undefined })
+      return
+    }
     this.set({
       room,
       roomEnsureSessionId: undefined,
@@ -973,6 +1006,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       reactions: [],
       recalls: [],
       threadPreviews: [],
+      pendingMessages: [],
       membersOpen: false,
       thread: undefined,
       threadMessages: [],
@@ -1192,9 +1226,29 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     }
   }
 
+  /** Mutate one still-pending AI prompt without disturbing the active turn. */
+  updateQueuedPrompt = async (
+    target: { readonly roomId: string } | { readonly threadId: string },
+    messageId: string,
+    action: 'guide' | 'delete' | 'edit',
+  ): Promise<string | undefined> => {
+    try {
+      const response = await requestJson<ChatroomQueuedPromptActionResponse>(`${CHATROOM_API_PREFIX}/queue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...target, messageId, action }),
+      })
+      this.set({ composerError: undefined })
+      return response.text
+    } catch (error) {
+      this.set({ composerError: errorMessage(error) })
+      return undefined
+    }
+  }
+
   /** Activate and navigate to an existing shared room. */
   selectRoom = async (roomId: string): Promise<void> => {
-    this.set({ error: undefined })
+    this.set({ directOpen: false, directError: undefined, error: undefined })
     try {
       const response = await requestJson<ChatroomRoomResponse>(`${CHATROOM_API_PREFIX}/rooms/select`, {
         method: 'POST',
@@ -1545,12 +1599,15 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       reactions: [],
       recalls: [],
       threadPreviews: [],
+      pendingMessages: [],
       thread: undefined,
       threadMessages: [],
       threadReply: undefined,
       selectionRoomId: undefined,
       selectedMessages: [],
       forwardOpen: false,
+      directOpen: false,
+      directError: undefined,
       error: undefined,
     })
     this.openEvents(room)
@@ -1688,6 +1745,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           reactions: event.reactions,
           recalls: event.recalls ?? [],
           threadPreviews: event.threadPreviews,
+          pendingMessages: event.pendingMessages ?? [],
           error: undefined,
         })
         return
@@ -1703,6 +1761,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         })
         return
       }
+      case 'pending-messages':
+        this.set({ pendingMessages: event.messages })
+        return
       case 'thread-message':
         this.set({
           threadPreviews: replaceThreadPreview(this.snapshot.threadPreviews, event.preview),
@@ -1783,18 +1844,21 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private receiveDirectMessage(event: ChatroomDirectMessageEvent): void {
     const conversations = replaceDirectConversation(this.snapshot.directConversations, event.conversation)
     const selected = this.snapshot.directConversation?.id === event.conversation.id
-    const messages = !selected || this.snapshot.directMessages.some(message => message.id === event.message.id)
+    const known = this.snapshot.directMessages.some(message => message.id === event.message.id)
+    const messages = !selected
       ? this.snapshot.directMessages
-      : [...this.snapshot.directMessages, event.message]
+      : known
+        ? this.snapshot.directMessages.map(message => message.id === event.message.id ? event.message : message)
+        : [...this.snapshot.directMessages, event.message]
     const own = event.message.senderId === this.snapshot.identity?.participantId
     const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible'
     const isCurrent = this.snapshot.directOpen && selected
     this.set({
       directConversations: conversations,
       ...(selected ? { directConversation: event.conversation, directMessages: messages } : {}),
-      unreadCount: own || (isVisible && isCurrent) ? this.snapshot.unreadCount : this.snapshot.unreadCount + 1,
+      unreadCount: known || own || (isVisible && isCurrent) ? this.snapshot.unreadCount : this.snapshot.unreadCount + 1,
     })
-    if (!own) {
+    if (!own && !known) {
       const notification: ChatroomNotification = {
         id: event.message.id,
         roomId: `direct:${event.conversation.id}`,

@@ -67,8 +67,10 @@ export interface ChatroomMessageToolsProps {
 /** Capability-driven actions reused by main-room and branch message rows. */
 export function ChatroomInlineMessageActions({
   tools,
+  showTime = false,
 }: {
   readonly tools: ChatroomMessageToolsProps
+  readonly showTime?: boolean
 }): JSX.Element | null {
   const [overflowOpen, setOverflowOpen] = useState(false)
   const copyText = tools.copyText
@@ -88,7 +90,7 @@ export function ChatroomInlineMessageActions({
   const liked = tools.reactions.some(reaction => reaction.messageId === tools.message.messageId
     && reaction.emoji === '👍'
     && reaction.participantIds.includes(tools.identity?.participantId ?? ''))
-  if (copyText === undefined && !canAct) return null
+  if (copyText === undefined && !canAct && !showTime) return null
   return (
     <div className="dsh-chatroom-message-actions">
       {tools.onReply !== undefined && <button type="button" aria-label="回复" onClick={tools.onReply}>↩ <span className="dsh-chatroom-action-label">回复</span></button>}
@@ -128,8 +130,13 @@ export function ChatroomInlineMessageActions({
           )}
         </span>
       )}
+      {showTime && <time className="dsh-chatroom-inline-time">{formatMessageTime(tools.message.createdAt)}</time>}
     </div>
   )
+}
+
+function formatMessageTime(time: number): string {
+  return new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 /** Checkbox shown on every message while the room is in multi-select mode. */

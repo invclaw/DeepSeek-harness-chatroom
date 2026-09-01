@@ -2,9 +2,12 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Config } from '../src/config.js'
 import { inferWecomCard, WecomCliClient, WecomCliError, WecomCliManager } from '../src/wecom.js'
+import { documentTitleFromHtml, fetchTencentDocumentTitle, normalizeDocumentTitle, parseWecomDocumentUrl } from '../src/wecom-document.js'
+
+afterEach(() => { vi.unstubAllGlobals() })
 
 describe('official Enterprise WeChat CLI adapter', () => {
   it('does not spawn the CLI when the capability is disabled', async () => {
@@ -25,6 +28,42 @@ describe('official Enterprise WeChat CLI adapter', () => {
     })).toEqual({
       kind: 'document', title: '复盘', documentType: 'smartpage', url: 'https://doc.example.com/page', owner: 'Alice',
     })
+    expect(inferWecomCard('doc', 'get', { docid: 'https://docs.qq.com/doc/DT2JxRE5xd3JPRVh6' }, {
+      name: '项目复盘',
+    })).toEqual({
+      kind: 'document', title: '项目复盘', documentType: 'doc', url: 'https://docs.qq.com/doc/DT2JxRE5xd3JPRVh6',
+    })
+  })
+
+  it('accepts only recognized Tencent Docs HTTPS URLs for metadata lookup', () => {
+    expect(parseWecomDocumentUrl('https://docs.qq.com/doc/DT2JxRE5xd3JPRVh6')).toMatchObject({ service: 'doc', source: 'tencent-docs' })
+    expect(parseWecomDocumentUrl('https://docs.qq.com/aio/DYnhEWFJhekJVS3RB')).toMatchObject({ service: 'smartpage', source: 'tencent-docs' })
+    expect(parseWecomDocumentUrl('https://doc.weixin.qq.com/doc/a1_project')).toMatchObject({
+      service: 'doc', source: 'wecom', documentId: 'a1_project',
+    })
+    expect(parseWecomDocumentUrl('http://docs.qq.com/doc/not-secure')).toBeUndefined()
+    expect(parseWecomDocumentUrl('https://attacker.example/doc/DT2JxRE5xd3JPRVh6')).toBeUndefined()
+  })
+
+  it('extracts a real Tencent Docs title and safely ignores unavailable metadata', async () => {
+    expect(documentTitleFromHtml('<title>Lighthouse 发布清单 - 腾讯文档</title>')).toBe('Lighthouse 发布清单')
+    expect(documentTitleFromHtml('<meta property="og:title" content="研发周报 &amp; 计划">')).toBe('研发周报 & 计划')
+    expect(documentTitleFromHtml('<title>腾讯文档</title>')).toBeUndefined()
+    expect(normalizeDocumentTitle('腾讯文档 · 在线文档')).toBeUndefined()
+
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      '<html><head><title>Lighthouse 发布清单 | 腾讯文档</title></head></html>',
+      { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchTencentDocumentTitle('https://docs.qq.com/doc/DT2JxRE5xd3JPRVh6')).resolves.toBe('Lighthouse 发布清单')
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://docs.qq.com/doc/DT2JxRE5xd3JPRVh6',
+      expect.objectContaining({ redirect: 'manual' }),
+    )
+
+    fetchMock.mockRejectedValueOnce(new Error('blocked'))
+    await expect(fetchTencentDocumentTitle('https://docs.qq.com/doc/DT2JxRE5xd3JPRVh6')).resolves.toBeUndefined()
   })
 
   it('migrates the only authorized legacy account into one deployment-shared credential directory', async () => {

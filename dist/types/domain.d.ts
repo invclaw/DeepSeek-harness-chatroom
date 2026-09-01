@@ -1,4 +1,4 @@
-import type { ChatroomExternalCard, ChatroomFileReference, ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js';
+import type { ChatroomDirectReaction, ChatroomExternalCard, ChatroomFileReference, ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js';
 import type { ChatroomReactionEmoji } from './reactions.js';
 import type { ChatroomAvatarId } from './avatars.js';
 export interface IdentityRecord {
@@ -185,6 +185,8 @@ export interface DirectMessageRecord {
     readonly senderId: string;
     readonly text: string;
     readonly files?: readonly ChatroomFileReference[];
+    readonly reply?: ChatroomReplyReference;
+    readonly reactions?: readonly ChatroomDirectReaction[];
     readonly card?: ChatroomExternalCard;
     readonly createdAt: number;
 }

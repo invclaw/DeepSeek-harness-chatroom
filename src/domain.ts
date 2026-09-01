@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
-import type { ChatroomExternalCard, ChatroomFileReference, ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js'
+import type { ChatroomDirectReaction, ChatroomExternalCard, ChatroomFileReference, ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js'
 import type { ChatroomReactionEmoji } from './reactions.js'
 import { isChatroomReactionEmoji } from './reactions.js'
 import type { ChatroomAvatarId } from './avatars.js'
@@ -221,6 +221,8 @@ export interface DirectMessageRecord {
   readonly senderId: string
   readonly text: string
   readonly files?: readonly ChatroomFileReference[]
+  readonly reply?: ChatroomReplyReference
+  readonly reactions?: readonly ChatroomDirectReaction[]
   readonly card?: ChatroomExternalCard
   readonly createdAt: number
 }
@@ -469,6 +471,11 @@ const directMessageSchema = z.object({
     name: z.string().min(1),
     mediaType: z.string().min(1),
     bytes: nonNegativeSafeInteger,
+  })).optional(),
+  reply: replySchema.optional(),
+  reactions: z.array(z.object({
+    emoji: z.string().refine(isChatroomReactionEmoji),
+    participantIds: z.array(z.string().min(1)),
   })).optional(),
   card: externalCardSchema.optional(),
   createdAt: nonNegativeSafeInteger,

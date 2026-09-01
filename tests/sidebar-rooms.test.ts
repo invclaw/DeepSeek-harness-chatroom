@@ -631,6 +631,24 @@ describe('native sidebar room rows', () => {
     expect(openDirect).toHaveBeenCalledWith('bob-id')
   })
 
+  it('closes private chat when the already-selected native conversation is clicked again', () => {
+    document.body.innerHTML = `
+      <div role="tree">
+        <div role="treeitem" aria-selected="true"><span>项目群</span><button aria-label="项目群操作">•••</button></div>
+      </div>
+    `
+    const room = { id: 'room', title: '项目群', aiDisplayName: 'DeepSeek', sessionId: 'room-session' } as const
+    const closeDirect = vi.fn()
+    reconcileSidebarRoomRows(document, {
+      rooms: [room], room, members: [], directPeers: [], directConversations: [], directOpen: true,
+    } as unknown as ChatroomView, undefined, undefined, undefined, closeDirect)
+
+    document.querySelector<HTMLElement>('[data-dsh-chatroom-room-row] span')!.click()
+    expect(closeDirect).toHaveBeenCalledOnce()
+    document.querySelector<HTMLButtonElement>('[aria-label="项目群操作"]')!.click()
+    expect(closeDirect).toHaveBeenCalledOnce()
+  })
+
   function nativeSections(sessionsPerSection: readonly number[]): string {
     let session = 0
     const sections = sessionsPerSection.map((count, index) => {

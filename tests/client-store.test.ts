@@ -52,6 +52,59 @@ describe('ChatroomClientStore', () => {
     expect(FakeEventSource.instances[1]?.url).toBe('/plugins/deepseek-harness-chatroom/api/events?roomId=lobby')
   })
 
+  it('leaves the private conversation view immediately when a room is selected', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const conversation = {
+      id: 'direct-1',
+      peer: { participantId: 'bob-id', username: 'bob', displayName: 'Bob', avatarId: 'panda' as const },
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ peers: [conversation.peer], conversations: [conversation], conversation, messages: [] }))
+      .mockResolvedValueOnce(jsonResponse({ room }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore(vi.fn(() => true))
+    await store.start()
+    await store.openDirect('bob-id')
+    expect(store.getSnapshot().directOpen).toBe(true)
+
+    const selection = store.selectRoom(room.id)
+    expect(store.getSnapshot().directOpen).toBe(false)
+    await selection
+    expect(store.getSnapshot()).toMatchObject({ directOpen: false, room })
+  })
+
+  it('leaves private chat when native navigation reactivates the already-selected room', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const conversation = {
+      id: 'direct-1',
+      peer: { participantId: 'bob-id', username: 'bob', displayName: 'Bob', avatarId: 'panda' as const },
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ room }))
+      .mockResolvedValueOnce(jsonResponse({ peers: [conversation.peer], conversations: [conversation], conversation, messages: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore(vi.fn(() => true))
+    await store.start()
+    await store.selectRoom(room.id)
+    await store.openDirect('bob-id')
+    expect(store.getSnapshot()).toMatchObject({ directOpen: true, room })
+
+    store.activateSession(room.sessionId, room.title)
+
+    expect(store.getSnapshot()).toMatchObject({ directOpen: false, room })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
   it('prompts once when an unjoined browser enters a shared Session directly', async () => {
     const room = roomInfo()
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(null, [room]))))
@@ -321,6 +374,27 @@ describe('ChatroomClientStore', () => {
     expect(store.getSnapshot().room).toMatchObject({ autoTriggerEnabled: true })
   })
 
+  it('routes queued prompt actions through the chatroom API and returns edited draft text', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ accepted: true, text: '@AI 修改后的问题' }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+
+    await expect(store.updateQueuedPrompt({ roomId: room.id }, 'queued-message', 'edit'))
+      .resolves.toBe('@AI 修改后的问题')
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/plugins/deepseek-harness-chatroom/api/queue')
+    expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
+      roomId: room.id,
+      messageId: 'queued-message',
+      action: 'edit',
+    })
+  })
+
   it('preserves the active identity and room while identity editing is cancelled or submitted', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const updated = { ...identity, displayName: 'Alice 2', avatarId: 'panda' as const }
@@ -371,6 +445,32 @@ describe('ChatroomClientStore', () => {
     store.activateSession('ordinary-session')
     expect(store.getSnapshot()).toMatchObject({ connection: 'offline', room: undefined, online: 0 })
     expect(FakeEventSource.instances[1]?.closed).toBe(true)
+  })
+
+  it('keeps immediately shared pending messages synchronized across snapshots and replacements', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(identity, [room]))))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    store.activateSession(room.sessionId)
+    const pending = {
+      messageId: 'pending-one', roomId: room.id, participantId: identity.participantId,
+      displayName: identity.displayName, avatarId: identity.avatarId, text: '立即展示',
+      content: [{ type: 'text' as const, text: '立即展示', markdown: false }],
+      createdAt: 1, status: 'deciding' as const,
+    }
+    FakeEventSource.instances[1]?.emit({
+      type: 'snapshot', room, identity, online: 2, members: [], reactions: [], threadPreviews: [],
+      pendingMessages: [pending],
+    })
+    expect(store.getSnapshot().pendingMessages).toEqual([pending])
+
+    FakeEventSource.instances[1]?.emit({
+      type: 'pending-messages', messages: [{ ...pending, status: 'queued' }],
+    })
+    expect(store.getSnapshot().pendingMessages).toEqual([{ ...pending, status: 'queued' }])
   })
 
   it('keeps the directory avatar projection when the selected-room roster arrives', async () => {

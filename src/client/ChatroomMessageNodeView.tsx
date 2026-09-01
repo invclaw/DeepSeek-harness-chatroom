@@ -1,4 +1,4 @@
-import { memo, type ComponentType, type ReactNode } from 'react'
+import { memo, useLayoutEffect, useRef, type ComponentType, type ReactNode } from 'react'
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { fallbackAvatarId, type ChatroomAvatarId } from '../avatars.js'
 import type {
@@ -17,11 +17,6 @@ import { participantMarker, projectExternalCardText, projectFileText, projectFor
 import type { ChatroomReactionEmoji } from '../reactions.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
 import {
-  ChatroomInlineMessageActions,
-  ChatroomMessageContextMenu,
-  ChatroomReactionBar,
-  ChatroomSelectionCheckbox,
-  useChatroomMessageMenu,
   type ChatroomMessageToolsProps,
 } from './ChatroomMessageTools.js'
 import { ChatroomThreadActivity } from './ChatroomThreadActivity.js'
@@ -31,6 +26,9 @@ import type { ChatroomAgentTarget } from './store.js'
 import { ChatroomAvatar } from './ChatroomAvatar.js'
 import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
 import { ChatroomContextResetDivider } from './ChatroomComposer.js'
+import { ChatroomDocumentLinkCards, ChatroomLinkedText, chatroomTextLinks } from './ChatroomLinkedText.js'
+import { reconcileNativeMessageGroups } from './message-grouping.js'
+import { ChatroomMessageFrame } from './ChatroomMessageFrame.js'
 
 type ParticipantNode = ChatNode<'user' | 'steering'>
 
@@ -173,7 +171,11 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
       ? {}
       : { avatarUrl: room.members.find(member => member.participantId === projectionBase.participantId)?.avatarUrl }),
   }
-  const native = <NativeView {...props} node={projection.node as ChatNode<'user'>} />
+  const linkedText = chatroomTextLinks(projection.text).length > 0
+  const nativeNode = linkedText ? participantNodeWithoutText(projection.node) : projection.node
+  const native = nativeNode.data.content.length === 0
+    ? undefined
+    : <NativeView {...props} node={nativeNode as ChatNode<'user'>} />
   const activeRoom = sessionTarget.room
   const message = messageTarget(String(props.sessionId), props.node, projection)
   const reply = replyTarget(message)
@@ -193,6 +195,7 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
       threadPreview={threadPreview}
       onReply={onReply}
       onThread={onThread}
+      linkedText={linkedText}
     />
   </>
 })
@@ -216,7 +219,11 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
       ? {}
       : { avatarUrl: room.members.find(member => member.participantId === projectionBase.participantId)?.avatarUrl }),
   }
-  const native = <NativeView {...props} node={projection.node as ChatNode<'steering'>} />
+  const linkedText = chatroomTextLinks(projection.text).length > 0
+  const nativeNode = linkedText ? participantNodeWithoutText(projection.node) : projection.node
+  const native = nativeNode.data.content.length === 0
+    ? undefined
+    : <NativeView {...props} node={nativeNode as ChatNode<'steering'>} />
   const activeRoom = sessionTarget.room
   const message = messageTarget(String(props.sessionId), props.node, projection)
   const reply = replyTarget(message)
@@ -236,6 +243,7 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
       threadPreview={threadPreview}
       onReply={onReply}
       onThread={onThread}
+      linkedText={linkedText}
     />
   </>
 })
@@ -247,50 +255,52 @@ function ParticipantMessage({
   threadPreview,
   onReply,
   onThread,
+  linkedText,
 }: {
-  native: ReactNode
+  native: ReactNode | undefined
   projection: ReturnType<typeof projectChatroomMessage>
   tools: ChatroomMessageToolsProps
   threadPreview: ChatroomThreadPreview | undefined
   onReply: (() => void) | undefined
   onThread: (() => void) | undefined
+  linkedText: boolean
 }): ReactNode {
-  const menu = useChatroomMessageMenu()
-  return (
-    <div
-      className="dsh-chatroom-participant-message"
-      data-dsh-chatroom-message-id={tools.message.messageId}
-      data-dsh-chatroom-own={projection.own}
-      data-dsh-chatroom-selection-mode={tools.selecting || undefined}
-      data-dsh-chatroom-selected={tools.selected || undefined}
-      onContextMenu={menu.open}
-    >
-      <ChatroomSelectionCheckbox tools={tools} />
-      <ChatroomAvatar avatarId={projection.avatarId} avatarUrl={projection.avatarUrl} seed={projection.participantId ?? projection.displayName ?? ''} />
-      <div className="dsh-chatroom-message-column">
-        {projection.displayName !== undefined
-          && <div className="dsh-chatroom-display-name">{projection.displayName}</div>}
-        {!tools.recalled && projection.reply !== undefined && (
-          <div className="dsh-chatroom-reply-quote">
-            <strong>回复 {projection.reply.displayName}</strong>
-            <span>{projection.reply.text}</span>
-          </div>
-        )}
-        {tools.recalled
-          ? <div className="dsh-chatroom-recalled-message">消息已撤回</div>
-          : <>
-              {projection.node.data.content.length > 0 && <div className="dsh-chatroom-native-message">{native}</div>}
-              {projection.files.map(file => <FileCard file={file} key={file.id} />)}
-              {projection.cards.map((card, index) => <ChatroomExternalCardView card={card} key={`${card.kind}:${card.title}:${index}`} />)}
-              {projection.forward !== undefined && <ForwardCard forward={projection.forward} />}
-            </>}
-        <ChatroomReactionBar {...tools} />
-        <ChatroomThreadActivity preview={threadPreview} open={onThread} />
-        <ChatroomInlineMessageActions tools={tools} />
-      </div>
-      <ChatroomMessageContextMenu tools={tools} position={menu.position} close={menu.close} />
-    </div>
-  )
+  const rootRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const root = rootRef.current
+    if (root === null) return
+    return reconcileNativeMessageGroups(
+      root,
+      projection.participantId ?? projection.displayName ?? projection.avatarId,
+      tools.message.createdAt,
+    )
+  }, [projection.avatarId, projection.displayName, projection.participantId, tools.message.createdAt])
+  return <ChatroomMessageFrame
+    rootRef={rootRef}
+    own={projection.own}
+    avatar={<ChatroomAvatar avatarId={projection.avatarId} avatarUrl={projection.avatarUrl} seed={projection.participantId ?? projection.displayName ?? ''} />}
+    displayName={projection.displayName}
+    reply={projection.reply}
+    tools={tools}
+    body={tools.recalled
+      ? <div className="dsh-chatroom-recalled-message">消息已撤回</div>
+      : <>
+          {linkedText && <ChatroomLinkedText className="dsh-chatroom-human-bubble" text={projection.text} />}
+          {native !== undefined && <div className="dsh-chatroom-native-message">{native}</div>}
+          {projection.files.map(file => <FileCard file={file} key={file.id} />)}
+          {projection.cards.map((card, index) => <ChatroomExternalCardView card={card} key={`${card.kind}:${card.title}:${index}`} />)}
+          <ChatroomDocumentLinkCards text={projection.text} existingUrls={projection.cards.flatMap(card => card.url === undefined ? [] : [card.url])} />
+          {projection.forward !== undefined && <ForwardCard forward={projection.forward} />}
+        </>}
+    footer={<ChatroomThreadActivity preview={threadPreview} open={onThread} />}
+  />
+}
+
+function participantNodeWithoutText(node: ParticipantNode): ParticipantNode {
+  return {
+    ...node,
+    data: { ...node.data, content: node.data.content.filter(block => block.type !== 'text') },
+  } as ParticipantNode
 }
 
 function FileCard({ file }: { file: ChatroomFileReference }): JSX.Element {
