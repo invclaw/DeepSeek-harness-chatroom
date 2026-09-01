@@ -85,7 +85,9 @@ describe('participant-specific native message projection', () => {
     )} />)
     expect(screen.getByText('Alice').className).toBe('dsh-chatroom-display-name')
     expect(screen.getByTestId('native').textContent).toBe('自己的消息')
-    expect(screen.getByTestId('native').closest('.dsh-chatroom-participant-message')?.getAttribute('data-dsh-chatroom-own')).toBe('true')
+    const nativeMessage = screen.getByTestId('native').closest('.dsh-chatroom-participant-message')
+    expect(nativeMessage?.getAttribute('data-dsh-chatroom-own')).toBe('true')
+    expect(nativeMessage?.hasAttribute('data-dsh-chatroom-actions-visible')).toBe(false)
 
     rerender(<ChatroomUserMessageNodeView {...messageProps(
       userNode(identifyChatroomText('别人的消息', bob)),
@@ -95,6 +97,19 @@ describe('participant-specific native message projection', () => {
     expect(screen.getByText('Bob').className).toBe('dsh-chatroom-display-name')
     expect(screen.getByTestId('native').closest('.dsh-chatroom-participant-message')?.getAttribute('data-dsh-chatroom-own')).toBe('false')
     expect(screen.getByTestId('native').textContent).toBe('别人的消息')
+  })
+
+  it('leaves native action-rail visibility to the reconciled host flow', () => {
+    const Native = ({ node }: ChatNodeViewProps<'user'>) => <div data-testid="native">{firstText(node)}</div>
+    render(<ChatroomUserMessageNodeView {...messageProps(
+      userNode(identifyChatroomText('连续消息', alice)),
+      alice,
+      Native,
+    )} />)
+
+    const message = screen.getByTestId('native').closest('.dsh-chatroom-participant-message')
+    expect(message?.getAttribute('data-dsh-chatroom-group-position')).toBeNull()
+    expect(message?.getAttribute('data-dsh-chatroom-actions-visible')).toBeNull()
   })
 
   it('renders the URL immediately and adds a Tencent Docs card only after title resolution', async () => {
