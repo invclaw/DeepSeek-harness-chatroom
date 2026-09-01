@@ -216,7 +216,7 @@ function IdentityStep({
     <form className="dsh-chatroom-card" onSubmit={(event) => { event.preventDefault(); void join(name, avatarId) }}>
       <button className="dsh-chatroom-close" aria-label="关闭" type="button" onClick={close}>×</button>
       <h2>共享会话</h2>
-      <p>选择你在共享会话中显示的名字和头像。进入后继续使用 Harness 原生对话界面。</p>
+      <p>选择你在共享会话中显示的名字和头像。</p>
       <input
         className="dsh-chatroom-name"
         data-testid="chatroom-identity-input"

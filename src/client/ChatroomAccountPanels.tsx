@@ -74,7 +74,7 @@ export function ChatroomSettingsSection(props: ChatroomSettingsSectionProps): JS
   }, [])
   return <div className="dsh-chatroom-settings" data-testid="chatroom-settings">
     <header className="dsh-chatroom-settings-header">
-      <div><h2>群聊与账号</h2><p>管理个人账号、平台成员和企业统一登录。</p></div>
+      <div><h2>群聊与账号</h2><p>{superAdmin ? '管理账号、平台成员与企业登录。' : '管理你的账号与协作服务。'}</p></div>
     </header>
     <AutomationPanel {...panelProps} />
     <PromptPanel {...panelProps} />
@@ -99,7 +99,7 @@ function WecomAccountPanel(props: ChatroomAccountPanelProps): JSX.Element {
     <header><div><h2>企业微信账号</h2><p>全站共用一个企业微信授权；任何成员发起的会议和文档操作都使用这份部署账号。</p></div></header>
     <div className="dsh-chatroom-wecom-account-row">
       <span>{authorization?.enabled !== true
-        ? '当前服务未启用企业微信 CLI'
+        ? '企业微信功能当前不可用，请联系管理员。'
         : authorization.status === 'authorized'
           ? '已连接'
           : authorization.status === 'pending' ? '等待扫码确认' : '尚未连接'}</span>
@@ -217,7 +217,7 @@ function PromptPanel(props: ChatroomAccountPanelProps): JSX.Element | null {
             aria-label="群聊主 Agent 系统提示词"
             value={mainAgentPrompt}
             onChange={event => { setMainAgentPrompt(event.target.value) }}
-          /><small>作为真正的 system prompt 注入每个聊天室主会话和分支 Agent；下一轮对话生效。</small></label>
+          /><small>作为聊天室主会话和分支 Agent 的系统提示词，下一轮对话生效。</small></label>
           <label>自动回复判断 Agent<textarea
             aria-label="自动回复判断 Agent 系统提示词"
             value={controllerPrompt}
