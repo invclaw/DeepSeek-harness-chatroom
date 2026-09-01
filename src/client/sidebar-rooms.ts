@@ -31,6 +31,9 @@ const BRANCH_PARENT_ATTRIBUTE = 'data-dsh-chatroom-branch-parent'
 const BRANCH_REPLIES_ATTRIBUTE = 'data-dsh-chatroom-branch-replies'
 const BRANCH_NATIVE_TITLE_ATTRIBUTE = 'data-dsh-chatroom-native-branch-title'
 const BRANCH_COUNT_ATTRIBUTE = 'data-dsh-chatroom-branch-count'
+const BRANCH_OVERFLOW_ATTRIBUTE = 'data-dsh-chatroom-branch-overflow'
+const BRANCH_OVERFLOW_ROW_ATTRIBUTE = 'data-dsh-chatroom-branch-overflow-row'
+const BRANCH_UPDATED_AT_ATTRIBUTE = 'data-dsh-chatroom-branch-updated-at'
 const SESSION_ID_ATTRIBUTE = 'data-dsh-chatroom-session-id'
 const BRANCH_SESSION_PREFIX = 'chatroom-thread-v1-'
 const BRANCH_TITLE_PREFIX = '分支：'
@@ -44,6 +47,7 @@ const OVERFLOW_ROW_ATTRIBUTE = 'data-dsh-chatroom-overflow-row'
 const SIDEBAR_MUTATION_SELECTOR = '[role="tree"], [role="treeitem"], [role="menu"]'
 const GROUP_ORDER_BASE = -10_000
 const SOLO_ORDER_BASE = -6_000
+const BRANCH_VISIBLE_LIMIT = 2
 // Categories merge every Workspace into one list, so they need their own
 // truncation instead of the native per-Workspace limit of five.
 const CATEGORY_VISIBLE_LIMIT = 8
@@ -57,6 +61,7 @@ interface BranchRowFacts {
   readonly parentSessionId: string | undefined
   readonly parentTitle: string | undefined
   readonly replyCount: number | undefined
+  readonly updatedAt: number
 }
 
 interface RowBinding {
@@ -77,6 +82,7 @@ interface OriginalRowAttributes {
 // Native rows normally have no tooltip or explicit aria-label. Remembering the
 // original values lets a row be reused by React without leaving plugin text on it.
 const originalRowAttributes = new WeakMap<HTMLElement, OriginalRowAttributes>()
+const expandedBranchParents = new WeakMap<HTMLElement, Set<string>>()
 let activeNativeMenuRoomId: string | undefined
 let activeNativeMenuItem: HTMLElement | undefined
 
@@ -118,6 +124,17 @@ export function installSidebarRoomRows(store: ChatroomClientStore, sessions: ISe
   const observer = new MutationObserver(records => {
     if (records.some(mutationTouchesSidebar)) schedule()
   })
+  const openGlobalSearch = (event: MouseEvent): void => {
+    const target = event.target instanceof Element
+      ? event.target.closest('button[aria-label="搜索会话"]')
+      : null
+    if (target === null) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    store.openSearch()
+  }
+  document.addEventListener('click', openGlobalSearch, true)
   observer.observe(document.body, { childList: true, subtree: true, characterData: true })
   const unsubscribe = store.subscribe(schedule)
   const unsubscribeSessions = sessions.list.subscribe(schedule)
@@ -126,6 +143,7 @@ export function installSidebarRoomRows(store: ChatroomClientStore, sessions: ISe
     unsubscribe()
     unsubscribeSessions()
     observer.disconnect()
+    document.removeEventListener('click', openGlobalSearch, true)
     const decoratedRows = document.querySelectorAll<HTMLElement>(
       `${ROOM_ROW_SELECTOR}, [${BRANCH_ROW_ATTRIBUTE}], [${SESSION_ID_ATTRIBUTE}]`,
     )
@@ -165,8 +183,13 @@ export function reconcileSidebarRoomRows(
   for (const row of rows) {
     decorateNativeConversationNavigation(row, closeDirect)
     const selected = row.getAttribute('aria-selected') === 'true'
-    const sessionId = nativeSessionId(row) ?? (selected ? currentSessionId : undefined)
-    const summary = sessionSummary(sessionList, sessionId) ?? uniquelyTitledBranchSummary(sessionList, row)
+    const titledBranch = uniquelyTitledBranchSummary(sessionList, row)
+    // An unambiguous branch summary supplies its Session ID without the drag
+    // probe, whose host state update can otherwise replace and re-probe the row.
+    const sessionId = titledBranch === undefined
+      ? nativeSessionId(row) ?? (selected ? currentSessionId : undefined)
+      : String(titledBranch.id)
+    const summary = sessionSummary(sessionList, sessionId) ?? titledBranch
     const bySession = sessionId === undefined
       ? undefined
       : takeRoom(remaining, candidate => candidate.sessionId === sessionId)
@@ -186,28 +209,17 @@ export function reconcileSidebarRoomRows(
     bindings.push({ row, sessionId, summary, branch, room })
   }
 
-  // Count from the complete session projection so virtualized or collapsed
-  // branch rows still expose an accurate parent count.
+  // The parent badge reports the branches represented in this sidebar pass.
+  // Counting every session summary includes stale or non-rendered branch
+  // records and makes the badge disagree with the expandable branch rows.
   const branchCounts = new Map<string, number>()
   const countedBranches = new Set<string>()
-  if (sessionList !== undefined) {
-    for (const summary of Object.values(sessionList.byId)) {
-      if (!summaryLooksLikeBranch(summary) || summary.parentId === undefined) continue
-      const id = String(summary.id)
-      const parent = String(summary.parentId)
-      countedBranches.add(id)
-      branchCounts.set(parent, (branchCounts.get(parent) ?? 0) + 1)
-    }
-  }
   for (const binding of bindings) {
     const branch = binding.branch
     if (branch === undefined || branch.parentSessionId === undefined) continue
-    if (branch.sessionId !== undefined && countedBranches.has(branch.sessionId)) continue
-    if (branch.sessionId === undefined && sessionList !== undefined
-      && Object.values(sessionList.byId).some(summary =>
-        summaryLooksLikeBranch(summary)
-        && summary.displayTitle.trim() === branch.displayTitle
-        && String(summary.parentId ?? '') === branch.parentSessionId)) continue
+    const key = branch.sessionId ?? `${branch.parentSessionId}\u0000${branch.displayTitle}`
+    if (countedBranches.has(key)) continue
+    countedBranches.add(key)
     branchCounts.set(branch.parentSessionId, (branchCounts.get(branch.parentSessionId) ?? 0) + 1)
   }
 
@@ -215,8 +227,10 @@ export function reconcileSidebarRoomRows(
     const { row, sessionId, branch, room } = binding
     if (room !== undefined) {
       clearBranchRow(row)
+      row.setAttribute(SESSION_ID_ATTRIBUTE, room.sessionId)
       decorateRoomRow(row, room, roomAvatars(room, snapshot), groupOrder++, setPinned)
-      decorateBranchParent(row, room.title, sessionId === undefined ? 0 : branchCounts.get(sessionId) ?? 0)
+      const parentSessionId = sessionId ?? room.sessionId
+      decorateBranchParent(row, room.title, branchCounts.get(parentSessionId) ?? 0)
       setRowCategory(row, 'group')
       categorized.push(row)
       continue
@@ -417,7 +431,15 @@ function resolveBranch(
   const replyCount = preview !== undefined && preview.totalMessages > 0
     ? preview.totalMessages
     : undefined
-  return { sessionId, displayTitle, topic, parentSessionId, parentTitle, replyCount }
+  return {
+    sessionId,
+    displayTitle,
+    topic,
+    parentSessionId,
+    parentTitle,
+    replyCount,
+    updatedAt: summary?.updatedAt ?? preview?.thread.createdAt ?? 0,
+  }
 }
 
 function summaryLooksLikeBranch(summary: SessionSummary): boolean {
@@ -484,10 +506,15 @@ function decorateRoomRow(
 
 function decorateBranchRow(row: HTMLElement, facts: BranchRowFacts): void {
   row.dataset.dshChatroomBranchRow = ''
-  if (facts.sessionId !== undefined) row.dataset.dshChatroomBranchSessionId = facts.sessionId
-  else delete row.dataset.dshChatroomBranchSessionId
+  if (facts.sessionId !== undefined) {
+    row.dataset.dshChatroomBranchSessionId = facts.sessionId
+    row.setAttribute(SESSION_ID_ATTRIBUTE, facts.sessionId)
+  } else {
+    delete row.dataset.dshChatroomBranchSessionId
+  }
   if (facts.parentSessionId !== undefined) row.dataset.dshChatroomBranchParentSessionId = facts.parentSessionId
   else delete row.dataset.dshChatroomBranchParentSessionId
+  row.setAttribute(BRANCH_UPDATED_AT_ATTRIBUTE, String(facts.updatedAt))
   row.dataset.dshChatroomBranchTopic = facts.topic
   if (facts.parentTitle === undefined) delete row.dataset.dshChatroomBranchParentTitle
   else row.dataset.dshChatroomBranchParentTitle = facts.parentTitle
@@ -630,6 +657,8 @@ function clearBranchRow(row: HTMLElement): void {
   delete row.dataset.dshChatroomBranchRow
   delete row.dataset.dshChatroomBranchSessionId
   delete row.dataset.dshChatroomBranchParentSessionId
+  row.removeAttribute(BRANCH_UPDATED_AT_ATTRIBUTE)
+  row.removeAttribute(BRANCH_OVERFLOW_ROW_ATTRIBUTE)
   delete row.dataset.dshChatroomBranchTopic
   delete row.dataset.dshChatroomBranchParentTitle
   row.removeAttribute(BRANCH_REPLIES_ATTRIBUTE)
@@ -650,6 +679,7 @@ function clearBranchRow(row: HTMLElement): void {
     }
     originalRowAttributes.delete(row)
   }
+  categoryRowShell(row).removeAttribute(BRANCH_OVERFLOW_ROW_ATTRIBUTE)
 }
 
 function clearRoomDecorations(row: HTMLElement): void {
@@ -696,7 +726,7 @@ function decorateSoloRow(row: HTMLElement, order: number): void {
   const avatar = row.ownerDocument.createElement('span')
   avatar.setAttribute(SOLO_AVATAR_ATTRIBUTE, '')
   avatar.setAttribute('aria-hidden', 'true')
-  avatar.textContent = '✦'
+  avatar.textContent = '✧'
   row.prepend(avatar)
 }
 
@@ -724,8 +754,22 @@ function reconcileWorkspaceCategories(
   expandNativeOverflowButtons(primary)
   const groupRows = rows.filter(row => row.getAttribute(CATEGORY_ATTRIBUTE) === 'group')
   const soloRows = rows.filter(row => row.getAttribute(CATEGORY_ATTRIBUTE) === 'solo')
-  reconcileCategoryHeader(primary, 'group', '群聊', groupRows.length, -11_000)
-  reconcileCategoryOverflow(primary, 'group', groupRows, GROUP_ORDER_BASE)
+  reconcileBranchOverflow(primary, groupRows)
+  reconcileGroupOrder(primary, groupRows)
+  reconcileCategoryHeader(
+    primary,
+    'group',
+    '群聊',
+    groupRows.filter(row => row.dataset.dshChatroomRoomRow !== undefined).length,
+    -11_000,
+  )
+  reconcileCategoryOverflow(
+    primary,
+    'group',
+    groupRows.filter(row => row.dataset.dshChatroomRoomRow !== undefined),
+    GROUP_ORDER_BASE,
+  )
+  reconcileHiddenRoomBranches(primary, groupRows)
   reconcileCategoryHeader(primary, 'solo', 'Solo', soloRows.length, -7_000)
   reconcileCategoryOverflow(primary, 'solo', soloRows, SOLO_ORDER_BASE)
   const peers = directDirectoryPeers(snapshot.directPeers ?? [], snapshot.directConversations ?? [])
@@ -785,6 +829,171 @@ function categoryExpandedAttribute(category: 'group' | 'solo'): string {
   return `data-dsh-chatroom-${category}-overflow-expanded`
 }
 
+// A retained control owns one room's expansion state. Reconciliation can then
+// follow live Session updates without collapsing a room the reader expanded.
+function reconcileBranchOverflow(root: HTMLElement, groupRows: readonly HTMLElement[]): void {
+  const expandedParents = expandedBranchParentsFor(root)
+  const branches = groupRows.filter(row => row.dataset.dshChatroomBranchParentSessionId !== undefined)
+  const byParent = new Map<string, HTMLElement[]>()
+  for (const row of branches) {
+    row.removeAttribute(BRANCH_OVERFLOW_ROW_ATTRIBUTE)
+    categoryRowShell(row).removeAttribute(BRANCH_OVERFLOW_ROW_ATTRIBUTE)
+    const parentSessionId = row.dataset.dshChatroomBranchParentSessionId!
+    const siblings = byParent.get(parentSessionId) ?? []
+    siblings.push(row)
+    byParent.set(parentSessionId, siblings)
+  }
+  const retained = new Map(
+    [...root.querySelectorAll<HTMLElement>(`:scope > [${BRANCH_OVERFLOW_ATTRIBUTE}]`)]
+      .map(control => [control.dataset.parentSessionId ?? '', control]),
+  )
+  for (const [parentSessionId, siblingRows] of byParent) {
+    const sorted = sortBranchRows(siblingRows)
+    let control = retained.get(parentSessionId)
+    retained.delete(parentSessionId)
+    if (sorted.length <= BRANCH_VISIBLE_LIMIT) {
+      expandedParents.delete(parentSessionId)
+      control?.remove()
+      continue
+    }
+    if (control === undefined) {
+      control = root.ownerDocument.createElement('div')
+      control.setAttribute(BRANCH_OVERFLOW_ATTRIBUTE, '')
+      control.dataset.parentSessionId = parentSessionId
+      const button = root.ownerDocument.createElement('button')
+      button.type = 'button'
+      const owner = control
+      button.onclick = () => {
+        if (expandedParents.has(parentSessionId)) expandedParents.delete(parentSessionId)
+        else expandedParents.add(parentSessionId)
+        owner.dataset.expanded = String(expandedParents.has(parentSessionId))
+        paintBranchOverflow(owner, sortBranchRows(branchRowsForParent(root, parentSessionId)))
+      }
+      control.append(button)
+      root.append(control)
+    }
+    control.dataset.expanded = String(expandedParents.has(parentSessionId))
+    control.dataset.total = String(sorted.length)
+    paintBranchOverflow(control, sorted)
+  }
+  for (const [parentSessionId, control] of retained) {
+    expandedParents.delete(parentSessionId)
+    control.remove()
+  }
+}
+
+function expandedBranchParentsFor(root: HTMLElement): Set<string> {
+  const retained = expandedBranchParents.get(root)
+  if (retained !== undefined) return retained
+  const initial = new Set(
+    [...root.querySelectorAll<HTMLElement>(`:scope > [${BRANCH_OVERFLOW_ATTRIBUTE}][data-expanded="true"]`)]
+      .map(control => control.dataset.parentSessionId)
+      .filter((parentSessionId): parentSessionId is string => parentSessionId !== undefined),
+  )
+  expandedBranchParents.set(root, initial)
+  return initial
+}
+
+// Native Sessions are globally ordered, but branch navigation is parent based.
+// Reserve one continuous order range per room so its branches and control never
+// fall below the next room when updatedAt changes their relative order.
+function reconcileGroupOrder(root: HTMLElement, groupRows: readonly HTMLElement[]): void {
+  const controls = new Map(
+    [...root.querySelectorAll<HTMLElement>(`:scope > [${BRANCH_OVERFLOW_ATTRIBUTE}]`)]
+      .map(control => [control.dataset.parentSessionId ?? '', control]),
+  )
+  const branchesByParent = new Map<string, HTMLElement[]>()
+  for (const row of groupRows.filter(candidate => candidate.dataset.dshChatroomBranchRow !== undefined)) {
+    const parentSessionId = row.dataset.dshChatroomBranchParentSessionId
+    if (parentSessionId === undefined) continue
+    const siblings = branchesByParent.get(parentSessionId) ?? []
+    siblings.push(row)
+    branchesByParent.set(parentSessionId, siblings)
+  }
+  const placed = new Set<HTMLElement>()
+  let order = GROUP_ORDER_BASE
+  for (const roomRow of groupRows.filter(row => row.dataset.dshChatroomRoomRow !== undefined)) {
+    setCategorizedRowOrder(roomRow, order++)
+    placed.add(roomRow)
+    const parentSessionId = roomRow.dataset.dshChatroomSessionId
+    if (parentSessionId === undefined) continue
+    for (const branchRow of sortBranchRows(branchesByParent.get(parentSessionId) ?? [])) {
+      setCategorizedRowOrder(branchRow, order++)
+      placed.add(branchRow)
+    }
+    const control = controls.get(parentSessionId)
+    if (control !== undefined) control.style.order = String(order++)
+    controls.delete(parentSessionId)
+  }
+  for (const row of groupRows) {
+    if (placed.has(row)) continue
+    setCategorizedRowOrder(row, order++)
+  }
+  for (const control of controls.values()) control.style.order = String(order++)
+}
+
+function setCategorizedRowOrder(row: HTMLElement, order: number): void {
+  row.style.order = String(order)
+  const shell = categoryRowShell(row)
+  if (shell !== row) shell.style.order = row.style.order
+}
+
+function branchRowsForParent(root: HTMLElement, parentSessionId: string): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(`[${BRANCH_ROW_ATTRIBUTE}]`)]
+    .filter(row => row.dataset.dshChatroomBranchParentSessionId === parentSessionId)
+}
+
+function sortBranchRows(rows: readonly HTMLElement[]): HTMLElement[] {
+  return [...rows].sort((left, right) => {
+    const recency = Number(right.getAttribute(BRANCH_UPDATED_AT_ATTRIBUTE) ?? '0')
+      - Number(left.getAttribute(BRANCH_UPDATED_AT_ATTRIBUTE) ?? '0')
+    return recency || Number(left.style.order) - Number(right.style.order)
+  })
+}
+
+function paintBranchOverflow(control: HTMLElement, rows: readonly HTMLElement[]): void {
+  const expanded = control.dataset.expanded === 'true'
+  rows.forEach((row, index) => {
+    const shell = categoryRowShell(row)
+    if (!expanded && index >= BRANCH_VISIBLE_LIMIT) {
+      row.setAttribute(BRANCH_OVERFLOW_ROW_ATTRIBUTE, '')
+      shell.setAttribute(BRANCH_OVERFLOW_ROW_ATTRIBUTE, '')
+    } else {
+      row.removeAttribute(BRANCH_OVERFLOW_ROW_ATTRIBUTE)
+      shell.removeAttribute(BRANCH_OVERFLOW_ROW_ATTRIBUTE)
+    }
+  })
+  const button = control.querySelector('button')
+  if (button === null) return
+  button.setAttribute('aria-expanded', String(expanded))
+  const hiddenCount = rows.length - BRANCH_VISIBLE_LIMIT
+  const label = expanded ? '收起' : `展开其余 ${String(hiddenCount)} 个分支`
+  if (button.textContent !== label) button.textContent = label
+}
+
+function reconcileHiddenRoomBranches(root: HTMLElement, groupRows: readonly HTMLElement[]): void {
+  for (const row of groupRows.filter(candidate => candidate.dataset.dshChatroomBranchRow !== undefined)) {
+    const shell = categoryRowShell(row)
+    if (shell.getAttribute(OVERFLOW_ROW_ATTRIBUTE) === 'group') shell.removeAttribute(OVERFLOW_ROW_ATTRIBUTE)
+  }
+  for (const control of root.querySelectorAll<HTMLElement>(`:scope > [${BRANCH_OVERFLOW_ATTRIBUTE}]`)) {
+    if (control.getAttribute(OVERFLOW_ROW_ATTRIBUTE) === 'group') control.removeAttribute(OVERFLOW_ROW_ATTRIBUTE)
+  }
+  const hiddenParents = groupRows
+    .filter(row => row.dataset.dshChatroomRoomRow !== undefined
+      && categoryRowShell(row).getAttribute(OVERFLOW_ROW_ATTRIBUTE) === 'group')
+    .map(row => row.dataset.dshChatroomSessionId)
+    .filter((sessionId): sessionId is string => sessionId !== undefined)
+  for (const parentSessionId of hiddenParents) {
+    for (const branch of branchRowsForParent(root, parentSessionId)) {
+      categoryRowShell(branch).setAttribute(OVERFLOW_ROW_ATTRIBUTE, 'group')
+    }
+    const control = [...root.querySelectorAll<HTMLElement>(`:scope > [${BRANCH_OVERFLOW_ATTRIBUTE}]`)]
+      .find(candidate => candidate.dataset.parentSessionId === parentSessionId)
+    control?.setAttribute(OVERFLOW_ROW_ATTRIBUTE, 'group')
+  }
+}
+
 // A categorized row is positioned through its HoverCard wrapper when the native
 // markup provides one, so truncation has to hide the same element the category
 // collapse hides. A wrapper shared by several rows is not that element: hiding it
@@ -821,13 +1030,22 @@ function reconcileCategoryOverflow(
     button.onclick = () => {
       const attribute = categoryExpandedAttribute(category)
       root.setAttribute(attribute, String(root.getAttribute(attribute) !== 'true'))
-      paintCategoryOverflow(root, owner, category, orderBase)
+      paintCategoryOverflow(root, owner, category)
     }
     control.append(button)
     root.append(control)
   }
   control.dataset.total = String(rows.length)
-  paintCategoryOverflow(root, control, category, orderBase)
+  control.dataset.collapsedOrder = rows[CATEGORY_VISIBLE_LIMIT]?.style.order
+    ?? String(orderBase + CATEGORY_VISIBLE_LIMIT)
+  const categorizedOrders = [...root.querySelectorAll<HTMLElement>(`[${CATEGORY_ATTRIBUTE}="${category}"]`)]
+    .map(row => Number(row.style.order))
+  if (category === 'group') {
+    categorizedOrders.push(...[...root.querySelectorAll<HTMLElement>(`:scope > [${BRANCH_OVERFLOW_ATTRIBUTE}]`)]
+      .map(branchControl => Number(branchControl.style.order)))
+  }
+  control.dataset.expandedOrder = String(Math.max(...categorizedOrders) + 1)
+  paintCategoryOverflow(root, control, category)
 }
 
 // Expansion is a root attribute the stylesheet reads, so a toggle repaints its
@@ -836,11 +1054,12 @@ function paintCategoryOverflow(
   root: HTMLElement,
   control: HTMLElement,
   category: 'group' | 'solo',
-  orderBase: number,
 ): void {
   const total = Number(control.dataset.total ?? '0')
   const expanded = root.getAttribute(categoryExpandedAttribute(category)) === 'true'
-  control.style.order = String(orderBase + (expanded ? total : CATEGORY_VISIBLE_LIMIT))
+  control.style.order = expanded
+    ? control.dataset.expandedOrder ?? String(total)
+    : control.dataset.collapsedOrder ?? String(CATEGORY_VISIBLE_LIMIT)
   const button = control.querySelector('button')
   if (button === null) return
   button.setAttribute('aria-expanded', String(expanded))
@@ -976,10 +1195,13 @@ function clearCategoryRoot(root: HTMLElement): void {
   root.removeAttribute('data-dsh-chatroom-direct-collapsed')
   root.removeAttribute(categoryExpandedAttribute('group'))
   root.removeAttribute(categoryExpandedAttribute('solo'))
-  const owned = `:scope > [${CATEGORY_HEADER_ATTRIBUTE}], :scope > [${DIRECT_ROW_ATTRIBUTE}], :scope > [${CATEGORY_OVERFLOW_ATTRIBUTE}]`
+  const owned = `:scope > [${CATEGORY_HEADER_ATTRIBUTE}], :scope > [${DIRECT_ROW_ATTRIBUTE}], :scope > [${CATEGORY_OVERFLOW_ATTRIBUTE}], :scope > [${BRANCH_OVERFLOW_ATTRIBUTE}]`
   for (const header of root.querySelectorAll(owned)) header.remove()
   for (const shell of root.querySelectorAll(`[${OVERFLOW_ROW_ATTRIBUTE}]`)) {
     shell.removeAttribute(OVERFLOW_ROW_ATTRIBUTE)
+  }
+  for (const shell of root.querySelectorAll(`[${BRANCH_OVERFLOW_ROW_ATTRIBUTE}]`)) {
+    shell.removeAttribute(BRANCH_OVERFLOW_ROW_ATTRIBUTE)
   }
   for (const section of root.querySelectorAll<HTMLElement>(`[${NATIVE_GROUP_SECTION_ATTRIBUTE}]`)) {
     section.removeAttribute(NATIVE_GROUP_SECTION_ATTRIBUTE)

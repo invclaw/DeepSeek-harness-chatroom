@@ -27,6 +27,25 @@ async function writeClipboard(text: string): Promise<boolean> {
   }
 }
 
+/** Compact copy action with transient success feedback. */
+export function ChatroomCopyButton({ text }: { readonly text: string }): JSX.Element | null {
+  const [copied, setCopied] = useState(false)
+  if (text === '') return null
+  return <button
+    type="button"
+    aria-label={copied ? '已复制' : '复制'}
+    title={copied ? '已复制' : '复制'}
+    onClick={() => {
+      if (copied) return
+      void writeClipboard(text).then((written) => {
+        if (!written) return
+        setCopied(true)
+        globalThis.setTimeout(() => { setCopied(false) }, 1_000)
+      })
+    }}
+  >{copied ? '✓' : '▣'} <span className="dsh-chatroom-action-label">{copied ? '已复制' : '复制'}</span></button>
+}
+
 export interface ChatroomMessageToolsProps {
   readonly roomId: string
   readonly message: ChatroomForwardItem
@@ -51,7 +70,6 @@ export function ChatroomInlineMessageActions({
 }: {
   readonly tools: ChatroomMessageToolsProps
 }): JSX.Element | null {
-  const [copied, setCopied] = useState(false)
   const [overflowOpen, setOverflowOpen] = useState(false)
   const copyText = tools.copyText
   useEffect(() => {
@@ -71,17 +89,10 @@ export function ChatroomInlineMessageActions({
     && reaction.emoji === '👍'
     && reaction.participantIds.includes(tools.identity?.participantId ?? ''))
   if (copyText === undefined && !canAct) return null
-  const copy = (): void => {
-    if (copyText === undefined || copied) return
-    void writeClipboard(copyText).then((written) => {
-      if (!written) return
-      setCopied(true)
-      globalThis.setTimeout(() => { setCopied(false) }, 1_000)
-    })
-  }
   return (
     <div className="dsh-chatroom-message-actions">
       {tools.onReply !== undefined && <button type="button" aria-label="回复" onClick={tools.onReply}>↩ <span className="dsh-chatroom-action-label">回复</span></button>}
+      {copyText !== undefined && <ChatroomCopyButton text={copyText} />}
       {canAct && (
         <button
           type="button"
@@ -111,7 +122,6 @@ export function ChatroomInlineMessageActions({
                   >{emoji}</button>
                 ))}
               </span>}
-              {copyText !== undefined && <button type="button" role="menuitem" onClick={() => { copy(); setOverflowOpen(false) }}>{copied ? '✓ 已复制' : '▣ 复制'}</button>}
               {canAct && <button type="button" role="menuitem" onClick={() => { tools.toggleSelection(tools.roomId, tools.message); setOverflowOpen(false) }}>{tools.selected ? '✓ 取消选择' : '☑ 多选'}</button>}
               {tools.canRecall && <button type="button" role="menuitem" onClick={() => { void tools.recallMessage(tools.roomId, tools.message.messageId); setOverflowOpen(false) }}>↶ 撤回</button>}
             </span>

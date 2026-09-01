@@ -57,15 +57,17 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
     nativeActions?.setAttribute('data-dsh-chatroom-native-actions', '')
     const onContextMenu = (event: MouseEvent) => { menu.open(event) }
     root.addEventListener('contextmenu', onContextMenu)
+    root.dataset.dshChatroomMessageId = String(props.messageId)
     root.toggleAttribute('data-dsh-chatroom-selected', selected)
     root.toggleAttribute('data-dsh-chatroom-selection-mode', selecting)
     return () => {
       root.removeEventListener('contextmenu', onContextMenu)
       root.removeAttribute('data-dsh-chatroom-selected')
       root.removeAttribute('data-dsh-chatroom-selection-mode')
+      delete root.dataset.dshChatroomMessageId
       nativeActions?.removeAttribute('data-dsh-chatroom-native-actions')
     }
-  }, [menu.open, room, selected, selecting])
+  }, [menu.open, props.messageId, room, selected, selecting])
   if (room === undefined || assistant?.kind !== 'assistant') return null
   const text = assistant.blocks.flatMap(block => block.kind === 'text' ? [block.text] : []).join('')
     .trim().replace(/\s+/gu, ' ')

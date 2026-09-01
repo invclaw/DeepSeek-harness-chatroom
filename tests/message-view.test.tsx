@@ -157,9 +157,9 @@ describe('participant-specific native message projection', () => {
     expect(screen.getByRole('button', { name: '点赞' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '分支' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '转发' })).toBeTruthy()
-    expect(screen.queryByRole('menuitem', { name: '▣ 复制' })).toBeNull()
+    expect(screen.getByRole('button', { name: '复制' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '更多消息操作' }))
-    expect(screen.getByRole('menuitem', { name: '▣ 复制' })).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: '▣ 复制' })).toBeNull()
     expect(screen.getByRole('menuitem', { name: '☑ 多选' })).toBeTruthy()
     expect(screen.queryByRole('menuitem', { name: '⑂ 分支' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '回复' }))
@@ -343,6 +343,54 @@ describe('participant-specific native message projection', () => {
     expect(openThread).toHaveBeenCalledWith('lobby', root)
   })
 
+  it('renders an appended meeting summary as a quotable and forwardable AI message block', () => {
+    const setReply = vi.fn()
+    const openForward = vi.fn()
+    const text = '## 会议总结 · 快速会议\n\n结论：按计划发布。'
+    const useChatroom = messageProps(userNode(identifyChatroomText('参考', bob)), alice, () => null).useChatroom
+    const finalNode = {
+      kind: 'assistant', seq: 12, messageId: 'assistant:summary', time: 12,
+      turn: 0, step: 0, blocks: [{ kind: 'text', text }],
+    }
+    const node = {
+      key: 'assistant-summary', kind: 'assistant-step', seq: 12,
+      location: { kind: 'step', turn: { turn: 0 } },
+      data: { status: 'settled', turn: 0, step: 0, blocks: finalNode.blocks, time: 12, finalNode },
+    }
+    const Native = () => <div>{text}</div>
+    const props = {
+      node,
+      sessionId: 'chatroom-v1-lobby' as never,
+      nativeMessageView: Native,
+      useChatroom,
+      resolveTarget: () => ({
+        kind: 'room' as const,
+        room: { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' },
+      }),
+      useTurnData: () => undefined,
+      useSession: (selector: (snapshot: unknown) => unknown) => selector({
+        nodes: [{ kind: 'assistant', messageId: 'assistant:summary', seq: 12, blocks: [{ kind: 'text', text }], time: 12 }],
+        chat: { order: [], nodes: new Map() },
+      }),
+      setReply,
+      openThread: vi.fn(async () => undefined),
+      toggleReaction: vi.fn(async () => undefined),
+      openForward,
+      toggleMessageSelection: vi.fn(),
+      recallMessage: vi.fn(async () => false),
+    } as unknown as Parameters<typeof ChatroomAssistantNodeView>[0]
+    render(<ChatroomAssistantNodeView {...props} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '回复' }))
+    expect(setReply).toHaveBeenCalledWith('lobby', expect.objectContaining({ messageId: 'assistant:summary' }))
+    expect(screen.getByRole('button', { name: '复制' })).toBeTruthy()
+    expect(document.querySelector('[data-dsh-chatroom-message-id="assistant:summary"]')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '转发' }))
+    expect(openForward).toHaveBeenCalledWith('lobby', expect.objectContaining({
+      messageId: 'assistant:summary', role: 'ai', text: expect.stringContaining('会议总结'),
+    }))
+  })
+
   it('folds completed Think and tool rows into one expandable process summary', () => {
     const finalNode = {
       key: 'assistant-final',
@@ -365,7 +413,7 @@ describe('participant-specific native message projection', () => {
       node: finalNode,
       sessionId: 'chatroom-v1-lobby',
       nativeMessageView: Native,
-      resolveTarget: () => ({ kind: 'room', room: { id: 'lobby' } }),
+      resolveTarget: () => ({ kind: 'thread', room: { id: 'lobby' }, threadId: 'thread-id' }),
       useTurnData: () => ({ closing: { finalNode: { seq: 4 } } }),
       useSession: (selector: (snapshot: unknown) => unknown) => selector({
         chat: { order: [...nodes.keys()], nodes },
@@ -488,6 +536,11 @@ function messageProps(
       directMessages: [],
       directError: undefined,
       newSessionModes: {},
+      searchOpen: false,
+      searchQuery: '',
+      searchBusy: false,
+      searchResults: [],
+      searchError: undefined,
       ...viewPatch,
     }),
     nativeMessageView,

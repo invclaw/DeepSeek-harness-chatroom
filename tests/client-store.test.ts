@@ -89,6 +89,34 @@ describe('ChatroomClientStore', () => {
     expect(store.getSnapshot().open).toBe(false)
   })
 
+  it('searches visible content and opens the selected room message', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const result = {
+      id: 'message:lobby:user:7', kind: 'message' as const, title: 'Bob', subtitle: '群聊 · AI 聊天室',
+      preview: '部署完成', conversationKind: 'room' as const, conversationId: room.id,
+      sessionId: room.sessionId, messageId: 'user:7', createdAt: 7,
+    }
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ query: '部署', results: [result] }))
+      .mockResolvedValueOnce(jsonResponse({ room }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const openSession = vi.fn(() => true)
+    const store = new ChatroomClientStore(openSession)
+    await store.start()
+
+    store.openSearch()
+    await store.searchAll('部署')
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/plugins/deepseek-harness-chatroom/api/search?q=%E9%83%A8%E7%BD%B2')
+    expect(store.getSnapshot()).toMatchObject({ searchOpen: true, searchBusy: false, searchResults: [result] })
+
+    await store.openSearchResult(result)
+    expect(store.getSnapshot().searchOpen).toBe(false)
+    expect(openSession).toHaveBeenCalledWith(room.sessionId)
+  })
+
   it('retargets a retained branch runtime without carrying composer state across threads', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()
@@ -116,6 +144,62 @@ describe('ChatroomClientStore', () => {
     })
     expect(store.agentTargetForSession(second.sessionId)).toEqual({ kind: 'thread', room, threadId: 'thread-2' })
     expect(store.agentTargetForSession(first.sessionId)).toBeUndefined()
+  })
+
+  it('does not duplicate long-lived room streams inside an isolated branch frame', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const frame = {
+      threadId: 'thread-1', sessionId: 'chatroom-thread-v1-thread-1', roomId: room.id,
+      parentSessionId: room.sessionId,
+    }
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(identity, [room]))))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore(() => true, frame)
+
+    await store.start()
+    store.activateSession(frame.sessionId, '分支：主题', false, room.sessionId)
+
+    expect(FakeEventSource.instances).toEqual([])
+    expect(store.getSnapshot()).toMatchObject({ room, connection: 'online' })
+  })
+
+  it('recognizes a branch Session opened directly from the native sidebar', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const thread = {
+      id: 'thread-id', roomId: room.id, sessionId: 'chatroom-thread-v1-thread-id', createdAt: 1,
+      root: { messageId: 'user:1', displayName: 'Bob', text: '主题', role: 'human' as const },
+    }
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(identity, [room]))))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    store.activateSession(room.sessionId)
+    FakeEventSource.instances[1]?.emit({
+      type: 'snapshot', room, identity, online: 1, members: [], reactions: [],
+      threadPreviews: [{ thread, totalMessages: 1, recentMessages: [] }],
+    })
+
+    expect(store.agentTargetForSession(thread.sessionId)).toMatchObject({ kind: 'thread', room, threadId: thread.id })
+    expect(store.roomForSession(thread.sessionId)).toMatchObject(room)
+  })
+
+  it('recognizes a native sidebar branch before the parent room SSE has loaded', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const sessionId = 'chatroom-thread-v1-cold-thread'
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(identity, [room]))))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+
+    store.activateSession(sessionId, '分支：冷启动', true, room.sessionId)
+
+    expect(store.roomForSession(sessionId)).toEqual(room)
+    expect(store.agentTargetForSession(sessionId)).toEqual({ kind: 'thread', room, threadId: 'cold-thread' })
+    expect(store.getSnapshot()).toMatchObject({ room, connection: 'connecting' })
+    expect(FakeEventSource.instances.at(-1)?.url).toBe('/plugins/deepseek-harness-chatroom/api/events?roomId=lobby')
   })
 
   it('creates a second independent room and adds it to the directory', async () => {
@@ -537,15 +621,12 @@ describe('ChatroomClientStore', () => {
     expect(store.getSnapshot().room).toEqual(resetRoom)
   })
 
-  it('continues a pending quick meeting after the current account authorizes', async () => {
+  it('directs an unauthorized quick meeting to the shared-account Settings panel', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
-      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'unauthorized', qrAvailable: false }))
-      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'pending', qrAvailable: true }))
-      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'authorized', qrAvailable: false }))
-      .mockResolvedValueOnce(jsonResponse({ accepted: true, card: { kind: 'meeting', title: '快速会议' } }, 201))
+      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'unauthorized', qrAvailable: false, canManage: true }))
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('EventSource', FakeEventSource)
     const store = new ChatroomClientStore()
@@ -553,12 +634,33 @@ describe('ChatroomClientStore', () => {
 
     await expect(store.quickMeeting(room.id)).resolves.toBe(false)
     expect(store.getSnapshot()).toMatchObject({
-      wecomAuthorizationOpen: true,
-      wecomAuthorization: { status: 'pending', qrAvailable: true },
+      wecomAuthorizationOpen: false,
+      wecomAuthorization: { status: 'unauthorized', qrAvailable: false },
+      wecomError: '共享企业微信账号尚未连接，请由管理员前往“设置 → 群聊与账号”完成绑定。',
     })
-    await store.loadWecomAuthorization()
-    expect(JSON.parse(String((fetchMock.mock.calls[4]?.[1] as RequestInit).body))).toEqual({ roomId: room.id })
-    expect(store.getSnapshot()).toMatchObject({ wecomBusy: false, wecomError: undefined })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('disconnects and rebinds the deployment-wide Enterprise WeChat account', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'unauthorized', qrAvailable: false, canManage: true }))
+      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'pending', qrAvailable: true, canManage: true }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+
+    await expect(store.rebindWecomAuthorization()).resolves.toBe(true)
+
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: 'DELETE' })
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: 'POST' })
+    expect(store.getSnapshot()).toMatchObject({
+      wecomBusy: false,
+      wecomAuthorization: { status: 'pending', qrAvailable: true, canManage: true },
+    })
   })
 })
 

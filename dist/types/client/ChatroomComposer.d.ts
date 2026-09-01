@@ -16,6 +16,7 @@ interface ChatroomSessionInjected extends ChatroomComposerBaseInjected {
     stopRoomSession(roomId: string): Promise<boolean>;
     newRoomSession(roomId: string): Promise<boolean>;
     quickMeeting(roomId: string): Promise<boolean>;
+    quickThreadMeeting(threadId: string): Promise<boolean>;
 }
 type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomFileInjected;
 type ComposerDockProps = PropsRuntime<'conversation.input.dock'> & ChatroomFileInjected;

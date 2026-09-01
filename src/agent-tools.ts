@@ -38,6 +38,8 @@ export interface ChatroomAgentToolsHost {
       readonly role: 'human' | 'ai'
       readonly displayName: string
       readonly text: string
+      readonly sourceSessionId?: string
+      readonly sourceSeq?: number
     }>
     readonly actions: ChatroomAgentAction[]
   }>
@@ -78,6 +80,8 @@ export function registerChatroomAgentTools(
                 role: { type: 'string', required: true, enum: ['human', 'ai'] },
                 displayName: { type: 'string', required: true },
                 text: { type: 'string', required: true },
+                sourceSessionId: { type: 'string' },
+                sourceSeq: { type: 'integer' },
               },
             },
           },

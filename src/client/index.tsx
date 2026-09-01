@@ -125,16 +125,17 @@ export function apply(ctx: ClientContext): void {
       const list = sessions.list.getSnapshot()
       const current = list.current
       const summary = current === undefined ? undefined : list.byId[current]
+      store.activateSession(
+        current === undefined ? undefined : String(current),
+        summary?.displayTitle ?? '新会话',
+        branchFrame === undefined && summary?.origin !== 'subagent',
+        summary?.parentId === undefined ? undefined : String(summary.parentId),
+      )
       if (current !== undefined && summary?.blank === true && summary.origin !== 'subagent'
         && store.roomForSession(String(current)) === undefined
         && store.newSessionMode(String(current)) === undefined) {
         store.registerNewSession(String(current))
       }
-      store.activateSession(
-        current === undefined ? undefined : String(current),
-        summary?.displayTitle ?? '新会话',
-        branchFrame === undefined && summary?.origin !== 'subagent',
-      )
     }
     const unsubscribeSessions = sessions.list.subscribe(syncSession)
     void store.start().then(async () => {
@@ -220,7 +221,11 @@ export function apply(ctx: ClientContext): void {
       quickDirectMeeting: store.quickDirectMeeting,
       loadWecomAuthorization: store.loadWecomAuthorization,
       startWecomAuthorization: store.startWecomAuthorization,
-      closeWecomAuthorization: store.closeWecomAuthorization,
+      disconnectWecomAuthorization: store.disconnectWecomAuthorization,
+      rebindWecomAuthorization: store.rebindWecomAuthorization,
+      closeSearch: store.closeSearch,
+      searchAll: store.searchAll,
+      openSearchResult: store.openSearchResult,
     }),
   }, ChatroomEntry))
 
@@ -249,7 +254,8 @@ export function apply(ctx: ClientContext): void {
       quickDirectMeeting: store.quickDirectMeeting,
       loadWecomAuthorization: store.loadWecomAuthorization,
       startWecomAuthorization: store.startWecomAuthorization,
-      closeWecomAuthorization: store.closeWecomAuthorization,
+      disconnectWecomAuthorization: store.disconnectWecomAuthorization,
+      rebindWecomAuthorization: store.rebindWecomAuthorization,
     }),
   }, ChatroomSettingsSection))
 
@@ -296,6 +302,7 @@ export function apply(ctx: ClientContext): void {
       stopRoomSession: store.stopRoomSession,
       newRoomSession: store.newRoomSession,
       quickMeeting: store.quickMeeting,
+      quickThreadMeeting: store.quickThreadMeeting,
     }),
   }, ChatroomSessionControls))
 
@@ -370,8 +377,15 @@ export function apply(ctx: ClientContext): void {
       priority: -10,
       locale: 'conversation',
       inject: () => ({
+        hooks: { chatroom: store },
         nativeMessageView,
         resolveTarget: store.agentTargetForSession.bind(store),
+        setReply: store.setReply,
+        openThread: store.openThread,
+        toggleReaction: store.toggleReaction,
+        recallMessage: store.recallMessage,
+        openForward: store.openForward,
+        toggleMessageSelection: store.toggleMessageSelection,
       }),
     }, ChatroomAssistantNodeView),
   ))

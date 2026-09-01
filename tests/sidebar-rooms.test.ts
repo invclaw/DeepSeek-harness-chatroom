@@ -317,6 +317,120 @@ describe('native sidebar room rows', () => {
     observer.disconnect()
   })
 
+  it('keeps only the two newest branches visible per room until that room is expanded', () => {
+    document.body.innerHTML = `
+      <div role="tree">
+        <span><div role="treeitem" aria-selected="true"><span>甲群</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：甲一</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：甲四</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：甲二</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：甲三</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>乙群</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：乙一</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：乙三</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：乙二</span></div></span>
+      </div>
+    `
+    const rows = [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+    const sessionIds = [
+      'parent-a', 'chatroom-thread-v1-a1', 'chatroom-thread-v1-a4', 'chatroom-thread-v1-a2',
+      'chatroom-thread-v1-a3', 'parent-b', 'chatroom-thread-v1-b1', 'chatroom-thread-v1-b3',
+      'chatroom-thread-v1-b2',
+    ]
+    rows.forEach((row, index) => bindNativeSession(row, sessionIds[index]!))
+    const rooms = [
+      { id: 'room-a', title: '甲群', sessionId: 'parent-a' },
+      { id: 'room-b', title: '乙群', sessionId: 'parent-b' },
+    ]
+    const summaries = Object.fromEntries(sessionIds.map((sessionId, index) => [sessionId, {
+      id: sessionId,
+      displayTitle: rows[index]!.textContent!.trim(),
+      ...(sessionId.startsWith('chatroom-thread-v1-a') ? { parentId: 'parent-a' } : {}),
+      ...(sessionId.startsWith('chatroom-thread-v1-b') ? { parentId: 'parent-b' } : {}),
+      running: false,
+      blank: false,
+      updatedAt: sessionId.startsWith('chatroom-thread-v1-') ? Number(sessionId.at(-1)) : 0,
+    }]))
+
+    const snapshot = {
+      rooms, room: rooms[0], members: [], directPeers: [], directConversations: [],
+    } as unknown as ChatroomView
+    const sessionList = { byId: summaries } as never
+    reconcileSidebarRoomRows(document, snapshot, 'parent-a' as never, undefined, undefined, undefined, sessionList)
+
+    const hiddenBranchIds = (): string[] => [...document.querySelectorAll<HTMLElement>('[data-dsh-chatroom-branch-row]')]
+      .filter(row => row.hasAttribute('data-dsh-chatroom-branch-overflow-row')
+        || row.parentElement?.hasAttribute('data-dsh-chatroom-branch-overflow-row') === true)
+      .map(row => row.dataset.dshChatroomBranchSessionId!)
+      .sort()
+    expect(hiddenBranchIds()).toEqual([
+      'chatroom-thread-v1-a1', 'chatroom-thread-v1-a2', 'chatroom-thread-v1-b1',
+    ])
+    const controls = [...document.querySelectorAll<HTMLElement>('[data-dsh-chatroom-branch-overflow]')]
+    expect(controls).toHaveLength(2)
+    const firstControl = controls.find(control => control.dataset.parentSessionId === 'parent-a')!
+    const secondControl = controls.find(control => control.dataset.parentSessionId === 'parent-b')!
+    expect(firstControl.textContent).toBe('展开其余 2 个分支')
+    expect(secondControl.textContent).toBe('展开其余 1 个分支')
+    expect(rows[0]!.querySelector('[data-dsh-chatroom-branch-count]')?.textContent).toBe('分支 4')
+    expect(rows[5]!.querySelector('[data-dsh-chatroom-branch-count]')?.textContent).toBe('分支 3')
+    const firstRoomSecondNewest = rows.find(row => row.dataset.dshChatroomBranchSessionId === 'chatroom-thread-v1-a3')!
+    const secondRoom = rows.find(row => row.dataset.dshChatroomRoomId === 'room-b')!
+    expect(Number(firstRoomSecondNewest.style.order)).toBeLessThan(Number(firstControl.style.order))
+    expect(Number(firstControl.style.order)).toBeLessThan(Number(secondRoom.style.order))
+
+    firstControl.querySelector<HTMLButtonElement>('button')!.click()
+    expect(hiddenBranchIds()).toEqual(['chatroom-thread-v1-b1'])
+    expect(firstControl.textContent).toBe('收起')
+    expect(firstControl.querySelector('button')?.getAttribute('aria-expanded')).toBe('true')
+
+    reconcileSidebarRoomRows(document, snapshot, 'parent-a' as never, undefined, undefined, undefined, sessionList)
+    expect(hiddenBranchIds()).toEqual(['chatroom-thread-v1-b1'])
+    expect(firstControl.textContent).toBe('收起')
+
+    firstControl.remove()
+    reconcileSidebarRoomRows(document, snapshot, 'parent-a' as never, undefined, undefined, undefined, sessionList)
+    const replacedFirstControl = [...document.querySelectorAll<HTMLElement>('[data-dsh-chatroom-branch-overflow]')]
+      .find(control => control.dataset.parentSessionId === 'parent-a')!
+    expect(hiddenBranchIds()).toEqual(['chatroom-thread-v1-b1'])
+    expect(replacedFirstControl.textContent).toBe('收起')
+
+    replacedFirstControl.querySelector<HTMLButtonElement>('button')!.click()
+    expect(hiddenBranchIds()).toEqual([
+      'chatroom-thread-v1-a1', 'chatroom-thread-v1-a2', 'chatroom-thread-v1-b1',
+    ])
+  })
+
+  it('does not count branch summaries that have no rendered sidebar row', () => {
+    document.body.innerHTML = `
+      <div role="treeitem" aria-selected="true"><span>项目群</span></div>
+      <div role="treeitem" aria-selected="false"><span>分支：可见分支</span></div>
+    `
+    const rows = [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+    bindNativeSession(rows[0]!, 'parent-session')
+    bindNativeSession(rows[1]!, 'chatroom-thread-v1-visible')
+    const room = { id: 'room', title: '项目群', sessionId: 'parent-session' }
+    const snapshot = { rooms: [room], room, members: [], directPeers: [], directConversations: [] } as unknown as ChatroomView
+    const sessionList = { byId: {
+      'parent-session': {
+        id: 'parent-session', displayTitle: '项目群', running: false, blank: false, updatedAt: 0,
+      },
+      'chatroom-thread-v1-visible': {
+        id: 'chatroom-thread-v1-visible', displayTitle: '分支：可见分支', parentId: 'parent-session',
+        running: false, blank: false, updatedAt: 2,
+      },
+      'chatroom-thread-v1-stale': {
+        id: 'chatroom-thread-v1-stale', displayTitle: '分支：残留记录', parentId: 'parent-session',
+        running: false, blank: false, updatedAt: 1,
+      },
+    } } as never
+
+    reconcileSidebarRoomRows(document, snapshot, 'parent-session' as never, undefined, undefined, undefined, sessionList)
+
+    expect(rows[0]!.querySelector('[data-dsh-chatroom-branch-count]')?.textContent).toBe('分支 1')
+    expect(document.querySelectorAll('[data-dsh-chatroom-branch-row]')).toHaveLength(1)
+  })
+
   it('does not bind a selected branch row to the active parent room', () => {
     document.body.innerHTML = '<div role="treeitem" aria-selected="true"><span></span><span>分支：发布计划</span></div>'
     const row = document.querySelector<HTMLElement>('[role="treeitem"]')!
@@ -636,6 +750,92 @@ describe('native sidebar room rows', () => {
     document.querySelector('[role="tree"]')!.append(document.createElement('div'))
     await settleMutations()
     expect(getSnapshot).toHaveBeenCalled()
+    dispose()
+  })
+
+  it('replaces the native sidebar search action with global chatroom search', async () => {
+    document.body.innerHTML = `
+      <button type="button" aria-label="搜索会话">搜索</button>
+      <div role="tree"><div role="treeitem" aria-selected="true"><span>会话</span></div></div>
+    `
+    const openSearch = vi.fn()
+    const store = {
+      getSnapshot: () => ({
+        phase: 'ready', rooms: [], members: [], directPeers: [], directConversations: [],
+      } as unknown as ChatroomView),
+      subscribe: () => () => undefined,
+      loadDirectDirectory: vi.fn(async () => true),
+      setRoomPinned: vi.fn(),
+      openDirect: vi.fn(),
+      closeDirect: vi.fn(),
+      openSearch,
+    } as unknown as ChatroomClientStore
+    const sessions = { list: { getSnapshot: () => ({ current: undefined, byId: {} }), subscribe: () => () => undefined } } as never
+    const dispose = installSidebarRoomRows(store, sessions)
+    await settleMutations()
+
+    ;(document.querySelector('button[aria-label="搜索会话"]') as HTMLButtonElement).click()
+    expect(openSearch).toHaveBeenCalledOnce()
+    dispose()
+  })
+
+  it('settles branch overflow reconciliation without scheduling itself again', async () => {
+    document.body.innerHTML = `
+      <div role="tree">
+        <span><div role="treeitem" aria-selected="true"><span>项目群</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：一</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：四</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：二</span></div></span>
+        <span><div role="treeitem" aria-selected="false"><span>分支：三</span></div></span>
+      </div>
+    `
+    const rows = [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+    const sessionIds = [
+      'parent-session', 'chatroom-thread-v1-1', 'chatroom-thread-v1-4',
+      'chatroom-thread-v1-2', 'chatroom-thread-v1-3',
+    ]
+    const branchDragStart = vi.fn()
+    rows.forEach((row, index) => {
+      bindNativeSession(row, sessionIds[index]!)
+      if (index > 0) row.addEventListener('dragstart', branchDragStart)
+    })
+    const room = { id: 'room', title: '项目群', sessionId: 'parent-session' }
+    const snapshot = {
+      phase: 'ready', rooms: [room], room, members: [], directPeers: [], directConversations: [],
+    } as unknown as ChatroomView
+    const sessionSnapshot = {
+      current: 'parent-session',
+      byId: Object.fromEntries(sessionIds.map((sessionId, index) => [sessionId, {
+        id: sessionId,
+        displayTitle: rows[index]!.textContent!.trim(),
+        ...(sessionId === 'parent-session' ? {} : { parentId: 'parent-session' }),
+        running: false,
+        blank: false,
+        updatedAt: index,
+      }])),
+    }
+    const getSnapshot = vi.fn(() => sessionSnapshot)
+    const store = {
+      getSnapshot: () => snapshot,
+      subscribe: () => () => undefined,
+      loadDirectDirectory: vi.fn(async () => true),
+      setRoomPinned: vi.fn(),
+      openDirect: vi.fn(),
+      closeDirect: vi.fn(),
+    } as unknown as ChatroomClientStore
+    const sessions = {
+      list: { getSnapshot, subscribe: () => () => undefined },
+    } as never
+
+    const dispose = installSidebarRoomRows(store, sessions)
+    await settleMutations()
+    const settledCalls = getSnapshot.mock.calls.length
+    await settleMutations()
+
+    expect(getSnapshot.mock.calls.length).toBe(settledCalls)
+    expect(settledCalls).toBeLessThan(5)
+    expect(branchDragStart).not.toHaveBeenCalled()
+    expect(rows.slice(1).map(row => row.dataset.dshChatroomSessionId)).toEqual(sessionIds.slice(1))
     dispose()
   })
 })

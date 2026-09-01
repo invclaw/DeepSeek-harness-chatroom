@@ -8,7 +8,14 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import sharp from 'sharp'
 import type { Config } from '../src/config.js'
 import { ChatroomRuntime } from '../src/room.js'
-import { participantMarker, projectFileText, projectForwardText, projectReplyText } from '../src/message.js'
+import {
+  identifyChatroomText,
+  identifyExternalCardText,
+  participantMarker,
+  projectFileText,
+  projectForwardText,
+  projectReplyText,
+} from '../src/message.js'
 
 describe('ChatroomRuntime', () => {
   it('appends human chat without waking AI and wakes only on explicit mention', async () => {
@@ -27,6 +34,7 @@ describe('ChatroomRuntime', () => {
 
     await runtime.submit('lobby', identity, [{ type: 'text', text: '@DeepSeek 立即补充' }], 'steer')
     expect(harness.agents[0]?.steer).toHaveBeenCalledOnce()
+    expect(harness.savedImages).not.toHaveBeenCalled()
     const followup = harness.agents[0]?.followup.mock.calls[0]?.[0]
     expect(followup?.content[0]).toMatchObject({
       type: 'text',
@@ -113,7 +121,7 @@ describe('ChatroomRuntime', () => {
       wecom: { client: ReturnType<typeof vi.fn> }
     }).wecom
     const invoke = vi.fn()
-      .mockResolvedValueOnce({ userid: 'alice-wecom' })
+      .mockResolvedValueOnce({ users: [{ userid: 'alice-wecom', name: 'Alice' }] })
       .mockResolvedValueOnce({
         subject: '快速会议', begin_time: '2026-09-01 10:00:00', end_time: '2026-09-01 11:00:00',
         meeting_url: 'https://meeting.example.com/join',
@@ -121,10 +129,10 @@ describe('ChatroomRuntime', () => {
     wecom.client = vi.fn(() => ({ invoke }))
 
     await expect(runtime.createQuickMeeting('lobby', identity)).resolves.toMatchObject({
-      kind: 'meeting', title: '快速会议', url: 'https://meeting.example.com/join',
+      kind: 'meeting', title: '快速会议', url: 'https://meeting.example.com/join', attendees: ['Alice'],
     })
-    expect(wecom.client).toHaveBeenCalledWith('alice-id')
-    expect(invoke).toHaveBeenNthCalledWith(1, 'identity', [], 'whoami', {})
+    expect(wecom.client).toHaveBeenCalledWith()
+    expect(invoke).toHaveBeenNthCalledWith(1, 'contact', ['users'], 'search', { keywords: ['Alice'] })
     expect(invoke).toHaveBeenNthCalledWith(2, 'meeting', [], 'create', expect.objectContaining({
       subject: '快速会议', attendees: [{ userid: 'alice-wecom' }],
     }))
@@ -134,7 +142,52 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
-  it('creates a quick meeting when the official identity response has no structured userid', async () => {
+  it('publishes branch meetings and their completed summaries to the branch Session', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', identity)
+    const opened = await runtime.openThread('lobby', identity, {
+      messageId: 'user:1', displayName: 'Alice', text: '在分支里开会', role: 'human',
+    })
+    const wecom = (runtime as unknown as { wecom: { client: ReturnType<typeof vi.fn> } }).wecom
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ users: [{ userid: 'alice-wecom', name: 'Alice' }] })
+      .mockResolvedValueOnce({
+        meeting_id: 'provider-branch-meeting', subject: '快速会议',
+        begin_time: '2026-09-01 10:00:00', end_time: '2026-09-01 11:00:00',
+        meeting_url: 'https://meeting.example.com/branch',
+      })
+      .mockResolvedValueOnce({ meetings: [{
+        meeting_id: 'provider-branch-meeting', subject: '快速会议', meeting_status: 'end',
+        notes: [{ note_content: '分支会议结论' }],
+      }] })
+    wecom.client = vi.fn(() => ({ invoke }))
+    harness.llmStream.mockImplementationOnce(async function* () {
+      yield { type: 'text-delta', index: 0, text: '分支会议总结。' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+
+    const card = await runtime.createThreadQuickMeeting(opened.thread.id, identity)
+    const reopened = await runtime.openThread('lobby', identity, opened.thread.root)
+    expect(reopened.messages.at(-1)).toMatchObject({
+      text: '创建了企微会议「快速会议」', card: { id: card.id, kind: 'meeting', title: '快速会议' },
+    })
+    expect(JSON.stringify(harness.agents[1]?.session.append.mock.calls.at(-1)?.[1])).toContain('dsh-chatroom-card:')
+
+    await runtime.synchronizeMeetings()
+
+    expect(runtime.meetingSummary(card.id!, identity)).toMatchObject({
+      conversationKind: 'thread', conversationId: opened.thread.id,
+      status: 'end', summaryStatus: 'completed', summary: '分支会议总结。',
+    })
+    expect(harness.agents[1]?.session.append.mock.calls.at(-1)?.[0]).toBe('assistant/message')
+    expect(JSON.stringify(harness.agents[1]?.session.append.mock.calls.at(-1)?.[1])).toContain('会议总结 · 快速会议')
+    await runtime.stop()
+  })
+
+  it('uses the matched initiator instead of the shared authorization identity', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
     await runtime.start()
@@ -144,14 +197,124 @@ describe('ChatroomRuntime', () => {
       wecom: { client: ReturnType<typeof vi.fn> }
     }).wecom
     const invoke = vi.fn()
-      .mockResolvedValueOnce({ extra_identity_context: '机器人和授权真人身份说明' })
+      .mockResolvedValueOnce({ users: [{ userid: 'alice-wecom', name: 'Alice', alias: 'Alice' }] })
       .mockResolvedValueOnce({ meeting_id: 'meeting', meeting_link: 'https://meeting.example.com/join' })
     wecom.client = vi.fn(() => ({ invoke }))
 
     await expect(runtime.createQuickMeeting('lobby', identity)).resolves.toMatchObject({
-      kind: 'meeting', title: '快速会议', url: 'https://meeting.example.com/join',
+      kind: 'meeting', title: '快速会议', url: 'https://meeting.example.com/join', attendees: ['Alice'],
     })
-    expect(invoke).toHaveBeenNthCalledWith(2, 'meeting', [], 'create', expect.not.objectContaining({ attendees: expect.anything() }))
+    expect(invoke).toHaveBeenNthCalledWith(2, 'meeting', [], 'create', expect.objectContaining({
+      attendees: [{ userid: 'alice-wecom' }],
+    }))
+    expect(invoke).not.toHaveBeenCalledWith('identity', expect.anything(), expect.anything(), expect.anything())
+    await runtime.stop()
+  })
+
+  it('rejects a quick meeting when the initiating account cannot be resolved unambiguously', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', identity)
+    const wecom = (runtime as unknown as { wecom: { client: ReturnType<typeof vi.fn> } }).wecom
+    const invoke = vi.fn().mockResolvedValueOnce({ users: [
+      { userid: 'alice-one', name: 'Alice' },
+      { userid: 'alice-two', name: 'Alice' },
+    ] })
+    wecom.client = vi.fn(() => ({ invoke }))
+
+    await expect(runtime.createQuickMeeting('lobby', identity)).rejects.toThrow('企微通讯录中找不到当前发起人')
+    expect(invoke).toHaveBeenCalledOnce()
+    await runtime.stop()
+  })
+
+  it('automatically detects an ended meeting, summarizes its notes, and posts the summary once', async () => {
+    vi.useFakeTimers()
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    try {
+      await runtime.start()
+      const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+      await runtime.selectRoom('lobby', identity)
+      const wecom = (runtime as unknown as { wecom: { client: ReturnType<typeof vi.fn> } }).wecom
+      const invoke = vi.fn()
+        .mockResolvedValueOnce({ users: [{ userid: 'alice-wecom', name: 'Alice' }] })
+        .mockResolvedValueOnce({
+          meeting_id: 'provider-meeting', subject: '周会', meeting_link: 'https://meeting.example.com/join',
+          begin_time: '2026-09-01 10:00:00', end_time: '2026-09-01 11:00:00',
+        })
+        .mockResolvedValueOnce({ meetings: [{
+          meeting_id: 'provider-meeting', subject: '周会', meeting_status: 'end',
+          begin_time: '2026-09-01 10:00:00', end_time: '2026-09-01 11:00:00',
+          attendees: [{ name: 'Alice', is_attended: true, duration: 1800 }],
+          notes: [{ note_content: '确认发布计划', todo_content: 'Alice 明天发布' }],
+        }] })
+      wecom.client = vi.fn(() => ({ invoke }))
+      const card = await runtime.createQuickMeeting('lobby', identity)
+      harness.llmStream.mockImplementationOnce(async function* () {
+        yield { type: 'text-delta', index: 0, text: '结论：按计划发布。\n\n行动项：Alice 明天发布。' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })
+
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      expect(invoke).toHaveBeenNthCalledWith(3, 'meeting', [], 'get', {
+        meeting_ids: [{ meeting_id: 'provider-meeting' }],
+      })
+      expect(runtime.meetingSummary(card.id!, identity)).toMatchObject({
+        id: card.id,
+        status: 'end',
+        summaryStatus: 'completed',
+        summary: '结论：按计划发布。\n\n行动项：Alice 明天发布。',
+      })
+      expect(harness.agents[0]?.session.append.mock.calls.at(-1)?.[0]).toBe('assistant/message')
+      expect(JSON.stringify(harness.agents[0]?.session.append.mock.calls.at(-1)?.[1])).toContain('会议总结 · 周会')
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(invoke).toHaveBeenCalledTimes(3)
+    } finally {
+      await runtime.stop()
+      vi.useRealTimers()
+    }
+  })
+
+  it('recovers a legacy meeting card and posts its summary after restart', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const legacyUrl = 'https://meeting.example.com/legacy'
+    const message = createUserMessage({
+      content: [{
+        type: 'text',
+        text: identifyChatroomText(identifyExternalCardText({
+          kind: 'meeting', title: '旧版快速会议', url: legacyUrl,
+          beginTime: '2026-08-31 16:00:00', endTime: '2026-08-31 17:00:00',
+        }), identity),
+      }],
+      source: { kind: 'user' },
+    })
+    const event = { type: 'user/message', seq: 1, time: 10, data: message, surfaceOp: 'append' } as const
+    const harness = fakeHarness([event])
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    await runtime.selectRoom('lobby', identity)
+    const wecom = (runtime as unknown as { wecom: { client: ReturnType<typeof vi.fn> } }).wecom
+    const invoke = vi.fn().mockResolvedValueOnce({ meetings: [{
+      subject: '旧版快速会议', meeting_status: 'end',
+      begin_time: '2026-08-31 16:00:00', end_time: '2026-08-31 17:00:00',
+      notes: [{ note_content: '完成发布复盘' }],
+    }] })
+    wecom.client = vi.fn(() => ({ invoke }))
+    harness.llmStream.mockImplementationOnce(async function* () {
+      yield { type: 'text-delta', index: 0, text: '旧会议总结。' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+
+    await runtime.synchronizeMeetings()
+
+    expect(invoke).toHaveBeenCalledWith('meeting', [], 'get', { urls: [legacyUrl] })
+    expect(runtime.meetingSummaryByUrl(legacyUrl, identity)).toMatchObject({
+      status: 'end', summaryStatus: 'completed', summary: '旧会议总结。',
+    })
+    expect(JSON.stringify(harness.agents[0]?.session.append.mock.calls.at(-1)?.[1])).toContain('会议总结 · 旧版快速会议')
     await runtime.stop()
   })
 
@@ -231,6 +394,48 @@ describe('ChatroomRuntime', () => {
 
     expect(harness.llmStream).not.toHaveBeenCalled()
     expect(harness.agents[0]?.followup).toHaveBeenCalledOnce()
+    await runtime.stop()
+  })
+
+  it('applies the parent room automatic-response controller to branch messages', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.selectRoom('lobby', identity)
+    const opened = await runtime.openThread('lobby', identity, {
+      messageId: 'user:1', displayName: 'Alice', text: '分支主题', role: 'human',
+    })
+    await runtime.setRoomAutoTrigger('lobby', true, identity)
+    harness.llmStream.mockImplementationOnce(async function* () {
+      yield { type: 'text-delta', index: 0, text: '{"wake":false}' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+
+    await expect(runtime.submitThread(opened.thread.id, identity, '请你不要让AI回复我')).resolves.toEqual({
+      accepted: true, aiTriggered: false,
+    })
+    await vi.waitFor(() => expect(harness.llmStream).toHaveBeenCalledOnce())
+    expect(harness.agents[1]?.session.append).toHaveBeenCalledTimes(2)
+    expect(harness.agents[1]?.followup).not.toHaveBeenCalled()
+
+    harness.llmStream.mockImplementationOnce(async function* () {
+      yield { type: 'text-delta', index: 0, text: '{"wake":true}' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+    await expect(runtime.submitThread(opened.thread.id, identity, '请总结刚才的结论')).resolves.toEqual({
+      accepted: true, aiTriggered: false,
+    })
+    await vi.waitFor(() => expect(harness.agents[1]?.followup).toHaveBeenCalledOnce())
+    expect(harness.llmStream).toHaveBeenCalledTimes(2)
+    expect(harness.agents[1]?.session.append).toHaveBeenCalledTimes(3)
+    expect(harness.agents[1]?.followup.mock.calls[0]?.[0]).toMatchObject({
+      source: { kind: 'plugin', summary: 'Automatic chatroom response' },
+    })
+
+    await runtime.submitThread(opened.thread.id, identity, '@AI 明确回复')
+    expect(harness.llmStream).toHaveBeenCalledTimes(2)
+    expect(harness.agents[1]?.followup).toHaveBeenCalledTimes(2)
     await runtime.stop()
   })
 
@@ -507,17 +712,21 @@ describe('ChatroomRuntime', () => {
     const opened = await runtime.openDirect(bob.identity.participantId, alice.identity)
     const wecom = (runtime as unknown as { wecom: { client: ReturnType<typeof vi.fn> } }).wecom
     const invoke = vi.fn()
-      .mockResolvedValueOnce({ userid: 'alice-wecom' })
+      .mockResolvedValueOnce({ users: [{ userid: 'alice-wecom', name: 'Alice' }] })
       .mockResolvedValueOnce({ subject: '快速会议', meeting_url: 'https://meeting.example.com/private' })
     wecom.client = vi.fn(() => ({ invoke }))
 
     await runtime.createDirectQuickMeeting(opened.conversation!.id, alice.identity)
 
-    expect(wecom.client).toHaveBeenCalledWith(alice.identity.participantId)
+    expect(wecom.client).toHaveBeenCalledWith()
+    expect(invoke).toHaveBeenNthCalledWith(1, 'contact', ['users'], 'search', { keywords: ['Alice'] })
+    expect(invoke).toHaveBeenNthCalledWith(2, 'meeting', [], 'create', expect.objectContaining({
+      attendees: [{ userid: 'alice-wecom' }],
+    }))
     expect((await runtime.openDirect(alice.identity.participantId, bob.identity)).messages).toMatchObject([{
       senderId: alice.identity.participantId,
       text: '',
-      card: { kind: 'meeting', title: '快速会议', url: 'https://meeting.example.com/private' },
+      card: { kind: 'meeting', title: '快速会议', url: 'https://meeting.example.com/private', attendees: ['Alice'] },
     }])
     await runtime.stop()
   })
@@ -628,16 +837,16 @@ describe('ChatroomRuntime', () => {
     expect(harness.agents[1]?.session.append).toHaveBeenCalledOnce()
     expect(harness.attached).toEqual(['chatroom-v1-lobby', opened.thread.sessionId])
 
-    await runtime.submitThread(opened.thread.id, bob, '先讨论，不叫 AI')
+    await runtime.submitThread(opened.thread.id, bob, '啊？')
     expect(harness.agents[1]?.session.append).toHaveBeenCalledTimes(2)
     expect(harness.agents[1]?.followup).not.toHaveBeenCalled()
     await runtime.submitThread(opened.thread.id, alice, '@AI 给出结论', {
-      messageId: 'branch-human-1', displayName: 'Bob', text: '先讨论，不叫 AI',
+      messageId: 'branch-human-1', displayName: 'Bob', text: '啊？',
     })
     expect(harness.agents[1]?.followup).toHaveBeenCalledOnce()
     expect(harness.agents[1]?.followup.mock.calls[0]?.[0]?.content[0]).toMatchObject({
       type: 'text',
-      text: expect.stringContaining('回复 Bob「先讨论，不叫 AI」'),
+      text: expect.stringContaining('回复 Bob「啊？」'),
     })
 
     runtime.handleSessionEvent(
@@ -654,12 +863,12 @@ describe('ChatroomRuntime', () => {
     await vi.waitFor(async () => {
       const reopened = await runtime.openThread('lobby', alice, opened.thread.root)
       expect(reopened.messages.map(message => [message.role, message.text])).toEqual([
-        ['human', '先讨论，不叫 AI'],
+        ['human', '啊？'],
         ['human', '@AI 给出结论'],
         ['ai', '分支结论'],
       ])
       expect(reopened.messages[1]?.reply).toEqual({
-        messageId: 'branch-human-1', displayName: 'Bob', text: '先讨论，不叫 AI',
+        messageId: 'branch-human-1', displayName: 'Bob', text: '啊？',
       })
     })
     const branchEvents = writes.filter(value => value.startsWith('data: '))
@@ -670,7 +879,7 @@ describe('ChatroomRuntime', () => {
       .filter(event => event.type === 'thread-message')
     expect(branchEvents.at(-1)?.preview).toMatchObject({
       totalMessages: 3,
-      recentMessages: [{ text: '先讨论，不叫 AI' }, { text: '@AI 给出结论' }, { text: '分支结论' }],
+      recentMessages: [{ text: '啊？' }, { text: '@AI 给出结论' }, { text: '分支结论' }],
     })
     const reconnectWrites: string[] = []
     const reconnect = runtime.subscribe('lobby', bob, {
@@ -684,7 +893,7 @@ describe('ChatroomRuntime', () => {
     }
     expect(reconnectSnapshot.threadPreviews).toMatchObject([{
       totalMessages: 3,
-      recentMessages: [{ text: '先讨论，不叫 AI' }, { text: '@AI 给出结论' }, { text: '分支结论' }],
+      recentMessages: [{ text: '啊？' }, { text: '@AI 给出结论' }, { text: '分支结论' }],
     }])
     reconnect()
     await runtime.stop()
@@ -1030,7 +1239,7 @@ describe('ChatroomRuntime', () => {
   })
 })
 
-function fakeHarness(): {
+function fakeHarness(initialEvents: SessionEvent[] = []): {
   ctx: Context
   agents: Array<Agent & {
     followup: ReturnType<typeof vi.fn>
@@ -1104,7 +1313,7 @@ function fakeHarness(): {
         const agent = {
           id: sessionId,
           options: { provider: 'deepseek', model: 'chat' },
-          session: { id: sessionId, events: [], append: vi.fn() },
+          session: { id: sessionId, events: [...initialEvents], append: vi.fn() },
           ctx: agentCtx,
           followup: vi.fn(),
           steer: vi.fn(),

@@ -7,6 +7,7 @@ import type { ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conver
 import {
   ChatroomComposerAttachments,
   ChatroomComposerDock,
+  ChatroomFileAction,
   ChatroomSessionControls,
   type ChatroomComposerAttachmentsProps,
 } from '../src/client/ChatroomComposer.js'
@@ -59,6 +60,7 @@ describe('chatroom composer attachments', () => {
       stopRoomSession,
       newRoomSession,
       quickMeeting,
+      quickThreadMeeting: vi.fn(async () => true),
     }
     render(<ChatroomSessionControls {...props as unknown as ComponentProps<typeof ChatroomSessionControls>} />)
     fireEvent.click(screen.getByRole('button', { name: '■ 停止' }))
@@ -67,6 +69,46 @@ describe('chatroom composer attachments', () => {
     expect(stopRoomSession).toHaveBeenCalledWith('lobby')
     expect(newRoomSession).toHaveBeenCalledWith('lobby')
     expect(quickMeeting).toHaveBeenCalledWith('lobby')
+  })
+
+  it('reuses emoji, file, and quick-meeting actions for branches', () => {
+    const setDraft = vi.fn()
+    const quickThreadMeeting = vi.fn(async () => true)
+    const target = { kind: 'thread' as const, room: { id: 'lobby' }, threadId: 'thread-id' }
+    const useChatroom = (selector: (snapshot: ChatroomView) => unknown) => selector({
+      sessionControlBusy: false,
+      sessionControlError: undefined,
+      wecomBusy: false,
+      wecomError: undefined,
+    } as unknown as ChatroomView)
+    const { rerender } = render(<ChatroomFileAction {...{
+      sessionId: 'branch-session',
+      input: { draft: '你好', imageIds: [] },
+      inputActions: { setDraft },
+      useChatroom,
+      resolveTarget: () => target,
+      addFiles: vi.fn(), removeFile: vi.fn(), clearReply: vi.fn(), sendFiles: vi.fn(),
+    } as unknown as ComponentProps<typeof ChatroomFileAction>} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '发送表情' }))
+    fireEvent.click(screen.getByRole('button', { name: '插入 🎉' }))
+    expect(setDraft).toHaveBeenCalledWith('你好🎉')
+    expect(screen.getByRole('button', { name: '发送图片或文件' })).not.toBeNull()
+
+    rerender(<ChatroomSessionControls {...{
+      sessionId: 'branch-session',
+      session: { running: false },
+      useChatroom,
+      resolveTarget: () => target,
+      stopRoomSession: vi.fn(),
+      newRoomSession: vi.fn(),
+      quickMeeting: vi.fn(),
+      quickThreadMeeting,
+    } as unknown as ComponentProps<typeof ChatroomSessionControls>} />)
+    fireEvent.click(screen.getByRole('button', { name: '⚡ 快速会议' }))
+    expect(quickThreadMeeting).toHaveBeenCalledWith('thread-id')
+    expect(screen.queryByRole('button', { name: '■ 停止' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '＋ 新会话' })).toBeNull()
   })
 
   it('shows the AI-context divider without replacing the retained room transcript', () => {

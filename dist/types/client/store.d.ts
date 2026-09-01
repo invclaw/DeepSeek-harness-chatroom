@@ -1,5 +1,5 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomAutomationOverview, ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot, ChatroomWecomAuthorizationState } from '../types.js';
+import type { ChatroomAutomationOverview, ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomSearchResult, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot, ChatroomWecomAuthorizationState } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 export type ChatroomPhase = 'loading' | 'auth-required' | 'identity-required' | 'ready' | 'error';
 export type ChatroomConnection = 'offline' | 'connecting' | 'online';
@@ -97,6 +97,11 @@ export interface ChatroomView {
     readonly directMessages: readonly ChatroomDirectMessage[];
     readonly directError: string | undefined;
     readonly newSessionModes: Readonly<Record<string, ChatroomNewSessionMode>>;
+    readonly searchOpen: boolean;
+    readonly searchQuery: string;
+    readonly searchBusy: boolean;
+    readonly searchResults: readonly ChatroomSearchResult[];
+    readonly searchError: string | undefined;
 }
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
 export declare class ChatroomClientStore implements HostObservable<ChatroomView> {
@@ -110,11 +115,11 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private stopped;
     private compositionRevision;
     private pendingFileSequence;
+    private searchRevision;
     private originalTitle;
     private activeNativeSession;
     private roomEnsure;
     private readonly pendingAutoTriggerWrites;
-    private pendingQuickMeetingTarget;
     constructor(openSession?: (sessionId: string) => boolean, branchFrame?: ChatroomBranchFrame);
     /** Current immutable room projection. */
     getSnapshot: () => ChatroomView;
@@ -165,7 +170,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     /** Load the global automatic-response controller settings and model catalog. */
     loadAutomation: () => Promise<void>;
     /** Persist the global controller model and both chatroom prompt roles. */
-    saveAutomation: (provider: string, model: string, mainAgentPrompt: string, controllerPrompt: string) => Promise<boolean>;
+    saveAutomation: (provider: string, model: string, meetingSummaryProvider: string, meetingSummaryModel: string, mainAgentPrompt: string, controllerPrompt: string) => Promise<boolean>;
     /** Create a local account from the super-administrator console. */
     adminCreateUser: (input: {
         username: string;
@@ -202,6 +207,14 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     /** Refresh the private-message directory without opening its conversation panel. */
     loadDirectDirectory: () => Promise<boolean>;
     closeDirect: () => void;
+    /** Open the visibility-filtered global account, conversation, and message search. */
+    openSearch: () => void;
+    /** Close global search without changing the active conversation. */
+    closeSearch: () => void;
+    /** Search every account, visible conversation title, and archived message. */
+    searchAll: (query: string) => Promise<void>;
+    /** Open one search result and reveal its message when it identifies a message block. */
+    openSearchResult: (result: ChatroomSearchResult) => Promise<void>;
     /** Send one text/media message inside the selected private conversation. */
     sendDirect: (text: string, files?: readonly File[]) => Promise<boolean>;
     /** Open group management for the active room. */
@@ -231,7 +244,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     /** Retry pending native navigation when the Host Session list changes. */
     resumeOpen: () => void;
     /** Track native navigation without changing unbound native Sessions into shared rooms. */
-    activateSession: (sessionId: string | undefined, title?: string, shareable?: boolean) => void;
+    activateSession: (sessionId: string | undefined, title?: string, shareable?: boolean, parentSessionId?: string) => void;
     /** Create the persistent browser identity, then show the room directory. */
     join: (displayName: string, avatarId: string) => Promise<void>;
     /** Add browser files to the next submission in one shared room. */
@@ -270,14 +283,18 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     newRoomSession: (roomId: string) => Promise<boolean>;
     /** Create a default Enterprise WeChat meeting and publish its card to the room. */
     quickMeeting: (roomId: string) => Promise<boolean>;
+    /** Create a default Enterprise WeChat meeting and publish its card to a branch. */
+    quickThreadMeeting: (threadId: string) => Promise<boolean>;
     /** Create a default Enterprise WeChat meeting and publish its card to a direct conversation. */
     quickDirectMeeting: (directConversationId: string) => Promise<boolean>;
-    /** Refresh authorization for the current platform account. */
+    /** Refresh the deployment-wide Enterprise WeChat authorization. */
     loadWecomAuthorization: () => Promise<ChatroomWecomAuthorizationState | undefined>;
-    /** Start the current account's device-local Enterprise WeChat QR authorization. */
+    /** Start deployment-wide Enterprise WeChat QR authorization. */
     startWecomAuthorization: () => Promise<boolean>;
-    /** Dismiss the Enterprise WeChat authorization dialog without cancelling the CLI login. */
-    closeWecomAuthorization: () => void;
+    /** Remove the deployment-wide Enterprise WeChat authorization. */
+    disconnectWecomAuthorization: () => Promise<boolean>;
+    /** Replace the shared account and start a new QR authorization. */
+    rebindWecomAuthorization: () => Promise<boolean>;
     private createQuickMeeting;
     private publishQuickMeeting;
     /** Create or reopen a branch rooted at one main-room message. */
@@ -288,7 +305,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     setThreadReply: (reply: ChatroomReplyReference) => void;
     /** Cancel the pending branch reply. */
     clearThreadReply: () => void;
-    /** Send one human-first branch message. */
+    /** Send one message to the independent branch Agent. */
     sendThreadMessage: (text: string) => Promise<boolean>;
     /** Request browser notification permission from an explicit user gesture. */
     enableSystemNotifications: () => Promise<void>;
@@ -317,6 +334,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private clearUnread;
     private updateDocumentTitle;
     private updateActiveDocumentRoom;
+    private revealSearchMessage;
     private set;
 }
 /** Submit one native composer payload through human-first room admission. */

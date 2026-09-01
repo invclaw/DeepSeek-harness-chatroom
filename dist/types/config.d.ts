@@ -43,6 +43,7 @@ export interface Config {
     wecomQuickMeetingDurationMinutes: number;
     wecomQuickMeetingSubject: string;
     wecomTimeZone: string;
+    wecomMeetingPollIntervalMs?: number;
 }
 export declare const Config: z<Config>;
 /** Validate relationships Schemastery cannot express by individual fields. */

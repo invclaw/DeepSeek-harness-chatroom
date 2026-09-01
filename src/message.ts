@@ -270,6 +270,7 @@ function validExternalCard(value: unknown): value is ChatroomExternalCard {
   if (card.kind !== 'meeting' && card.kind !== 'document') return false
   if (typeof card.title !== 'string' || card.title.trim() === '') return false
   if (card.kind === 'meeting') {
+    if (card.id !== undefined && typeof card.id !== 'string') return false
     const meeting = value as Partial<ChatroomMeetingCard>
     return optionalStrings(meeting.beginTime, meeting.endTime, meeting.url, meeting.location, meeting.status)
       && (meeting.attendees === undefined

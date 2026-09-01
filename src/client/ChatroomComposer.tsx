@@ -4,6 +4,7 @@ import type { ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conver
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatroomReplyReference } from '../types.js'
 import type { ChatroomAgentTarget, ChatroomClientStore, ChatroomView } from './store.js'
+import { CHATROOM_MESSAGE_EMOJIS } from './emojis.js'
 
 interface ChatroomComposerBaseInjected {
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
@@ -21,6 +22,7 @@ interface ChatroomSessionInjected extends ChatroomComposerBaseInjected {
   stopRoomSession(roomId: string): Promise<boolean>
   newRoomSession(roomId: string): Promise<boolean>
   quickMeeting(roomId: string): Promise<boolean>
+  quickThreadMeeting(threadId: string): Promise<boolean>
 }
 
 type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomFileInjected
@@ -30,8 +32,6 @@ type ComposerAttachmentsInjected = ChatroomComposerBaseInjected & Pick<ChatroomF
   nativeAttachmentsView: ComponentType<ComposerAttachmentsProps>
 }
 export type ChatroomComposerAttachmentsProps = ComposerAttachmentsProps & ComposerAttachmentsInjected
-
-const MESSAGE_EMOJIS = ['😀', '😄', '😂', '🥰', '😍', '🤔', '😮', '😭', '😡', '👍', '👏', '🙏', '🎉', '❤️', '🔥', '✨', '✅', '👀'] as const
 
 /** Small file chooser inside the native composer tool row. */
 export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
@@ -65,7 +65,7 @@ export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
       </button>
       {emojiOpen && (
         <div className="dsh-chatroom-emoji-picker" role="dialog" aria-label="选择表情">
-          {MESSAGE_EMOJIS.map(emoji => (
+          {CHATROOM_MESSAGE_EMOJIS.map(emoji => (
             <button
               type="button"
               key={emoji}
@@ -108,24 +108,30 @@ export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
 export function ChatroomSessionControls(props: ComposerRightProps): JSX.Element | null {
   const room = props.useChatroom(snapshot => snapshot)
   const target = props.resolveTarget(String(props.sessionId))
-  if (target?.kind !== 'room') return null
+  if (target === undefined) return null
   return (
     <div className="dsh-chatroom-session-controls">
-      <button
-        type="button"
-        disabled={!props.session.running || room.sessionControlBusy}
-        onClick={() => { void props.stopRoomSession(target.room.id) }}
-      >■ 停止</button>
-      <button
-        type="button"
-        disabled={room.sessionControlBusy}
-        onClick={() => { void props.newRoomSession(target.room.id) }}
-      >＋ 新会话</button>
+      {target.kind === 'room' && <>
+        <button
+          type="button"
+          disabled={!props.session.running || room.sessionControlBusy}
+          onClick={() => { void props.stopRoomSession(target.room.id) }}
+        >■ 停止</button>
+        <button
+          type="button"
+          disabled={room.sessionControlBusy}
+          onClick={() => { void props.newRoomSession(target.room.id) }}
+        >＋ 新会话</button>
+      </>}
       <button
         type="button"
         className="dsh-chatroom-quick-meeting"
         disabled={room.wecomBusy}
-        onClick={() => { void props.quickMeeting(target.room.id) }}
+        onClick={() => {
+          void (target.kind === 'room'
+            ? props.quickMeeting(target.room.id)
+            : props.quickThreadMeeting(target.threadId))
+        }}
       >⚡ 快速会议</button>
       {room.sessionControlError !== undefined && (
         <span className="dsh-chatroom-control-error" role="alert" title={room.sessionControlError}>{room.sessionControlError}</span>

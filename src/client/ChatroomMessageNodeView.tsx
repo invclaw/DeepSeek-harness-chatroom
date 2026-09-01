@@ -259,6 +259,7 @@ function ParticipantMessage({
   return (
     <div
       className="dsh-chatroom-participant-message"
+      data-dsh-chatroom-message-id={tools.message.messageId}
       data-dsh-chatroom-own={projection.own}
       data-dsh-chatroom-selection-mode={tools.selecting || undefined}
       data-dsh-chatroom-selected={tools.selected || undefined}

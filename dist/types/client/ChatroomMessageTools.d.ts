@@ -1,6 +1,10 @@
 import { type MouseEvent as ReactMouseEvent } from 'react';
 import { type ChatroomReactionEmoji } from '../reactions.js';
 import type { ChatroomForwardItem, ChatroomIdentity, ChatroomReaction } from '../types.js';
+/** Compact copy action with transient success feedback. */
+export declare function ChatroomCopyButton({ text }: {
+    readonly text: string;
+}): JSX.Element | null;
 export interface ChatroomMessageToolsProps {
     readonly roomId: string;
     readonly message: ChatroomForwardItem;

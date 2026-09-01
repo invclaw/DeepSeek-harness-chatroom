@@ -19,12 +19,16 @@ export declare class ChatroomHttpController {
     private handleDirectMessages;
     private handleRooms;
     private handleRoomEnsure;
+    private handleSearch;
     private handleRoomSelection;
     private handleRoomManagement;
     private handleRoomSession;
     private handleQuickMeeting;
     private handleWecomAuthorization;
     private handleWecomAuthorizationQr;
+    private handleMeetingSummary;
+    private handleMeetingResolution;
+    private handleMeetingSummaries;
     private handleAutomation;
     private handleThreadOpen;
     private handleThreadPrompt;

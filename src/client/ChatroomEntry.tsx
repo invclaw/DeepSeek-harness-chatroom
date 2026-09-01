@@ -3,7 +3,7 @@ import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { CHATROOM_AVATARS, type ChatroomAvatarId } from '../avatars.js'
 import { authProviderStartLocation } from '../auth-redirect.js'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
-import type { ChatroomAuthState, ChatroomForwardItem, ChatroomReplyReference } from '../types.js'
+import type { ChatroomAuthState, ChatroomForwardItem, ChatroomReplyReference, ChatroomSearchResult } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
 import { CHATROOM_API_PREFIX } from '../routes.js'
 import { ChatroomPanels } from './ChatroomPanels.js'
@@ -51,14 +51,18 @@ interface ChatroomEntryInjected {
   adminSaveProvider(input: { id: string; label: string; enabled: boolean; issuer: string; clientId: string; clientSecret?: string; scopes: string; usernameClaim: string; displayNameClaim: string; autoCreateUsers: boolean }): Promise<boolean>
   adminDeleteProvider(providerId: string): Promise<boolean>
   loadAutomation?(): Promise<void>
-  saveAutomation?(provider: string, model: string, mainAgentPrompt: string, controllerPrompt: string): Promise<boolean>
+  saveAutomation?(provider: string, model: string, meetingSummaryProvider: string, meetingSummaryModel: string, mainAgentPrompt: string, controllerPrompt: string): Promise<boolean>
   openDirect(peerId?: string): Promise<void>
   closeDirect(): void
   sendDirect(text: string, files?: readonly File[]): Promise<boolean>
   quickDirectMeeting?(conversationId: string): Promise<boolean>
   loadWecomAuthorization?(): Promise<ChatroomView['wecomAuthorization']>
   startWecomAuthorization?(): Promise<boolean>
-  closeWecomAuthorization?(): void
+  disconnectWecomAuthorization?(): Promise<boolean>
+  rebindWecomAuthorization?(): Promise<boolean>
+  closeSearch(): void
+  searchAll(query: string): Promise<void>
+  openSearchResult(result: ChatroomSearchResult): Promise<void>
 }
 
 type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected

@@ -59,6 +59,8 @@ export interface RoomPreferenceRecord {
 export interface AutomationSettingsRecord {
     readonly provider: string;
     readonly model: string;
+    readonly meetingSummaryProvider?: string;
+    readonly meetingSummaryModel?: string;
     readonly mainAgentPrompt?: string;
     readonly controllerPrompt?: string;
     readonly updatedAt: number;
@@ -99,6 +101,7 @@ export interface ThreadMessageRecord {
     }[];
     readonly hasImages?: boolean;
     readonly reply?: ChatroomReplyReference;
+    readonly card?: ChatroomExternalCard;
     readonly createdAt: number;
     readonly modelMessageId?: string;
     readonly sessionSeq?: number;
