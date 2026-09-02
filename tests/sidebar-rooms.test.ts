@@ -76,6 +76,45 @@ describe('native sidebar room rows', () => {
     expect(roomRow.querySelector('[data-dsh-chatroom-solo-avatar]')).toBeNull()
   })
 
+  it('shows only visible rooms and identity-owned Solo Sessions after authenticated login', () => {
+    document.body.innerHTML = `
+      <div role="tree">
+        <div role="treeitem" aria-selected="false"><span>可见群聊</span><button aria-label="菜单"></button></div>
+        <div role="treeitem" aria-selected="false"><span>未加入群聊</span><button aria-label="菜单"></button></div>
+        <div role="treeitem" aria-selected="true"><span>我的 Solo</span><button aria-label="菜单"></button></div>
+        <div role="treeitem" aria-selected="false"><span>别人的 Solo</span><button aria-label="菜单"></button></div>
+      </div>
+    `
+    const rows = [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+    bindNativeSession(rows[0]!, 'visible-room-session')
+    bindNativeSession(rows[1]!, 'hidden-room-session')
+    bindNativeSession(rows[2]!, 'owned-solo-session')
+    bindNativeSession(rows[3]!, 'foreign-solo-session')
+    const visibleRoom = {
+      id: 'visible-room', title: '可见群聊', aiDisplayName: 'DeepSeek', sessionId: 'visible-room-session',
+    }
+
+    reconcileSidebarRoomRows(document, {
+      phase: 'ready',
+      auth: {
+        enabled: true, authenticated: true, providers: [], allowSelfRegistration: false, bootstrapRequired: false,
+      },
+      rooms: [visibleRoom],
+      room: visibleRoom,
+      soloSessionIds: ['owned-solo-session'],
+      members: [], directPeers: [], directConversations: [],
+    } as unknown as ChatroomView, 'owned-solo-session' as never)
+
+    expect(rows[0]!.dataset.dshChatroomSidebarCategory).toBe('group')
+    expect(rows[2]!.dataset.dshChatroomSidebarCategory).toBe('solo')
+    expect(rows[1]!.dataset.dshChatroomHiddenSession).toBe('')
+    expect(rows[3]!.dataset.dshChatroomHiddenSession).toBe('')
+    expect(rows[1]!.dataset.dshChatroomSidebarCategory).toBeUndefined()
+    expect(rows[3]!.dataset.dshChatroomSidebarCategory).toBeUndefined()
+    expect(document.querySelector('[data-dsh-chatroom-category-header="group"] small')?.textContent).toBe('1')
+    expect(document.querySelector('[data-dsh-chatroom-category-header="solo"] small')?.textContent).toBe('1')
+  })
+
   it('uses the selected room id when two Sessions share the same title', () => {
     document.body.innerHTML = `
       <div role="treeitem" aria-selected="false"><span></span><span>同名群</span></div>

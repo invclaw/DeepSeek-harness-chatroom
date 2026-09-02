@@ -327,6 +327,7 @@ export const CHATROOM_STYLES = `
 
 [data-dsh-chatroom-room-list],
 [data-dsh-chatroom-workspace-categories] { display: flex !important; flex-direction: column; }
+[data-dsh-chatroom-hidden-session] { display: none !important; }
 [data-dsh-chatroom-workspace-categories] > [data-dsh-chatroom-native-group-section] { display: contents !important; }
 [data-dsh-chatroom-native-folder-wrapper][data-hidden="true"] { display: none !important; }
 [data-dsh-chatroom-native-overflow-button] { display: none !important; }

@@ -26,6 +26,7 @@ import type {
   ChatroomSearchResponse,
   ChatroomRoomsResponse,
   ChatroomSessionResponse,
+  ChatroomSoloSessionResponse,
   ChatroomThreadPromptRequest,
   ChatroomThreadRoot,
   ChatroomWecomAuthorizationState,
@@ -96,6 +97,10 @@ export class ChatroomHttpController {
       }
       if (route.endpoint === '/rooms') {
         await this.handleRooms(request, response)
+        return
+      }
+      if (route.endpoint === '/solo-sessions') {
+        await this.handleSoloSessions(request, response)
         return
       }
       if (route.endpoint === '/rooms/ensure') {
@@ -594,6 +599,28 @@ export class ChatroomHttpController {
     const body = await readJson(request, smallRequestLimit(this.config))
     const room = await this.runtime.createRoom(fieldString(body, 'title'), identity)
     json(response, 201, { room } satisfies ChatroomRoomResponse)
+  }
+
+  private async handleSoloSessions(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'POST' && request.method !== 'DELETE') {
+      methodNotAllowed(response, 'POST, DELETE')
+      return
+    }
+    assertSameOrigin(request)
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    if (request.method === 'POST') {
+      const sessionId = await this.runtime.reserveSoloSession(identity)
+      json(response, 201, { sessionId } satisfies ChatroomSoloSessionResponse)
+      return
+    }
+    if (request.method === 'DELETE') {
+      const body = await readJson(request, smallRequestLimit(this.config))
+      await this.runtime.releaseSoloSession(fieldString(body, 'sessionId'), identity)
+      response.writeHead(204)
+      response.end()
+      return
+    }
   }
 
   private async handleRoomEnsure(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -1169,13 +1196,18 @@ export class ChatroomHttpController {
     identity: ChatroomSessionResponse['identity'],
     account?: ChatroomAccount,
   ): ChatroomSessionResponse {
+    const rooms = (this.config.authEnabled && account === undefined) || identity === null
+      ? []
+      : this.runtime.roomsFor(identity)
+    const initialRoom = rooms.find(room => room.id === this.config.roomId)
     return {
       auth: this.runtime.auth.state(account),
       identity,
-      rooms: this.config.authEnabled && account === undefined || identity === null ? [] : this.runtime.roomsFor(identity),
-      ...(this.config.authEnabled && account === undefined || identity === null
-        ? {}
-        : { room: this.runtime.roomsFor(identity).find(room => room.id === this.config.roomId) ?? this.runtime.room }),
+      rooms,
+      soloSessionIds: this.config.authEnabled && account !== undefined && identity !== null
+        ? this.runtime.soloSessionIds(identity)
+        : [],
+      ...(initialRoom === undefined ? {} : { room: initialRoom }),
     }
   }
 

@@ -56,6 +56,12 @@ export interface RoomPreferenceRecord {
     readonly pinned: boolean;
     readonly updatedAt: number;
 }
+/** One native Harness Session owned as a private Solo conversation. */
+export interface SoloSessionRecord {
+    readonly sessionId: string;
+    readonly participantId: string;
+    readonly createdAt: number;
+}
 export interface AutomationSettingsRecord {
     readonly provider: string;
     readonly model: string;
@@ -199,6 +205,7 @@ export declare const chatroomDomainSpec: {
         messages: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, MessageRecord>;
         rooms: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, RoomRecord>;
         room_preferences: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, RoomPreferenceRecord>;
+        solo_sessions: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, SoloSessionRecord>;
         automation_settings: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, AutomationSettingsRecord>;
         files: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, FileRecord>;
         members: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, MemberRecord>;

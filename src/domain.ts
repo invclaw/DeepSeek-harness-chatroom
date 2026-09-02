@@ -79,6 +79,13 @@ export interface RoomPreferenceRecord {
   readonly updatedAt: number
 }
 
+/** One native Harness Session owned as a private Solo conversation. */
+export interface SoloSessionRecord {
+  readonly sessionId: string
+  readonly participantId: string
+  readonly createdAt: number
+}
+
 export interface AutomationSettingsRecord {
   readonly provider: string
   readonly model: string
@@ -289,6 +296,12 @@ const roomPreferenceSchema = z.object({
   updatedAt: nonNegativeSafeInteger,
 }) as z.ZodType<RoomPreferenceRecord>
 
+const soloSessionSchema = z.object({
+  sessionId: z.string().min(1),
+  participantId: z.string().min(1),
+  createdAt: nonNegativeSafeInteger,
+}) as z.ZodType<SoloSessionRecord>
+
 const automationSettingsSchema = z.object({
   provider: z.string().min(1),
   model: z.string().min(1),
@@ -492,6 +505,7 @@ export const chatroomDomainSpec = defineDomain({
     messages: domainTable<string, MessageRecord>(messageSchema),
     rooms: domainTable<string, RoomRecord>(roomSchema),
     room_preferences: domainTable<string, RoomPreferenceRecord>(roomPreferenceSchema),
+    solo_sessions: domainTable<string, SoloSessionRecord>(soloSessionSchema),
     automation_settings: domainTable<string, AutomationSettingsRecord>(automationSettingsSchema),
     files: domainTable<string, FileRecord>(fileSchema),
     members: domainTable<string, MemberRecord>(memberSchema),

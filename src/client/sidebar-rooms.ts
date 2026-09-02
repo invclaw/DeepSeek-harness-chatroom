@@ -35,6 +35,7 @@ const BRANCH_OVERFLOW_ATTRIBUTE = 'data-dsh-chatroom-branch-overflow'
 const BRANCH_OVERFLOW_ROW_ATTRIBUTE = 'data-dsh-chatroom-branch-overflow-row'
 const BRANCH_UPDATED_AT_ATTRIBUTE = 'data-dsh-chatroom-branch-updated-at'
 const SESSION_ID_ATTRIBUTE = 'data-dsh-chatroom-session-id'
+const HIDDEN_SESSION_ATTRIBUTE = 'data-dsh-chatroom-hidden-session'
 const BRANCH_SESSION_PREFIX = 'chatroom-thread-v1-'
 const BRANCH_TITLE_PREFIX = '分支：'
 const NATIVE_GROUP_SECTION_ATTRIBUTE = 'data-dsh-chatroom-native-group-section'
@@ -148,6 +149,9 @@ export function installSidebarRoomRows(store: ChatroomClientStore, sessions: ISe
       `${ROOM_ROW_SELECTOR}, [${BRANCH_ROW_ATTRIBUTE}], [${SESSION_ID_ATTRIBUTE}]`,
     )
     for (const row of decoratedRows) clearRoomRow(row)
+    for (const hidden of document.querySelectorAll<HTMLElement>(`[${HIDDEN_SESSION_ATTRIBUTE}]`)) {
+      hidden.removeAttribute(HIDDEN_SESSION_ATTRIBUTE)
+    }
     if (directoryRetry !== undefined) clearTimeout(directoryRetry)
     for (const row of document.querySelectorAll<HTMLElement>(`[${CATEGORY_ATTRIBUTE}]`)) clearCategorizedRow(row)
     for (const root of document.querySelectorAll<HTMLElement>(`[${CATEGORY_ROOT_ATTRIBUTE}]`)) clearCategoryRoot(root)
@@ -205,7 +209,10 @@ export function reconcileSidebarRoomRows(
       ? takeRoom(remaining, room => room.id === snapshot.room?.id)
       : undefined
     const room = bySession ?? active ?? takeUniquelyTitledRoom(remaining, row)
-    const branch = resolveBranch(row, sessionId, summary, sessionList, snapshot, room)
+    const resolvedBranch = resolveBranch(row, sessionId, summary, sessionList, snapshot, room)
+    const branch = resolvedBranch !== undefined && branchVisibleToIdentity(resolvedBranch, snapshot)
+      ? resolvedBranch
+      : undefined
     bindings.push({ row, sessionId, summary, branch, room })
   }
 
@@ -226,6 +233,7 @@ export function reconcileSidebarRoomRows(
   for (const binding of bindings) {
     const { row, sessionId, branch, room } = binding
     if (room !== undefined) {
+      showNativeSessionRow(row)
       clearBranchRow(row)
       row.setAttribute(SESSION_ID_ATTRIBUTE, room.sessionId)
       decorateRoomRow(row, room, roomAvatars(room, snapshot), groupOrder++, setPinned)
@@ -237,6 +245,7 @@ export function reconcileSidebarRoomRows(
     }
     clearRoomDecorations(row)
     if (branch !== undefined) {
+      showNativeSessionRow(row)
       if (row.dataset.dshChatroomBranchRow !== undefined
         && row.dataset.dshChatroomBranchSessionId !== branch.sessionId) {
         clearBranchRow(row)
@@ -250,9 +259,15 @@ export function reconcileSidebarRoomRows(
     }
     clearBranchRow(row)
     if (!isNativeSessionRow(row)) {
+      showNativeSessionRow(row)
       clearCategorizedRow(row)
       continue
     }
+    if (!nativeSoloVisible(sessionId, snapshot)) {
+      hideNativeSessionRow(row)
+      continue
+    }
+    showNativeSessionRow(row)
     row.removeAttribute(BRANCH_ROW_ATTRIBUTE)
     decorateSoloRow(row, soloOrder++)
     setRowCategory(row, 'solo')
@@ -260,6 +275,31 @@ export function reconcileSidebarRoomRows(
   }
   reconcileWorkspaceCategories(documentRoot, categoryRoot, categorized, snapshot, openDirect)
   reconcileNativeRoomMenu(documentRoot, snapshot, setPinned)
+}
+
+function branchVisibleToIdentity(branch: BranchRowFacts, snapshot: ChatroomView): boolean {
+  if (snapshot.auth?.enabled !== true) return true
+  if (branch.parentSessionId === undefined) return false
+  return snapshot.rooms.some(room => room.sessionId === branch.parentSessionId)
+}
+
+function nativeSoloVisible(sessionId: string | undefined, snapshot: ChatroomView): boolean {
+  if (snapshot.phase !== undefined && snapshot.phase !== 'ready') return false
+  if (snapshot.auth?.enabled !== true) return true
+  if (sessionId === undefined) return false
+  return snapshot.soloSessionIds?.includes(sessionId) === true
+}
+
+function hideNativeSessionRow(row: HTMLElement): void {
+  const shell = categoryRowShell(row)
+  clearCategorizedRow(row)
+  row.setAttribute(HIDDEN_SESSION_ATTRIBUTE, '')
+  shell.setAttribute(HIDDEN_SESSION_ATTRIBUTE, '')
+}
+
+function showNativeSessionRow(row: HTMLElement): void {
+  row.removeAttribute(HIDDEN_SESSION_ATTRIBUTE)
+  row.parentElement?.removeAttribute(HIDDEN_SESSION_ATTRIBUTE)
 }
 
 function sessionSummary(list: SidebarSessionList | undefined, id: string | undefined): SessionSummary | undefined {

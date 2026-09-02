@@ -60,13 +60,27 @@ export function apply(ctx: ClientContext): void {
     return true
   }, branchFrame)
   ctx.effect(() => installFreshSessionStart(workspaces, sessions, async (workspaceId) => {
-    const response = await connection.api.sessions.create({ workspaceId })
-    if (!response.result.ok) {
-      throw new Error(`new shared session failed: ${response.result.error.code}: ${response.result.error.message}`)
+    const snapshot = store.getSnapshot()
+    if (snapshot.phase === 'loading') throw new Error('chatroom identity is still loading')
+    const reservedSessionId = snapshot.auth.enabled ? await store.reserveSoloSession() : undefined
+    try {
+      const response = await connection.api.sessions.create({
+        workspaceId,
+        ...(reservedSessionId === undefined ? {} : { sessionId: reservedSessionId as SessionId }),
+      })
+      if (!response.result.ok) {
+        throw new Error(`new shared session failed: ${response.result.error.code}: ${response.result.error.message}`)
+      }
+      const sessionId = response.result.value.sessionId
+      if (reservedSessionId !== undefined && String(sessionId) !== reservedSessionId) {
+        throw new Error('native Session id does not match its Solo reservation')
+      }
+      store.registerNewSession(String(sessionId))
+      return sessionId
+    } catch (error) {
+      if (reservedSessionId !== undefined) await store.releaseSoloSession(reservedSessionId)
+      throw error
     }
-    const sessionId = response.result.value.sessionId
-    store.registerNewSession(String(sessionId))
-    return sessionId
   }), 'chatroom: distinct native New Session')
   ctx.effect(() => {
     document.documentElement.setAttribute('data-dsh-chatroom-installed', '')
@@ -131,6 +145,14 @@ export function apply(ctx: ClientContext): void {
         branchFrame === undefined && summary?.origin !== 'subagent',
         summary?.parentId === undefined ? undefined : String(summary.parentId),
       )
+      const snapshot = store.getSnapshot()
+      if (current !== undefined && snapshot.auth.enabled && snapshot.phase !== 'loading'
+        && (snapshot.phase !== 'ready'
+          || store.roomForSession(String(current)) === undefined
+            && !store.canPromptNativeSession(String(current)))) {
+        sessions.clear()
+        return
+      }
       if (current !== undefined && summary?.blank === true && summary.origin !== 'subagent'
         && store.roomForSession(String(current)) === undefined
         && store.newSessionMode(String(current)) === undefined) {
@@ -138,6 +160,13 @@ export function apply(ctx: ClientContext): void {
       }
     }
     const unsubscribeSessions = sessions.list.subscribe(syncSession)
+    let synchronizedPhase = store.getSnapshot().phase
+    const unsubscribeSessionGuard = store.subscribe(() => {
+      const phase = store.getSnapshot().phase
+      if (phase === synchronizedPhase) return
+      synchronizedPhase = phase
+      syncSession()
+    })
     void store.start().then(async () => {
       syncSession()
       if (typeof location === 'undefined') return
@@ -146,6 +175,7 @@ export function apply(ctx: ClientContext): void {
     })
     return () => {
       unsubscribeSessions()
+      unsubscribeSessionGuard()
       globalThis.removeEventListener('message', receiveBranchSwitch)
       restorePrompt()
       restoreMentionAvatars()

@@ -34,6 +34,7 @@ import type {
   ChatroomSearchResult,
   ChatroomServerEvent,
   ChatroomSessionResponse,
+  ChatroomSoloSessionResponse,
   ChatroomThread,
   ChatroomThreadMessage,
   ChatroomThreadPreview,
@@ -153,6 +154,7 @@ export interface ChatroomView {
   readonly directConversation: ChatroomDirectConversation | undefined
   readonly directMessages: readonly ChatroomDirectMessage[]
   readonly directError: string | undefined
+  readonly soloSessionIds: readonly string[]
   readonly newSessionModes: Readonly<Record<string, ChatroomNewSessionMode>>
   readonly searchOpen: boolean
   readonly searchQuery: string
@@ -231,6 +233,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     directConversation: undefined,
     directMessages: [],
     directError: undefined,
+    soloSessionIds: [],
     newSessionModes: {},
     searchOpen: false,
     searchQuery: '',
@@ -303,9 +306,44 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   /** Mark a newly created native Session as a Group by default. */
   registerNewSession = (sessionId: string): void => {
+    if (this.snapshot.auth.enabled && !this.snapshot.soloSessionIds.includes(sessionId)) return
     this.set({
       newSessionModes: { ...this.snapshot.newSessionModes, [sessionId]: 'group' },
     })
+  }
+
+  /** Reserve a native Session id owned by the authenticated account. */
+  reserveSoloSession = async (): Promise<string> => {
+    const response = await requestJson<ChatroomSoloSessionResponse>(`${CHATROOM_API_PREFIX}/solo-sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    this.set({
+      soloSessionIds: this.snapshot.soloSessionIds.includes(response.sessionId)
+        ? this.snapshot.soloSessionIds
+        : [...this.snapshot.soloSessionIds, response.sessionId],
+    })
+    return response.sessionId
+  }
+
+  /** Release an owned Session id after native creation fails. */
+  releaseSoloSession = async (sessionId: string): Promise<void> => {
+    try {
+      await requestEmpty(`${CHATROOM_API_PREFIX}/solo-sessions`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      })
+    } finally {
+      this.set({ soloSessionIds: this.snapshot.soloSessionIds.filter(candidate => candidate !== sessionId) })
+    }
+  }
+
+  /** Check whether the current identity may use a native Session as Solo. */
+  canPromptNativeSession(sessionId: string): boolean {
+    if (this.snapshot.phase !== 'ready') return false
+    if (!this.snapshot.auth.enabled) return true
+    return this.snapshot.soloSessionIds.includes(sessionId)
   }
 
   /** Read the explicit creation mode for one newly created native Session. */
@@ -457,6 +495,8 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         directOpen: false,
         directConversation: undefined,
         directMessages: [],
+        soloSessionIds: [],
+        newSessionModes: {},
         searchOpen: false,
         searchBusy: false,
         searchResults: [],
@@ -1541,6 +1581,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       open: false,
       connection: 'offline',
       rooms: session.rooms,
+      soloSessionIds: session.soloSessionIds,
       identity: session.identity,
       auth: sessionAuth(session),
       error: undefined,
@@ -1567,7 +1608,13 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         const rooms = this.snapshot.rooms.some(room => room.id === response.room.id)
           ? this.snapshot.rooms.map(room => room.id === response.room.id ? response.room : room)
           : [...this.snapshot.rooms, response.room]
-        this.set({ rooms, error: undefined })
+        const { [active.id]: _createdMode, ...newSessionModes } = this.snapshot.newSessionModes
+        this.set({
+          rooms,
+          soloSessionIds: this.snapshot.soloSessionIds.filter(sessionId => sessionId !== active.id),
+          newSessionModes,
+          error: undefined,
+        })
         if (this.activeNativeSession?.id === active.id) this.activateSession(active.id, active.title, active.shareable)
       } catch (error) {
         if (this.activeNativeSession?.id === active.id) {
@@ -1636,6 +1683,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           open: true,
           connection: 'offline',
           rooms: [],
+          soloSessionIds: [],
           room: undefined,
           roomEnsureSessionId: undefined,
           identity: undefined,
@@ -1652,6 +1700,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           open: true,
           connection: 'offline',
           rooms: session.rooms,
+          soloSessionIds: session.soloSessionIds,
           room: undefined,
           roomEnsureSessionId: undefined,
           identity: undefined,
@@ -1665,6 +1714,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         phase: 'ready',
         connection: 'offline',
         rooms: session.rooms,
+        soloSessionIds: session.soloSessionIds,
         identity: session.identity,
         auth,
         error: undefined,
