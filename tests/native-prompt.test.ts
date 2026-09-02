@@ -21,7 +21,7 @@ describe('native prompt admission', () => {
     ])
   })
 
-  it('routes room chat to the plugin and leaves ordinary sessions and commands native', async () => {
+  it('routes room chat to the plugin and leaves owned Solo sessions and room commands native', async () => {
     const original = vi.fn(async () => ({
       rpcId: 'rpc' as never,
       result: { ok: true as const, value: { accepted: true as const } },
@@ -35,6 +35,7 @@ describe('native prompt admission', () => {
     const room = { id: 'room', sessionId: 'room-session' }
     const store = {
       roomForSession: (sessionId: string) => sessionId === room.sessionId ? room : undefined,
+      canPromptNativeSession: (sessionId: string) => sessionId === 'ordinary-session',
       getSnapshot: () => ({ identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' } }),
       composition: () => ({ roomId: 'room', revision: 0, files: [], reply: undefined }),
       completeComposition: vi.fn(),
@@ -78,6 +79,30 @@ describe('native prompt admission', () => {
     expect(api.sessions.prompt).toBe(original)
   })
 
+  it('blocks hidden native Sessions before normal or slash-command submission', async () => {
+    const original = vi.fn()
+    const api = { sessions: { prompt: original } } as unknown as IApiClient
+    const store = {
+      agentTargetForSession: () => undefined,
+      newSessionMode: () => undefined,
+      ensurePromptTarget: async () => undefined,
+      canPromptNativeSession: () => false,
+    } as unknown as ChatroomClientStore
+    installNativePromptIdentity(api, store)
+
+    await expect(api.sessions.prompt({
+      sessionId: 'another-users-session' as never,
+      mode: 'queue',
+      content: [{ type: 'text', text: '不能匿名发进群聊' }],
+    })).rejects.toThrow('会话不存在或你无权访问')
+    await expect(api.sessions.prompt({
+      sessionId: 'another-users-session' as never,
+      mode: 'queue',
+      content: [{ type: 'text', text: '/new' }],
+    })).rejects.toThrow('会话不存在或你无权访问')
+    expect(original).not.toHaveBeenCalled()
+  })
+
   it('synchronizes room auto-response settings before routing consecutive native branch prompts', async () => {
     const original = vi.fn(async () => ({
       rpcId: 'rpc' as never,
@@ -96,6 +121,7 @@ describe('native prompt admission', () => {
         ? { kind: 'thread', room, threadId: 'thread-id' }
         : undefined,
       waitForRoomAutoTrigger,
+      canPromptNativeSession: () => false,
       getSnapshot: () => ({ identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' } }),
       composition: () => ({
         roomId: 'room',
@@ -166,6 +192,7 @@ describe('native prompt admission', () => {
       agentTargetForSession: () => undefined,
       newSessionMode: () => 'group',
       ensurePromptTarget: vi.fn(async () => ({ kind: 'room' as const, room })),
+      canPromptNativeSession: () => true,
       newGroupInvitees: vi.fn(() => ['bob-id']),
       addRoomMembers,
       getSnapshot: () => ({
@@ -204,6 +231,7 @@ describe('native prompt admission', () => {
     const room = { id: 'room', sessionId: 'room-session' }
     const store = {
       roomForSession: () => room,
+      canPromptNativeSession: () => false,
       waitForRoomAutoTrigger: vi.fn(async () => { order.push('setting') }),
       getSnapshot: () => ({ identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' } }),
       composition: () => ({ roomId: 'room', revision: 0, files: [], reply: undefined }),

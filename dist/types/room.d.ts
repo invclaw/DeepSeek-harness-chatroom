@@ -20,6 +20,7 @@ export declare class ChatroomRuntime {
     private identities;
     private roomRecords;
     private roomPreferences;
+    private soloSessions;
     private automationSettings;
     private files;
     private members;
@@ -110,6 +111,14 @@ export declare class ChatroomRuntime {
     deleteIdentity(token: string | undefined): Promise<void>;
     /** Create and activate one independent shared Harness Session. */
     createRoom(title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
+    /** Reserve an opaque native Session id as a private Solo conversation. */
+    reserveSoloSession(identity: ChatroomIdentity): Promise<string>;
+    /** Release a failed or abandoned Solo Session reservation owned by the caller. */
+    releaseSoloSession(sessionId: string, identity: ChatroomIdentity): Promise<void>;
+    /** List only the native Solo Sessions owned by one identity. */
+    soloSessionIds(identity: ChatroomIdentity): readonly string[];
+    /** Test whether one native Session is an identity-owned Solo conversation. */
+    ownsSoloSession(sessionId: string, identity: ChatroomIdentity): boolean;
     /** Adopt one native Harness Session as a shared room, once, across concurrent browsers. */
     ensureSessionRoom(sessionId: string, title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     private createSessionRoom;
@@ -302,6 +311,7 @@ export declare class ChatroomRuntime {
     private requireIdentities;
     private requireRoomRecords;
     private requireRoomPreferences;
+    private requireSoloSessions;
     private requireAutomationSettings;
     private requireArchive;
     private requireFiles;

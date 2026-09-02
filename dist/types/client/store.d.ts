@@ -97,6 +97,7 @@ export interface ChatroomView {
     readonly directConversation: ChatroomDirectConversation | undefined;
     readonly directMessages: readonly ChatroomDirectMessage[];
     readonly directError: string | undefined;
+    readonly soloSessionIds: readonly string[];
     readonly newSessionModes: Readonly<Record<string, ChatroomNewSessionMode>>;
     readonly searchOpen: boolean;
     readonly searchQuery: string;
@@ -130,6 +131,12 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     agentTargetForSession(sessionId: string): ChatroomAgentTarget | undefined;
     /** Mark a newly created native Session as a Group by default. */
     registerNewSession: (sessionId: string) => void;
+    /** Reserve a native Session id owned by the authenticated account. */
+    reserveSoloSession: () => Promise<string>;
+    /** Release an owned Session id after native creation fails. */
+    releaseSoloSession: (sessionId: string) => Promise<void>;
+    /** Check whether the current identity may use a native Session as Solo. */
+    canPromptNativeSession(sessionId: string): boolean;
     /** Read the explicit creation mode for one newly created native Session. */
     newSessionMode: (sessionId: string) => ChatroomNewSessionMode | undefined;
     /** Choose whether a new Session becomes a shared room on first prompt or stays Solo. */

@@ -275,8 +275,14 @@ export interface ChatroomSessionResponse {
     readonly auth: ChatroomAuthState;
     readonly identity: ChatroomIdentity | null;
     readonly rooms: readonly ChatroomInfo[];
+    /** Native Solo Sessions owned by the authenticated identity. */
+    readonly soloSessionIds: readonly string[];
     /** Configured legacy room retained during rolling browser bundle upgrades after authentication. */
     readonly room?: ChatroomInfo;
+}
+/** Result of reserving one identity-owned native Solo Session id. */
+export interface ChatroomSoloSessionResponse {
+    readonly sessionId: string;
 }
 /** One peer available for private messaging. */
 export interface ChatroomDirectPeer extends ChatroomIdentity {

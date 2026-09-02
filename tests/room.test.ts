@@ -750,6 +750,44 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
+  it('keeps authenticated Solo Sessions private and rejects cross-account room adoption', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, {
+      ...config(),
+      authEnabled: true,
+      authSecret: 'a secure test secret with at least 32 bytes',
+      authPublicOrigin: 'https://chat.example.com',
+      authBootstrapToken: 'bootstrap-token',
+    })
+    await runtime.start()
+    const alice = (await runtime.auth.register({
+      username: 'alice', password: 'alice password 123', displayName: 'Alice', bootstrapToken: 'bootstrap-token',
+    })).account
+    const bob = (await runtime.auth.register({
+      username: 'bob-user', password: 'bob password 1234', displayName: 'Bob',
+    })).account
+    const sessionId = await runtime.reserveSoloSession(alice)
+    harness.agents.push({
+      id: sessionId,
+      options: { provider: 'deepseek', model: 'chat' },
+      session: { id: sessionId, events: [], append: vi.fn() },
+      ctx: harness.makeAgentContext(),
+      followup: vi.fn(),
+      steer: vi.fn(),
+    } as never)
+    vi.mocked(harness.ctx.agents.get).mockImplementation(id =>
+      harness.agents.find(agent => String(agent.id) === String(id)))
+
+    expect(runtime.soloSessionIds(alice)).toEqual([sessionId])
+    expect(runtime.soloSessionIds(bob)).toEqual([])
+    await expect(runtime.ensureSessionRoom(sessionId, '越权群聊', bob))
+      .rejects.toThrow('无权将其转换为群聊')
+    await expect(runtime.ensureSessionRoom(sessionId, 'Alice 的群聊', alice))
+      .resolves.toMatchObject({ sessionId, title: 'Alice 的群聊' })
+    expect(runtime.soloSessionIds(alice)).toEqual([])
+    await runtime.stop()
+  })
+
   it('adds chatroom tools to a live Agent restored by Harness before room adoption', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())

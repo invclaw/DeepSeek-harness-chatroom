@@ -37,6 +37,7 @@ import {
   type ReactionRecord,
   type RoomRecord,
   type RoomPreferenceRecord,
+  type SoloSessionRecord,
   type ThreadMessageRecord,
   type ThreadRecord,
 } from './domain.js'
@@ -159,6 +160,7 @@ export class ChatroomRuntime {
   private identities: KvTable<string, IdentityRecord> | undefined
   private roomRecords: KvTable<string, RoomRecord> | undefined
   private roomPreferences: KvTable<string, RoomPreferenceRecord> | undefined
+  private soloSessions: KvTable<string, SoloSessionRecord> | undefined
   private automationSettings: KvTable<string, AutomationSettingsRecord> | undefined
   private files: KvTable<string, FileRecord> | undefined
   private members: KvTable<string, MemberRecord> | undefined
@@ -442,6 +444,7 @@ export class ChatroomRuntime {
     this.identities = domain.table('identities')
     this.roomRecords = domain.table('rooms')
     this.roomPreferences = domain.table('room_preferences')
+    this.soloSessions = domain.table('solo_sessions')
     this.automationSettings = domain.table('automation_settings')
     this.files = domain.table('files')
     this.members = domain.table('members')
@@ -521,6 +524,7 @@ export class ChatroomRuntime {
     this.identities = undefined
     this.roomRecords = undefined
     this.roomPreferences = undefined
+    this.soloSessions = undefined
     this.automationSettings = undefined
     this.files = undefined
     this.members = undefined
@@ -628,6 +632,46 @@ export class ChatroomRuntime {
     }
   }
 
+  /** Reserve an opaque native Session id as a private Solo conversation. */
+  async reserveSoloSession(identity: ChatroomIdentity): Promise<string> {
+    this.assertReady()
+    const sessionId = `session-${randomUUID()}`
+    await this.requireSoloSessions().put(sessionId, {
+      sessionId,
+      participantId: identity.participantId,
+      createdAt: Date.now(),
+    })
+    return sessionId
+  }
+
+  /** Release a failed or abandoned Solo Session reservation owned by the caller. */
+  async releaseSoloSession(sessionId: string, identity: ChatroomIdentity): Promise<void> {
+    this.assertReady()
+    const normalizedSessionId = String(SessionId(sessionId))
+    const record = this.requireSoloSessions().get(normalizedSessionId)
+    if (record === undefined) return
+    if (record.participantId !== identity.participantId) {
+      throw new ChatroomInputError('只能释放自己的 Solo 会话。')
+    }
+    await this.requireSoloSessions().delete(normalizedSessionId)
+  }
+
+  /** List only the native Solo Sessions owned by one identity. */
+  soloSessionIds(identity: ChatroomIdentity): readonly string[] {
+    this.assertReady()
+    return [...this.requireSoloSessions().entries()]
+      .map(([, record]) => record)
+      .filter(record => record.participantId === identity.participantId)
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .map(record => record.sessionId)
+  }
+
+  /** Test whether one native Session is an identity-owned Solo conversation. */
+  ownsSoloSession(sessionId: string, identity: ChatroomIdentity): boolean {
+    this.assertReady()
+    return this.requireSoloSessions().get(String(SessionId(sessionId)))?.participantId === identity.participantId
+  }
+
   /** Adopt one native Harness Session as a shared room, once, across concurrent browsers. */
   async ensureSessionRoom(
     sessionId: string,
@@ -663,6 +707,9 @@ export class ChatroomRuntime {
     identity: ChatroomIdentity,
   ): Promise<ChatroomInfo> {
     const normalizedSessionId = String(SessionId(sessionId))
+    if (this.config.authEnabled && !this.ownsSoloSession(normalizedSessionId, identity)) {
+      throw new ChatroomInputError('会话不存在或你无权将其转换为群聊。')
+    }
     if ([...this.threadStates.values()].some(state => state.record.sessionId === normalizedSessionId)) {
       throw new ChatroomInputError('分支会话不能单独转换为群聊。')
     }
@@ -691,6 +738,7 @@ export class ChatroomRuntime {
     try {
       await this.ensureRoom(id)
       await this.touchMember(id, identity)
+      if (this.config.authEnabled) await this.requireSoloSessions().delete(normalizedSessionId)
       return this.projectRoom(state, identity.participantId)
     } catch (error) {
       this.states.delete(id)
@@ -3508,6 +3556,11 @@ export class ChatroomRuntime {
   private requireRoomPreferences(): KvTable<string, RoomPreferenceRecord> {
     if (this.roomPreferences === undefined) throw new Error('chatroom room-preference storage is unavailable')
     return this.roomPreferences
+  }
+
+  private requireSoloSessions(): KvTable<string, SoloSessionRecord> {
+    if (this.soloSessions === undefined) throw new Error('chatroom Solo Session storage is unavailable')
+    return this.soloSessions
   }
 
   private requireAutomationSettings(): KvTable<string, AutomationSettingsRecord> {

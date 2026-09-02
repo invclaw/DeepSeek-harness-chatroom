@@ -1780,6 +1780,11 @@ var roomPreferenceSchema = z2.object({
   pinned: z2.boolean(),
   updatedAt: nonNegativeSafeInteger
 });
+var soloSessionSchema = z2.object({
+  sessionId: z2.string().min(1),
+  participantId: z2.string().min(1),
+  createdAt: nonNegativeSafeInteger
+});
 var automationSettingsSchema = z2.object({
   provider: z2.string().min(1),
   model: z2.string().min(1),
@@ -1966,6 +1971,7 @@ var chatroomDomainSpec = defineDomain({
     messages: domainTable(messageSchema),
     rooms: domainTable(roomSchema),
     room_preferences: domainTable(roomPreferenceSchema),
+    solo_sessions: domainTable(soloSessionSchema),
     automation_settings: domainTable(automationSettingsSchema),
     files: domainTable(fileSchema),
     members: domainTable(memberSchema),
@@ -2795,6 +2801,7 @@ var ChatroomRuntime = class {
   identities;
   roomRecords;
   roomPreferences;
+  soloSessions;
   automationSettings;
   files;
   members;
@@ -3020,6 +3027,7 @@ var ChatroomRuntime = class {
     this.identities = domain.table("identities");
     this.roomRecords = domain.table("rooms");
     this.roomPreferences = domain.table("room_preferences");
+    this.soloSessions = domain.table("solo_sessions");
     this.automationSettings = domain.table("automation_settings");
     this.files = domain.table("files");
     this.members = domain.table("members");
@@ -3098,6 +3106,7 @@ var ChatroomRuntime = class {
     this.identities = void 0;
     this.roomRecords = void 0;
     this.roomPreferences = void 0;
+    this.soloSessions = void 0;
     this.automationSettings = void 0;
     this.files = void 0;
     this.members = void 0;
@@ -3199,6 +3208,38 @@ var ChatroomRuntime = class {
       throw error;
     }
   }
+  /** Reserve an opaque native Session id as a private Solo conversation. */
+  async reserveSoloSession(identity) {
+    this.assertReady();
+    const sessionId = `session-${randomUUID3()}`;
+    await this.requireSoloSessions().put(sessionId, {
+      sessionId,
+      participantId: identity.participantId,
+      createdAt: Date.now()
+    });
+    return sessionId;
+  }
+  /** Release a failed or abandoned Solo Session reservation owned by the caller. */
+  async releaseSoloSession(sessionId, identity) {
+    this.assertReady();
+    const normalizedSessionId = String(SessionId(sessionId));
+    const record = this.requireSoloSessions().get(normalizedSessionId);
+    if (record === void 0) return;
+    if (record.participantId !== identity.participantId) {
+      throw new ChatroomInputError("\u53EA\u80FD\u91CA\u653E\u81EA\u5DF1\u7684 Solo \u4F1A\u8BDD\u3002");
+    }
+    await this.requireSoloSessions().delete(normalizedSessionId);
+  }
+  /** List only the native Solo Sessions owned by one identity. */
+  soloSessionIds(identity) {
+    this.assertReady();
+    return [...this.requireSoloSessions().entries()].map(([, record]) => record).filter((record) => record.participantId === identity.participantId).sort((left, right) => right.createdAt - left.createdAt).map((record) => record.sessionId);
+  }
+  /** Test whether one native Session is an identity-owned Solo conversation. */
+  ownsSoloSession(sessionId, identity) {
+    this.assertReady();
+    return this.requireSoloSessions().get(String(SessionId(sessionId)))?.participantId === identity.participantId;
+  }
   /** Adopt one native Harness Session as a shared room, once, across concurrent browsers. */
   async ensureSessionRoom(sessionId, title, identity) {
     this.assertReady();
@@ -3225,6 +3266,9 @@ var ChatroomRuntime = class {
   }
   async createSessionRoom(sessionId, title, identity) {
     const normalizedSessionId = String(SessionId(sessionId));
+    if (this.config.authEnabled && !this.ownsSoloSession(normalizedSessionId, identity)) {
+      throw new ChatroomInputError("\u4F1A\u8BDD\u4E0D\u5B58\u5728\u6216\u4F60\u65E0\u6743\u5C06\u5176\u8F6C\u6362\u4E3A\u7FA4\u804A\u3002");
+    }
     if ([...this.threadStates.values()].some((state2) => state2.record.sessionId === normalizedSessionId)) {
       throw new ChatroomInputError("\u5206\u652F\u4F1A\u8BDD\u4E0D\u80FD\u5355\u72EC\u8F6C\u6362\u4E3A\u7FA4\u804A\u3002");
     }
@@ -3252,6 +3296,7 @@ var ChatroomRuntime = class {
     try {
       await this.ensureRoom(id);
       await this.touchMember(id, identity);
+      if (this.config.authEnabled) await this.requireSoloSessions().delete(normalizedSessionId);
       return this.projectRoom(state, identity.participantId);
     } catch (error) {
       this.states.delete(id);
@@ -5666,6 +5711,10 @@ Respond to that message now. Do not mention this controller notice.`
     if (this.roomPreferences === void 0) throw new Error("chatroom room-preference storage is unavailable");
     return this.roomPreferences;
   }
+  requireSoloSessions() {
+    if (this.soloSessions === void 0) throw new Error("chatroom Solo Session storage is unavailable");
+    return this.soloSessions;
+  }
   requireAutomationSettings() {
     if (this.automationSettings === void 0) throw new Error("chatroom automation settings are unavailable");
     return this.automationSettings;
@@ -6405,6 +6454,10 @@ var ChatroomHttpController = class {
         await this.handleRooms(request, response);
         return;
       }
+      if (route.endpoint === "/solo-sessions") {
+        await this.handleSoloSessions(request, response);
+        return;
+      }
       if (route.endpoint === "/rooms/ensure") {
         await this.handleRoomEnsure(request, response);
         return;
@@ -6881,6 +6934,27 @@ var ChatroomHttpController = class {
     const body = await readJson(request, smallRequestLimit(this.config));
     const room = await this.runtime.createRoom(fieldString(body, "title"), identity);
     json(response, 201, { room });
+  }
+  async handleSoloSessions(request, response) {
+    if (request.method !== "POST" && request.method !== "DELETE") {
+      methodNotAllowed(response, "POST, DELETE");
+      return;
+    }
+    assertSameOrigin(request);
+    const identity = await this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    if (request.method === "POST") {
+      const sessionId = await this.runtime.reserveSoloSession(identity);
+      json(response, 201, { sessionId });
+      return;
+    }
+    if (request.method === "DELETE") {
+      const body = await readJson(request, smallRequestLimit(this.config));
+      await this.runtime.releaseSoloSession(fieldString(body, "sessionId"), identity);
+      response.writeHead(204);
+      response.end();
+      return;
+    }
   }
   async handleRoomEnsure(request, response) {
     if (request.method !== "POST") {
@@ -7391,11 +7465,14 @@ var ChatroomHttpController = class {
     json(response, upstream.status, payload);
   }
   sessionPayload(identity, account) {
+    const rooms = this.config.authEnabled && account === void 0 || identity === null ? [] : this.runtime.roomsFor(identity);
+    const initialRoom = rooms.find((room) => room.id === this.config.roomId);
     return {
       auth: this.runtime.auth.state(account),
       identity,
-      rooms: this.config.authEnabled && account === void 0 || identity === null ? [] : this.runtime.roomsFor(identity),
-      ...this.config.authEnabled && account === void 0 || identity === null ? {} : { room: this.runtime.roomsFor(identity).find((room) => room.id === this.config.roomId) ?? this.runtime.room }
+      rooms,
+      soloSessionIds: this.config.authEnabled && account !== void 0 && identity !== null ? this.runtime.soloSessionIds(identity) : [],
+      ...initialRoom === void 0 ? {} : { room: initialRoom }
     };
   }
   async requireIdentity(request, response) {

@@ -18,21 +18,29 @@ export function installNativePromptIdentity(
   const original = api.sessions.prompt
   const wrapped: IApiClient['sessions']['prompt'] = async (payload, signal) => {
     const sessionId = String(payload.sessionId)
-    if (isSlashCommand(payload.content as readonly ChatroomPromptContentPart[])) {
-      return await original(payload, signal)
-    }
+    const slashCommand = isSlashCommand(payload.content as readonly ChatroomPromptContentPart[])
     let target = typeof store.agentTargetForSession === 'function'
       ? store.agentTargetForSession(String(payload.sessionId))
       : (() => {
         const room = store.roomForSession(String(payload.sessionId))
         return room === undefined ? undefined : { kind: 'room' as const, room }
       })()
+    if (target === undefined && slashCommand) {
+      if (!store.canPromptNativeSession(sessionId)) throw new Error('会话不存在或你无权访问。')
+      return await original(payload, signal)
+    }
     const newGroup = target === undefined && typeof store.newSessionMode === 'function'
       && store.newSessionMode(sessionId) === 'group'
     if (target === undefined && typeof store.ensurePromptTarget === 'function') {
       target = await store.ensurePromptTarget(sessionId)
     }
-    if (target === undefined) return await original(payload, signal)
+    if (target === undefined) {
+      if (!store.canPromptNativeSession(sessionId)) throw new Error('会话不存在或你无权访问。')
+      return await original(payload, signal)
+    }
+    if (slashCommand) {
+      return await original(payload, signal)
+    }
     if (store.getSnapshot().identity === undefined) {
       throw new Error('请先选择聊天室身份。')
     }

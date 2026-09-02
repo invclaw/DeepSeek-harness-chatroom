@@ -673,6 +673,7 @@ function messageProps(
       directConversation: undefined,
       directMessages: [],
       directError: undefined,
+      soloSessionIds: [],
       newSessionModes: {},
       searchOpen: false,
       searchQuery: '',

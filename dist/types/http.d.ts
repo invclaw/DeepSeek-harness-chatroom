@@ -19,6 +19,7 @@ export declare class ChatroomHttpController {
     private handleDirectMessages;
     private handleDirectReactionToggle;
     private handleRooms;
+    private handleSoloSessions;
     private handleRoomEnsure;
     private handleSearch;
     private handleRoomSelection;

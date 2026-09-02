@@ -769,7 +769,7 @@ function roomInfo() {
 }
 
 function sessionResponse(identity: { participantId: string; displayName: string; avatarId: 'whale' | 'panda' } | null, rooms: ReturnType<typeof roomInfo>[]) {
-  return { identity, rooms, room: rooms[0] }
+  return { identity, rooms, soloSessionIds: [], room: rooms[0] }
 }
 
 function jsonResponse(value: unknown, status = 200): Response {
