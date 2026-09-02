@@ -43,7 +43,9 @@ export function ChatroomMessageFrame({
   readonly tools: ChatroomMessageToolsProps
 }): JSX.Element {
   const menu = useChatroomMessageMenu()
-  const actionsVisible = groupPosition === undefined || groupPosition === 'single' || groupPosition === 'end'
+  const actionsVisible = groupPosition === undefined
+    ? undefined
+    : groupPosition === 'single' || groupPosition === 'end'
   return <div
     ref={rootRef}
     className={['dsh-chatroom-participant-message', className].filter(Boolean).join(' ')}
