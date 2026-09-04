@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -66,12 +67,20 @@ describe('official Enterprise WeChat CLI adapter', () => {
     await expect(fetchTencentDocumentTitle('https://docs.qq.com/doc/DT2JxRE5xd3JPRVh6')).resolves.toBeUndefined()
   })
 
-  it('migrates the only authorized legacy account into one deployment-shared credential directory', async () => {
+  it('isolates account credentials and leaves the former shared credential untouched', async () => {
     const root = await mkdtemp(join(tmpdir(), 'chatroom-wecom-'))
-    const legacy = join(root, 'wecom-cli', 'accounts', 'legacy-account')
-    await mkdir(legacy, { recursive: true })
-    await writeFile(join(legacy, 'credentials.enc'), 'encrypted credentials')
-    await writeFile(join(legacy, '.encryption_key'), 'encryption key')
+    const accountDirectory = (participantId: string): string => join(
+      root,
+      'wecom-cli',
+      'accounts',
+      createHash('sha256').update(participantId).digest('hex').slice(0, 32),
+    )
+    const alice = accountDirectory('alice-id')
+    const shared = join(root, 'wecom-cli', 'shared')
+    await mkdir(alice, { recursive: true })
+    await mkdir(shared, { recursive: true })
+    await writeFile(join(alice, 'credentials.enc'), 'alice credentials')
+    await writeFile(join(shared, 'credentials.enc'), 'former shared credentials')
     const manager = new WecomCliManager({
       wecomEnabled: true,
       wecomCliPath: fileURLToPath(new URL('fixtures/fake-wecom-cli.mjs', import.meta.url)),
@@ -80,10 +89,14 @@ describe('official Enterprise WeChat CLI adapter', () => {
       dataDirectory: root,
     } as Config)
 
-    await expect(manager.authorizationState()).resolves.toMatchObject({ status: 'authorized', qrAvailable: false })
-    await expect(readFile(join(root, 'wecom-cli', 'shared', 'credentials.enc'), 'utf8')).resolves.toBe('encrypted credentials')
-    await expect(manager.disconnectAuthorization()).resolves.toMatchObject({ status: 'unauthorized', qrAvailable: false })
-    await expect(readFile(join(root, 'wecom-cli', 'shared', 'credentials.enc'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(manager.authorizationState('alice-id')).resolves.toMatchObject({ status: 'authorized', qrAvailable: false })
+    await expect(manager.authorizationState('bob-id')).resolves.toMatchObject({ status: 'unauthorized', qrAvailable: false })
+    await expect(manager.legacyClient().authStatus()).resolves.toBe('authorized')
+    await expect(manager.disconnectAuthorization('bob-id')).resolves.toMatchObject({ status: 'unauthorized', qrAvailable: false })
+    await expect(readFile(join(alice, 'credentials.enc'), 'utf8')).resolves.toBe('alice credentials')
+    await expect(readFile(join(shared, 'credentials.enc'), 'utf8')).resolves.toBe('former shared credentials')
+    await expect(manager.disconnectAuthorization('alice-id')).resolves.toMatchObject({ status: 'unauthorized', qrAvailable: false })
+    await expect(readFile(join(alice, 'credentials.enc'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     manager.stop()
 
     const restarted = new WecomCliManager({
@@ -93,6 +106,38 @@ describe('official Enterprise WeChat CLI adapter', () => {
       wecomCliTimeoutMs: 5_000,
       dataDirectory: root,
     } as Config)
-    await expect(restarted.authorizationState()).resolves.toMatchObject({ status: 'unauthorized' })
+    await expect(restarted.authorizationState('alice-id')).resolves.toMatchObject({ status: 'unauthorized' })
+    await expect(restarted.legacyClient().authStatus()).resolves.toBe('authorized')
+  })
+
+  it('keeps simultaneous QR authorization files inside their owning account directories', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'chatroom-wecom-auth-'))
+    const accountDirectory = (participantId: string): string => join(
+      root,
+      'wecom-cli',
+      'accounts',
+      createHash('sha256').update(participantId).digest('hex').slice(0, 32),
+    )
+    const manager = new WecomCliManager({
+      wecomEnabled: true,
+      wecomCliPath: fileURLToPath(new URL('fixtures/fake-wecom-cli.mjs', import.meta.url)),
+      wecomCliConfigDirectory: '',
+      wecomCliTimeoutMs: 5_000,
+      dataDirectory: root,
+    } as Config)
+
+    await expect(Promise.all([
+      manager.startAuthorization('alice-id'),
+      manager.startAuthorization('bob-id'),
+    ])).resolves.toEqual([
+      expect.objectContaining({ status: 'pending', qrAvailable: true }),
+      expect.objectContaining({ status: 'pending', qrAvailable: true }),
+    ])
+    await expect(manager.authorizationQr('alice-id')).resolves.not.toHaveLength(0)
+    await expect(manager.authorizationQr('bob-id')).resolves.not.toHaveLength(0)
+    await writeFile(join(accountDirectory('alice-id'), 'credentials.enc'), 'alice credentials')
+    await expect(manager.authorizationState('alice-id')).resolves.toMatchObject({ status: 'authorized' })
+    await expect(manager.authorizationState('bob-id')).resolves.toMatchObject({ status: 'pending' })
+    manager.stop()
   })
 })

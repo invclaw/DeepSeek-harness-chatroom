@@ -122,6 +122,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private activeNativeSession;
     private roomEnsure;
     private readonly pendingAutoTriggerWrites;
+    private pendingQuickMeetingTarget;
     constructor(openSession?: (sessionId: string) => boolean, branchFrame?: ChatroomBranchFrame);
     /** Current immutable room projection. */
     getSnapshot: () => ChatroomView;
@@ -303,14 +304,16 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     quickThreadMeeting: (threadId: string) => Promise<boolean>;
     /** Create a default Enterprise WeChat meeting and publish its card to a direct conversation. */
     quickDirectMeeting: (directConversationId: string) => Promise<boolean>;
-    /** Refresh the deployment-wide Enterprise WeChat authorization. */
+    /** Refresh authorization for the current platform account. */
     loadWecomAuthorization: () => Promise<ChatroomWecomAuthorizationState | undefined>;
-    /** Start deployment-wide Enterprise WeChat QR authorization. */
+    /** Start the current account's Enterprise WeChat QR authorization. */
     startWecomAuthorization: () => Promise<boolean>;
-    /** Remove the deployment-wide Enterprise WeChat authorization. */
+    /** Remove the current account's Enterprise WeChat authorization. */
     disconnectWecomAuthorization: () => Promise<boolean>;
-    /** Replace the shared account and start a new QR authorization. */
+    /** Replace the current account's authorization and start a new QR flow. */
     rebindWecomAuthorization: () => Promise<boolean>;
+    /** Dismiss the current account's Enterprise WeChat authorization dialog. */
+    closeWecomAuthorization: () => void;
     private createQuickMeeting;
     private publishQuickMeeting;
     /** Create or reopen a branch rooted at one main-room message. */

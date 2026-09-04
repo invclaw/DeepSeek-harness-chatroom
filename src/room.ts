@@ -181,6 +181,7 @@ export class ChatroomRuntime {
   private readonly aiContextStartWrites = new Map<string, Promise<void>>()
   private readonly chatroomAgentContexts = new WeakSet<Context>()
   private readonly wecom: WecomCliManager
+  private readonly sessionWecomParticipants = new Map<string, string>()
   private meetingPollTimer: ReturnType<typeof setTimeout> | undefined
   private meetingPoll: Promise<void> | undefined
   private ready = false
@@ -490,6 +491,7 @@ export class ChatroomRuntime {
     await this.meetingPoll?.catch(() => undefined)
     this.meetingPoll = undefined
     this.wecom.stop()
+    this.sessionWecomParticipants.clear()
     for (const state of this.states.values()) {
       for (const client of state.clients) client.response.end()
       state.clients.clear()
@@ -817,8 +819,8 @@ export class ChatroomRuntime {
     const state = this.requireState(roomId)
     this.assertRoomMember(roomId, identity.participantId)
     const task = state.admission.then(async () => {
-      const created = await this.createMeetingCard(identity)
-      this.trackMeeting(created.card, 'room', roomId, created.externalMeetingId)
+      const created = await this.createMeetingCard(identity, this.roomMembers(state))
+      this.trackMeeting(created.card, 'room', roomId, created.externalMeetingId, identity.participantId)
       await this.appendRoomCard(state, identity, created.card)
       return created.card
     })
@@ -832,8 +834,8 @@ export class ChatroomRuntime {
     const state = this.requireThreadState(threadId)
     this.assertRoomMember(state.record.roomId, identity.participantId)
     const task = state.admission.then(async () => {
-      const created = await this.createMeetingCard(identity)
-      this.trackMeeting(created.card, 'thread', threadId, created.externalMeetingId)
+      const created = await this.createMeetingCard(identity, this.roomMembers(this.requireState(state.record.roomId)))
+      this.trackMeeting(created.card, 'thread', threadId, created.externalMeetingId, identity.participantId)
       await this.appendThreadCard(state, identity, created.card)
       return created.card
     })
@@ -848,37 +850,41 @@ export class ChatroomRuntime {
     if (conversation === undefined || !conversation.participantIds.includes(identity.participantId)) {
       throw new ChatroomInputError('私聊不存在或你无权访问。')
     }
-    const created = await this.createMeetingCard(identity)
-    this.trackMeeting(created.card, 'direct', conversation.id, created.externalMeetingId)
+    const invitees = conversation.participantIds
+      .filter(participantId => participantId !== identity.participantId)
+      .map((participantId) => {
+        const peer = this.directoryPeer(participantId)
+        if (peer === undefined) throw new ChatroomInputError('私聊对象不存在或已停用。')
+        return peer
+      })
+    const created = await this.createMeetingCard(identity, invitees)
+    this.trackMeeting(created.card, 'direct', conversation.id, created.externalMeetingId, identity.participantId)
     await this.appendDirectCard(conversation, identity, created.card)
     return created.card
   }
 
-  /** Read the deployment-wide Enterprise WeChat authorization state. */
+  /** Read the current account's isolated Enterprise WeChat authorization state. */
   async wecomAuthorizationState(identity: ChatroomIdentity): Promise<WecomAuthorizationState & { readonly canManage: boolean }> {
     this.assertReady()
-    return { ...await this.wecom.authorizationState(), canManage: this.canManageWecom(identity) }
+    return { ...await this.wecom.authorizationState(identity.participantId), canManage: true }
   }
 
-  /** Start deployment-wide Enterprise WeChat QR authorization. */
+  /** Start the current account's Enterprise WeChat QR authorization. */
   async startWecomAuthorization(identity: ChatroomIdentity): Promise<WecomAuthorizationState & { readonly canManage: boolean }> {
     this.assertReady()
-    this.assertCanManageWecom(identity)
-    return { ...await this.wecom.startAuthorization(true), canManage: true }
+    return { ...await this.wecom.startAuthorization(identity.participantId, true), canManage: true }
   }
 
-  /** Read the deployment-wide Enterprise WeChat authorization QR image. */
+  /** Read the current account's Enterprise WeChat authorization QR image. */
   wecomAuthorizationQr(identity: ChatroomIdentity): Promise<Buffer> {
     this.assertReady()
-    this.assertCanManageWecom(identity)
-    return this.wecom.authorizationQr()
+    return this.wecom.authorizationQr(identity.participantId)
   }
 
-  /** Remove the shared Enterprise WeChat authorization as a settings administrator. */
+  /** Remove only the current account's Enterprise WeChat authorization. */
   async disconnectWecomAuthorization(identity: ChatroomIdentity): Promise<WecomAuthorizationState & { readonly canManage: boolean }> {
     this.assertReady()
-    this.assertCanManageWecom(identity)
-    return { ...await this.wecom.disconnectAuthorization(), canManage: true }
+    return { ...await this.wecom.disconnectAuthorization(identity.participantId), canManage: true }
   }
 
   /** Resolve one meeting status or summary after enforcing conversation visibility. */
@@ -900,10 +906,9 @@ export class ChatroomRuntime {
     return publicMeetingSummary(meeting)
   }
 
-  /** Resolve one Tencent Docs URL through the deployment-shared Enterprise WeChat account. */
+  /** Resolve one Tencent Docs URL through the current account's Enterprise WeChat identity. */
   async resolveWecomDocument(documentUrl: string, identity: ChatroomIdentity): Promise<ChatroomDocumentCard> {
     this.assertReady()
-    void identity
     const reference = parseWecomDocumentUrl(documentUrl)
     if (reference === undefined) {
       throw new ChatroomInputError('企业微信文档链接无效。')
@@ -915,7 +920,7 @@ export class ChatroomRuntime {
       }
     }
     try {
-      const result = await this.wecom.client().invoke(reference.service, [], 'get', {
+      const result = await this.wecom.client(identity.participantId).invoke(reference.service, [], 'get', {
         docid: reference.documentId,
         content_type: 'text',
       })
@@ -1827,6 +1832,9 @@ export class ChatroomRuntime {
       return
     }
     if (event.type === 'user/message') {
+      const firstText = event.data.content.find((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')?.text
+      const participantId = firstText === undefined ? undefined : participantMarker(firstText)?.participantId
+      if (participantId !== undefined) this.sessionWecomParticipants.set(String(session.id), participantId)
       const room = [...this.states.values()].find(state => state.record.sessionId === String(session.id))
       if (room !== undefined) this.removePendingMessage(room, String(event.data.id))
       return
@@ -2566,7 +2574,11 @@ export class ChatroomRuntime {
     registerChatroomAgentTools(agentCtx, this, sessionId)
     registerWecomAgentTools(
       agentCtx,
-      () => this.wecom.client(),
+      () => {
+        const participantId = this.sessionWecomParticipants.get(sessionId)
+        if (participantId === undefined) throw new ChatroomInputError('请先由发起操作的用户完成企业微信扫码授权。')
+        return this.wecom.client(participantId)
+      },
       async (card, operation) => this.prepareAgentWecomCard(sessionId, card, operation),
     )
     agentCtx.systemPrompt.section({
@@ -2582,30 +2594,39 @@ export class ChatroomRuntime {
     agentCtx.systemPrompt.section({
       name: 'chatroom:wecom-tools',
       order: 12,
-      text: () => '你可使用 wecom_schema 与 wecom_action 操作企业微信日程、会议、会议纪要、文档、在线表格、智能表格和智能文档。写操作前先读取对应 schema；涉及人员时先用 contact 解析真实账号；不要猜测或向用户展示 userid、docid、meeting_id 等内部标识。用户未指定文档类型时默认创建智能文档。',
+      text: () => '你可使用 wecom_schema 与 wecom_action 操作企业微信日程、会议、会议纪要、文档、在线表格、智能表格和智能文档。操作使用当前这轮发言人的个人企业微信授权；未授权时请提示该用户扫码绑定。写操作前先读取对应 schema；涉及人员时先用 contact 解析真实账号；不要猜测或向用户展示 userid、docid、meeting_id 等内部标识。用户未指定文档类型时默认创建智能文档。',
     })
   }
 
-  private async createMeetingCard(identity: ChatroomIdentity): Promise<{ card: ChatroomMeetingCard; externalMeetingId?: string }> {
-    const client = this.wecom.client()
-    const peer = this.directoryPeer(identity.participantId) ?? (this.config.authEnabled ? undefined : {
-      username: identity.displayName,
-      displayName: identity.displayName,
-    })
-    if (peer === undefined) throw new ChatroomInputError('当前发起人不在聊天账号目录中。')
-    const contact = wecomContactUser(await client.invoke('contact', ['users'], 'search', {
-      keywords: [...new Set([peer.username, peer.displayName])],
-    }), peer.username, peer.displayName)
-    if (contact === undefined) {
-      throw new ChatroomInputError(`企微通讯录中找不到当前发起人“${identity.displayName}”，请检查聊天账号与企微账号是否一致。`)
-    }
+  private async createMeetingCard(
+    identity: ChatroomIdentity,
+    participants: readonly ChatroomIdentity[],
+  ): Promise<{ card: ChatroomMeetingCard; externalMeetingId?: string }> {
+    const client = this.wecom.client(identity.participantId)
+    const invitees = participants.filter(participant => participant.participantId !== identity.participantId)
+    const contacts = await Promise.all(invitees.map(async participant => {
+      const peer = this.directoryPeer(participant.participantId) ?? (this.config.authEnabled ? undefined : {
+        username: participant.displayName,
+        displayName: participant.displayName,
+      })
+      if (peer === undefined) {
+        throw new ChatroomInputError(`参会人“${participant.displayName}”不在聊天账号目录中。`)
+      }
+      const contact = wecomContactUser(await client.invoke('contact', ['users'], 'search', {
+        keywords: [...new Set([peer.username, peer.displayName])],
+      }), peer.username, peer.displayName)
+      if (contact === undefined) {
+        throw new ChatroomInputError(`企微通讯录中找不到参会人“${participant.displayName}”，会议尚未创建。`)
+      }
+      return contact
+    }))
     const begin = new Date(Date.now() + 5 * 60_000)
     const end = new Date(begin.getTime() + this.config.wecomQuickMeetingDurationMinutes * 60_000)
     const parameters = {
       subject: this.config.wecomQuickMeetingSubject,
       begin_time: formatWecomTime(begin, this.config.wecomTimeZone),
       end_time: formatWecomTime(end, this.config.wecomTimeZone),
-      attendees: [{ userid: contact.userid }],
+      ...(contacts.length === 0 ? {} : { attendees: contacts.map(contact => ({ userid: contact.userid })) }),
       timezone: {
         timezone_id: this.config.wecomTimeZone,
         timezone_offset: timezoneOffsetSeconds(begin, this.config.wecomTimeZone),
@@ -2620,7 +2641,7 @@ export class ChatroomRuntime {
         ...inferred,
         id: randomUUID(),
         status: inferred.status ?? 'init',
-        attendees: inferred.attendees ?? [contact.name],
+        attendees: [...new Set([identity.displayName, ...(inferred.attendees ?? contacts.map(contact => contact.name))])],
       },
       ...(externalMeetingId === undefined ? {} : { externalMeetingId }),
     }
@@ -2634,14 +2655,15 @@ export class ChatroomRuntime {
     if (card.kind !== 'meeting' || operation.service !== 'meeting' || operation.method !== 'create') return card
     const tracked = { ...card, id: randomUUID(), status: card.status ?? 'init' }
     const externalMeetingId = findStringField(operation.result, ['meeting_id'])
+    const participantId = this.sessionWecomParticipants.get(sessionId)
     const thread = [...this.threadStates.values()].find(state => state.record.sessionId === sessionId)
     if (thread !== undefined) {
-      this.trackMeeting(tracked, 'thread', thread.record.id, externalMeetingId)
+      this.trackMeeting(tracked, 'thread', thread.record.id, externalMeetingId, participantId)
       return tracked
     }
     const room = [...this.states.values()].find(state => state.record.sessionId === sessionId)
     if (room === undefined) return card
-    this.trackMeeting(tracked, 'room', room.record.id, externalMeetingId)
+    this.trackMeeting(tracked, 'room', room.record.id, externalMeetingId, participantId)
     return tracked
   }
 
@@ -2650,6 +2672,7 @@ export class ChatroomRuntime {
     conversationKind: 'room' | 'thread' | 'direct',
     conversationId: string,
     externalMeetingId?: string,
+    credentialOwnerParticipantId?: string,
   ): void {
     if (card.id === undefined) return
     const now = Date.now()
@@ -2658,6 +2681,7 @@ export class ChatroomRuntime {
       conversationKind,
       conversationId,
       ...(externalMeetingId === undefined ? {} : { externalMeetingId }),
+      ...(credentialOwnerParticipantId === undefined ? {} : { credentialOwnerParticipantId }),
       ...(card.url === undefined ? {} : { meetingUrl: card.url }),
       title: card.title,
       ...(card.beginTime === undefined ? {} : { beginTime: card.beginTime }),
@@ -2776,7 +2800,7 @@ export class ChatroomRuntime {
         ? { urls: current.meetingUrl === undefined ? [] : [current.meetingUrl] }
         : { meeting_ids: [{ meeting_id: current.externalMeetingId }] }
       if (parameters.urls?.length === 0) return
-      const response = await this.wecom.client().invoke('meeting', [], 'get', parameters)
+      const response = await this.meetingClient(current).invoke('meeting', [], 'get', parameters)
       const detail = findMeetingDetail(response)
       if (detail === undefined) return
       const now = Date.now()
@@ -2802,7 +2826,7 @@ export class ChatroomRuntime {
       }
       this.requireArchive().upsertMeeting(current)
     } else if (current.summaryStatus !== 'completed') {
-      const response = await this.wecom.client().invoke('meeting', [], 'get', current.externalMeetingId === undefined
+      const response = await this.meetingClient(current).invoke('meeting', [], 'get', current.externalMeetingId === undefined
         ? { urls: current.meetingUrl === undefined ? [] : [current.meetingUrl] }
         : { meeting_ids: [{ meeting_id: current.externalMeetingId }] })
       const detail = findMeetingDetail(response)
@@ -2827,6 +2851,12 @@ export class ChatroomRuntime {
       current = { ...current, summaryPostedAt: Date.now(), updatedAt: Date.now() }
       this.requireArchive().upsertMeeting(current)
     }
+  }
+
+  private meetingClient(meeting: ArchivedMeeting): ReturnType<WecomCliManager['client']> {
+    return meeting.credentialOwnerParticipantId === undefined
+      ? this.wecom.legacyClient()
+      : this.wecom.client(meeting.credentialOwnerParticipantId)
   }
 
   private async generateMeetingSummary(meeting: ArchivedMeeting, detail: Record<string, unknown>): Promise<string> {
@@ -3656,18 +3686,6 @@ export class ChatroomRuntime {
   private assertRoomManager(record: RoomRecord, participantId: string): void {
     if (record.ownerParticipantId !== participantId && !(record.adminParticipantIds ?? []).includes(participantId)) {
       throw new ChatroomInputError('当前身份没有群管理权限。')
-    }
-  }
-
-  private canManageWecom(identity: ChatroomIdentity): boolean {
-    return !this.config.authEnabled
-      || ('role' in identity && identity.role === 'super-admin')
-      || this.config.settingsAdminParticipantIds.includes(identity.participantId)
-  }
-
-  private assertCanManageWecom(identity: ChatroomIdentity): void {
-    if (!this.canManageWecom(identity)) {
-      throw new ChatroomInputError('当前身份没有共享企业微信账号管理权限。')
     }
   }
 

@@ -211,7 +211,7 @@ describe('native chatroom integration', () => {
     expect(saveAutomation).toHaveBeenCalledWith('deepseek', 'chat', 'deepseek', 'chat', '新主提示词', '新判断提示词')
   })
 
-  it('keeps shared Enterprise WeChat connect, disconnect, and rebind controls in Settings', () => {
+  it('keeps personal Enterprise WeChat connect, disconnect, and rebind controls in Settings', () => {
     const disconnectWecomAuthorization = vi.fn(async () => true)
     const rebindWecomAuthorization = vi.fn(async () => true)
     vi.stubGlobal('confirm', vi.fn(() => true))
@@ -221,7 +221,7 @@ describe('native chatroom integration', () => {
       },
     }), { disconnectWecomAuthorization, rebindWecomAuthorization })
 
-    expect(screen.getByText('全站共用一个企业微信授权；任何成员发起的会议和文档操作都使用这份部署账号。')).toBeTruthy()
+    expect(screen.getByText('每个平台账号单独授权；会议和文档操作使用当前登录用户自己的企业微信身份。')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '解绑' }))
     fireEvent.click(screen.getByRole('button', { name: '重新绑定' }))
     expect(disconnectWecomAuthorization).toHaveBeenCalledOnce()
@@ -229,16 +229,21 @@ describe('native chatroom integration', () => {
     expect(screen.queryByRole('dialog', { name: '连接企业微信' })).toBeNull()
   })
 
-  it('renders the Enterprise WeChat QR code inside Settings instead of behind it', () => {
-    renderSettings(view({
+  it('renders the current account QR in a dismissible dialog', () => {
+    const closeWecomAuthorization = vi.fn()
+    renderEntry(view({
+      open: false,
+      wecomAuthorizationOpen: true,
       wecomAuthorization: {
         enabled: true, status: 'pending', qrAvailable: true, canManage: true,
       },
-    }))
+    }), { closeWecomAuthorization })
 
     const image = screen.getByRole('img', { name: '企业微信登录二维码' })
-    expect(image.closest('.dsh-chatroom-settings')).not.toBeNull()
-    expect(screen.queryByRole('dialog', { name: '连接企业微信' })).toBeNull()
+    const dialog = screen.getByRole('dialog', { name: '连接企业微信' })
+    expect(image.closest('[data-testid="chatroom-wecom-auth"]')).not.toBeNull()
+    fireEvent.pointerDown(dialog.parentElement!)
+    expect(closeWecomAuthorization).toHaveBeenCalledOnce()
   })
 
   it('lists existing rooms and creates a new independent shared Session', () => {
@@ -648,6 +653,7 @@ function renderSettings(
     openDirect: vi.fn(async () => undefined),
     closeDirect: vi.fn(),
     sendDirect: vi.fn(async () => true),
+    closeWecomAuthorization: vi.fn(),
     ...overrides,
   } as unknown as Parameters<typeof ChatroomSettingsSection>[0]
   return render(<ChatroomSettingsSection {...props} />)
@@ -700,6 +706,7 @@ function entry(
     closeDirect={vi.fn()}
     sendDirect={vi.fn(async () => true)}
     toggleDirectReaction={vi.fn(async () => undefined)}
+    closeWecomAuthorization={vi.fn()}
     closeSearch={vi.fn()}
     searchAll={vi.fn(async () => undefined)}
     openSearchResult={vi.fn(async () => undefined)}

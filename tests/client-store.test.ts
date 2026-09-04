@@ -721,12 +721,13 @@ describe('ChatroomClientStore', () => {
     expect(store.getSnapshot().room).toEqual(resetRoom)
   })
 
-  it('directs an unauthorized quick meeting to the shared-account Settings panel', async () => {
+  it('opens the current account QR flow when a quick meeting lacks authorization', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
       .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'unauthorized', qrAvailable: false, canManage: true }))
+      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'pending', qrAvailable: true, canManage: true }))
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('EventSource', FakeEventSource)
     const store = new ChatroomClientStore()
@@ -734,14 +735,37 @@ describe('ChatroomClientStore', () => {
 
     await expect(store.quickMeeting(room.id)).resolves.toBe(false)
     expect(store.getSnapshot()).toMatchObject({
-      wecomAuthorizationOpen: false,
-      wecomAuthorization: { status: 'unauthorized', qrAvailable: false },
-      wecomError: '共享企业微信账号尚未连接，请由管理员前往“设置 → 群聊与账号”完成绑定。',
+      wecomAuthorizationOpen: true,
+      wecomAuthorization: { status: 'pending', qrAvailable: true },
+      wecomError: undefined,
     })
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: 'POST' })
   })
 
-  it('disconnects and rebinds the deployment-wide Enterprise WeChat account', async () => {
+  it('publishes the pending quick meeting after the current account finishes scanning', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = roomInfo()
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'unauthorized', qrAvailable: false, canManage: true }))
+      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'pending', qrAvailable: true, canManage: true }))
+      .mockResolvedValueOnce(jsonResponse({ enabled: true, status: 'authorized', qrAvailable: false, canManage: true }))
+      .mockResolvedValueOnce(jsonResponse({ accepted: true, card: { kind: 'meeting', title: '快速会议' } }, 201))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+
+    await expect(store.quickMeeting(room.id)).resolves.toBe(false)
+    await expect(store.loadWecomAuthorization()).resolves.toMatchObject({ status: 'authorized' })
+
+    expect(fetchMock.mock.calls[4]?.[0]).toBe('/plugins/deepseek-harness-chatroom/api/wecom/quick-meeting')
+    expect(fetchMock.mock.calls[4]?.[1]).toMatchObject({ method: 'POST', body: JSON.stringify({ roomId: room.id }) })
+    expect(store.getSnapshot()).toMatchObject({ wecomAuthorizationOpen: false, wecomBusy: false, wecomError: undefined })
+  })
+
+  it('disconnects and rebinds only the current account Enterprise WeChat identity', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()
     const fetchMock = vi.fn<typeof fetch>()
