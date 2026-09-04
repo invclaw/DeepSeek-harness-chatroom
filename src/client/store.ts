@@ -259,6 +259,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   } | undefined
   private roomEnsure: { readonly sessionId: string; readonly promise: Promise<void> } | undefined
   private readonly pendingAutoTriggerWrites = new Map<string, Promise<boolean>>()
+  private pendingQuickMeetingTarget: { roomId: string } | { threadId: string } | { directConversationId: string } | undefined
 
   constructor(
     private readonly openSession: (sessionId: string) => boolean = () => false,
@@ -1369,11 +1370,16 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     return this.createQuickMeeting({ directConversationId })
   }
 
-  /** Refresh the deployment-wide Enterprise WeChat authorization. */
+  /** Refresh authorization for the current platform account. */
   loadWecomAuthorization = async (): Promise<ChatroomWecomAuthorizationState | undefined> => {
     try {
       const state = await requestJson<ChatroomWecomAuthorizationState>(`${CHATROOM_API_PREFIX}/wecom/auth`)
       this.set({ wecomAuthorization: state, wecomError: state.error })
+      const target = state.status === 'authorized' ? this.pendingQuickMeetingTarget : undefined
+      if (target !== undefined) {
+        this.pendingQuickMeetingTarget = undefined
+        await this.publishQuickMeeting(target)
+      }
       return state
     } catch (error) {
       this.set({ wecomError: errorMessage(error) })
@@ -1381,7 +1387,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     }
   }
 
-  /** Start deployment-wide Enterprise WeChat QR authorization. */
+  /** Start the current account's Enterprise WeChat QR authorization. */
   startWecomAuthorization = async (): Promise<boolean> => {
     if (this.snapshot.wecomBusy) return false
     this.set({ wecomBusy: true, wecomError: undefined })
@@ -1389,7 +1395,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       const state = await requestJson<ChatroomWecomAuthorizationState>(`${CHATROOM_API_PREFIX}/wecom/auth`, {
         method: 'POST',
       })
-      this.set({ wecomBusy: false, wecomAuthorization: state, wecomAuthorizationOpen: false })
+      this.set({ wecomBusy: false, wecomAuthorization: state, wecomAuthorizationOpen: true })
       return true
     } catch (error) {
       this.set({ wecomBusy: false, wecomError: errorMessage(error) })
@@ -1397,7 +1403,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     }
   }
 
-  /** Remove the deployment-wide Enterprise WeChat authorization. */
+  /** Remove the current account's Enterprise WeChat authorization. */
   disconnectWecomAuthorization = async (): Promise<boolean> => {
     if (this.snapshot.wecomBusy) return false
     this.set({ wecomBusy: true, wecomError: undefined })
@@ -1405,6 +1411,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       const state = await requestJson<ChatroomWecomAuthorizationState>(`${CHATROOM_API_PREFIX}/wecom/auth`, {
         method: 'DELETE',
       })
+      this.pendingQuickMeetingTarget = undefined
       this.set({ wecomBusy: false, wecomAuthorization: state, wecomAuthorizationOpen: false })
       return true
     } catch (error) {
@@ -1413,10 +1420,16 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     }
   }
 
-  /** Replace the shared account and start a new QR authorization. */
+  /** Replace the current account's authorization and start a new QR flow. */
   rebindWecomAuthorization = async (): Promise<boolean> => {
     if (!await this.disconnectWecomAuthorization()) return false
     return await this.startWecomAuthorization()
+  }
+
+  /** Dismiss the current account's Enterprise WeChat authorization dialog. */
+  closeWecomAuthorization = (): void => {
+    this.pendingQuickMeetingTarget = undefined
+    this.set({ wecomAuthorizationOpen: false, wecomError: undefined })
   }
 
   private async createQuickMeeting(
@@ -1426,13 +1439,21 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.set({ wecomBusy: true, wecomError: undefined })
     const authorization = await this.loadWecomAuthorization()
     if (authorization?.status !== 'authorized') {
+      if (authorization?.enabled !== true) {
+        this.set({
+          wecomBusy: false,
+          wecomAuthorizationOpen: false,
+          wecomError: authorization?.error ?? '企业微信功能当前不可用，请联系管理员。',
+        })
+        return false
+      }
+      this.pendingQuickMeetingTarget = target
       this.set({
         wecomBusy: false,
-        wecomAuthorizationOpen: false,
-        wecomError: authorization?.enabled === true
-          ? '共享企业微信账号尚未连接，请由管理员前往“设置 → 群聊与账号”完成绑定。'
-          : authorization?.error ?? '当前服务未启用企业微信 CLI。',
+        wecomAuthorizationOpen: true,
+        wecomError: undefined,
       })
+      if (authorization.status === 'unauthorized') await this.startWecomAuthorization()
       return false
     }
     return this.publishQuickMeeting(target)
@@ -1448,7 +1469,8 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(target),
       })
-      this.set({ wecomBusy: false })
+      this.pendingQuickMeetingTarget = undefined
+      this.set({ wecomBusy: false, wecomAuthorizationOpen: false })
       return true
     } catch (error) {
       this.set({ wecomBusy: false, wecomError: errorMessage(error) })

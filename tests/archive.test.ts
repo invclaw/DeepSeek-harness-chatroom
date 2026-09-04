@@ -102,6 +102,7 @@ describe('ChatArchive', () => {
       id: 'public-meeting',
       conversationKind: 'room',
       conversationId: 'room-1',
+      credentialOwnerParticipantId: 'alice-id',
       externalMeetingId: 'provider-secret',
       title: '周会',
       status: 'init',
@@ -121,7 +122,9 @@ describe('ChatArchive', () => {
       summaryPostedAt: 3,
       updatedAt: 3,
     })
-    expect(archive.meetingSummaries()).toMatchObject([{ id: 'public-meeting', summary: '结论' }])
+    expect(archive.meetingSummaries()).toMatchObject([{
+      id: 'public-meeting', credentialOwnerParticipantId: 'alice-id', summary: '结论',
+    }])
     expect(archive.meetingsByUrl('https://meeting.example.com/join')).toMatchObject([{ id: 'public-meeting' }])
     expect(archive.pendingMeetings()).toHaveLength(0)
     expect(archive.projectionMigrationComplete('meeting-cards-v1')).toBe(false)
@@ -145,7 +148,7 @@ describe('ChatArchive', () => {
     archive.close()
   })
 
-  it('migrates existing meeting rows before accepting branch meeting ownership', () => {
+  it('migrates existing meeting rows before accepting branch and credential ownership', () => {
     const database = new DatabaseSync(':memory:')
     database.exec(`
       CREATE TABLE archive_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -175,11 +178,14 @@ describe('ChatArchive', () => {
     const archive = new ChatArchive(database, undefined)
     archive.upsertMeeting({
       id: 'branch-meeting', conversationKind: 'thread', conversationId: 'thread-1', title: '分支会议',
+      credentialOwnerParticipantId: 'alice-id',
       status: 'init', summaryStatus: 'pending', createdAt: 2, updatedAt: 2,
     })
 
     expect(archive.meeting('room-meeting')).toMatchObject({ conversationKind: 'room', title: '旧会议' })
-    expect(archive.meeting('branch-meeting')).toMatchObject({ conversationKind: 'thread', title: '分支会议' })
+    expect(archive.meeting('branch-meeting')).toMatchObject({
+      conversationKind: 'thread', credentialOwnerParticipantId: 'alice-id', title: '分支会议',
+    })
     archive.close()
   })
 })

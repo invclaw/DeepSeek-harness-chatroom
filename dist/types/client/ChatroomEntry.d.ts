@@ -80,6 +80,7 @@ interface ChatroomEntryInjected {
     startWecomAuthorization?(): Promise<boolean>;
     disconnectWecomAuthorization?(): Promise<boolean>;
     rebindWecomAuthorization?(): Promise<boolean>;
+    closeWecomAuthorization(): void;
     closeSearch(): void;
     searchAll(query: string): Promise<void>;
     openSearchResult(result: ChatroomSearchResult): Promise<void>;

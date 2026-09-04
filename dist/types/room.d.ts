@@ -41,6 +41,7 @@ export declare class ChatroomRuntime {
     private readonly aiContextStartWrites;
     private readonly chatroomAgentContexts;
     private readonly wecom;
+    private readonly sessionWecomParticipants;
     private meetingPollTimer;
     private meetingPoll;
     private ready;
@@ -134,17 +135,17 @@ export declare class ChatroomRuntime {
     createThreadQuickMeeting(threadId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard>;
     /** Create an Enterprise WeChat online meeting and post it to one private conversation. */
     createDirectQuickMeeting(conversationId: string, identity: ChatroomIdentity): Promise<ChatroomMeetingCard>;
-    /** Read the deployment-wide Enterprise WeChat authorization state. */
+    /** Read the current account's isolated Enterprise WeChat authorization state. */
     wecomAuthorizationState(identity: ChatroomIdentity): Promise<WecomAuthorizationState & {
         readonly canManage: boolean;
     }>;
-    /** Start deployment-wide Enterprise WeChat QR authorization. */
+    /** Start the current account's Enterprise WeChat QR authorization. */
     startWecomAuthorization(identity: ChatroomIdentity): Promise<WecomAuthorizationState & {
         readonly canManage: boolean;
     }>;
-    /** Read the deployment-wide Enterprise WeChat authorization QR image. */
+    /** Read the current account's Enterprise WeChat authorization QR image. */
     wecomAuthorizationQr(identity: ChatroomIdentity): Promise<Buffer>;
-    /** Remove the shared Enterprise WeChat authorization as a settings administrator. */
+    /** Remove only the current account's Enterprise WeChat authorization. */
     disconnectWecomAuthorization(identity: ChatroomIdentity): Promise<WecomAuthorizationState & {
         readonly canManage: boolean;
     }>;
@@ -152,7 +153,7 @@ export declare class ChatroomRuntime {
     meetingSummary(id: string, identity: ChatroomIdentity): ChatroomMeetingSummary;
     /** Resolve a legacy meeting card by URL after enforcing conversation visibility. */
     meetingSummaryByUrl(meetingUrl: string, identity: ChatroomIdentity): ChatroomMeetingSummary;
-    /** Resolve one Tencent Docs URL through the deployment-shared Enterprise WeChat account. */
+    /** Resolve one Tencent Docs URL through the current account's Enterprise WeChat identity. */
     resolveWecomDocument(documentUrl: string, identity: ChatroomIdentity): Promise<ChatroomDocumentCard>;
     /** List completed meeting summaries visible to one authenticated participant. */
     meetingSummaries(identity: ChatroomIdentity): readonly ChatroomMeetingSummary[];
@@ -268,6 +269,7 @@ export declare class ChatroomRuntime {
     private scheduleMeetingPoll;
     private pollMeetings;
     private pollMeeting;
+    private meetingClient;
     private generateMeetingSummary;
     private postMeetingSummary;
     private canReadMeeting;
@@ -326,8 +328,6 @@ export declare class ChatroomRuntime {
     private requireDirectMessages;
     private requireThreadState;
     private assertRoomManager;
-    private canManageWecom;
-    private assertCanManageWecom;
     private assertRoomInviter;
     private assertRoomMember;
     private isRoomMember;

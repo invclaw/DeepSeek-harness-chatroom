@@ -254,6 +254,7 @@ export function apply(ctx: ClientContext): void {
       startWecomAuthorization: store.startWecomAuthorization,
       disconnectWecomAuthorization: store.disconnectWecomAuthorization,
       rebindWecomAuthorization: store.rebindWecomAuthorization,
+      closeWecomAuthorization: store.closeWecomAuthorization,
       closeSearch: store.closeSearch,
       searchAll: store.searchAll,
       openSearchResult: store.openSearchResult,
@@ -287,6 +288,7 @@ export function apply(ctx: ClientContext): void {
       startWecomAuthorization: store.startWecomAuthorization,
       disconnectWecomAuthorization: store.disconnectWecomAuthorization,
       rebindWecomAuthorization: store.rebindWecomAuthorization,
+      closeWecomAuthorization: store.closeWecomAuthorization,
     }),
   }, ChatroomSettingsSection))
 

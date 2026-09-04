@@ -46,6 +46,7 @@ export interface ChatroomAccountPanelProps {
   startWecomAuthorization?(): Promise<boolean>
   disconnectWecomAuthorization?(): Promise<boolean>
   rebindWecomAuthorization?(): Promise<boolean>
+  closeWecomAuthorization(): void
 }
 
 interface OidcProviderForm {
@@ -65,6 +66,7 @@ interface OidcProviderForm {
 export function ChatroomAccountPanels(props: ChatroomAccountPanelProps): JSX.Element {
   return <>
     {props.room.directOpen && <DirectPanel {...props} />}
+    {props.room.wecomAuthorizationOpen && <WecomAuthorizationDialog {...props} />}
   </>
 }
 
@@ -100,6 +102,40 @@ export function ChatroomSettingsSection(props: ChatroomSettingsSectionProps): JS
 
 function WecomAccountPanel(props: ChatroomAccountPanelProps): JSX.Element {
   const authorization = props.room.wecomAuthorization
+  return <section className="dsh-chatroom-card dsh-chatroom-wecom-account" aria-label="企业微信账号">
+    <header><div><h2>企业微信账号</h2><p>每个平台账号单独授权；会议和文档操作使用当前登录用户自己的企业微信身份。</p></div></header>
+    <div className="dsh-chatroom-wecom-account-row">
+      <span>{authorization?.enabled !== true
+        ? '企业微信功能当前不可用，请联系管理员。'
+        : authorization.status === 'authorized'
+          ? '已连接'
+          : authorization.status === 'pending' ? '等待扫码确认' : '尚未连接'}</span>
+      <div className="dsh-chatroom-wecom-actions">
+        {authorization?.enabled === true && authorization.status === 'authorized' && <>
+          <button type="button" disabled={props.room.wecomBusy} onClick={() => {
+            if (globalThis.confirm('解绑后，只有你自己的快速会议和企业微信 Agent 工具会暂停。确定解绑吗？')) {
+              void props.disconnectWecomAuthorization?.()
+            }
+          }}>解绑</button>
+          <button type="button" disabled={props.room.wecomBusy} onClick={() => {
+            if (globalThis.confirm('重新绑定会先清除你当前的企业微信授权。确定继续吗？')) {
+              void props.rebindWecomAuthorization?.()
+            }
+          }}>重新绑定</button>
+        </>}
+        {authorization?.enabled === true && authorization.status !== 'authorized' && <button
+          type="button"
+          disabled={props.room.wecomBusy}
+          onClick={() => { void props.startWecomAuthorization?.() }}
+        >{authorization.status === 'pending' ? '重新生成二维码' : '扫码连接'}</button>}
+      </div>
+    </div>
+    {props.room.wecomError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.wecomError}</div>}
+  </section>
+}
+
+function WecomAuthorizationDialog(props: ChatroomAccountPanelProps): JSX.Element {
+  const authorization = props.room.wecomAuthorization
   const [qrRevision, setQrRevision] = useState(() => Date.now())
   useEffect(() => {
     if (authorization?.status !== 'pending') return
@@ -109,41 +145,27 @@ function WecomAccountPanel(props: ChatroomAccountPanelProps): JSX.Element {
   useEffect(() => {
     if (authorization?.qrAvailable === true) setQrRevision(Date.now())
   }, [authorization?.qrAvailable])
-  return <section className="dsh-chatroom-card dsh-chatroom-wecom-account" aria-label="企业微信账号">
-    <header><div><h2>企业微信账号</h2><p>全站共用一个企业微信授权；任何成员发起的会议和文档操作都使用这份部署账号。</p></div></header>
-    <div className="dsh-chatroom-wecom-account-row">
-      <span>{authorization?.enabled !== true
-        ? '企业微信功能当前不可用，请联系管理员。'
-        : authorization.status === 'authorized'
-          ? '已连接'
-          : authorization.status === 'pending' ? '等待扫码确认' : '尚未连接'}</span>
-      <div className="dsh-chatroom-wecom-actions">
-        {authorization?.enabled === true && authorization.canManage && authorization.status === 'authorized' && <>
-          <button type="button" disabled={props.room.wecomBusy} onClick={() => {
-            if (globalThis.confirm('解绑后，全站的快速会议和企业微信 Agent 工具都会暂停。确定解绑吗？')) {
-              void props.disconnectWecomAuthorization?.()
-            }
-          }}>解绑</button>
-          <button type="button" disabled={props.room.wecomBusy} onClick={() => {
-            if (globalThis.confirm('重新绑定会先清除当前共享授权。确定继续吗？')) {
-              void props.rebindWecomAuthorization?.()
-            }
-          }}>重新绑定</button>
-        </>}
-        {authorization?.enabled === true && authorization.canManage && authorization.status !== 'authorized' && <button
-          type="button"
-          disabled={props.room.wecomBusy}
-          onClick={() => { void props.startWecomAuthorization?.() }}
-        >{authorization.status === 'pending' ? '重新生成二维码' : '扫码连接'}</button>}
-      </div>
-    </div>
-    {authorization?.enabled === true && !authorization.canManage && authorization.status !== 'authorized'
-      && <p className="dsh-chatroom-panel-status">请联系设置管理员连接共享企业微信账号。</p>}
-    {authorization?.status === 'pending' && authorization.canManage && (authorization.qrAvailable
-      ? <div className="dsh-chatroom-wecom-inline-qr"><img src={`${CHATROOM_API_PREFIX}/wecom/auth/qr?v=${qrRevision}`} alt="企业微信登录二维码" /><p>请使用企业微信扫码并在手机上确认。全站只需绑定一次。</p></div>
-      : <div className="dsh-chatroom-panel-status">{props.room.wecomBusy ? '正在生成登录二维码…' : '等待二维码…'}</div>)}
-    {props.room.wecomError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.wecomError}</div>}
-  </section>
+  return <div
+    className="dsh-chatroom-dialog-layer dsh-chatroom-wecom-auth-layer"
+    data-testid="chatroom-wecom-auth"
+    onPointerDown={event => { if (event.target === event.currentTarget) props.closeWecomAuthorization() }}
+  >
+    <section className="dsh-chatroom-card dsh-chatroom-wecom-auth-card" role="dialog" aria-label="连接企业微信">
+      <header><div><h2>连接企业微信</h2><p>请用你自己的企业微信扫码；你的授权与其他平台账号完全隔离。</p></div><button aria-label="关闭企业微信登录" type="button" onClick={props.closeWecomAuthorization}>×</button></header>
+      {authorization?.status === 'authorized'
+        ? <div className="dsh-chatroom-wecom-auth-success"><span aria-hidden>✓</span><strong>已连接，可以用你的身份发起会议</strong></div>
+        : authorization?.qrAvailable === true
+          ? <><img className="dsh-chatroom-wecom-qr" src={`${CHATROOM_API_PREFIX}/wecom/auth/qr?v=${qrRevision}`} alt="企业微信登录二维码" /><p className="dsh-chatroom-panel-status">请使用企业微信扫码并在手机上确认。</p></>
+          : <div className="dsh-chatroom-panel-status">{props.room.wecomBusy ? '正在生成登录二维码…' : '等待二维码…'}</div>}
+      {authorization?.enabled === true && authorization.status !== 'authorized' && <button
+        className="dsh-chatroom-wecom-retry"
+        type="button"
+        disabled={props.room.wecomBusy}
+        onClick={() => { void props.startWecomAuthorization?.() }}
+      >重新生成二维码</button>}
+      {props.room.wecomError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.wecomError}</div>}
+    </section>
+  </div>
 }
 
 function AutomationPanel(props: ChatroomAccountPanelProps): JSX.Element {

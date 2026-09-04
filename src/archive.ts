@@ -7,7 +7,7 @@ import { mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 const NODE_SQLITE_MODULE: string = 'node:sqlite'
 
 export type ArchiveConversationKind = 'room' | 'thread' | 'direct'
@@ -71,6 +71,7 @@ export interface ArchivedMeeting {
   readonly id: string
   readonly conversationKind: 'room' | 'thread' | 'direct'
   readonly conversationId: string
+  readonly credentialOwnerParticipantId?: string
   readonly externalMeetingId?: string
   readonly meetingUrl?: string
   readonly title: string
@@ -205,19 +206,21 @@ export class ChatArchive {
   /** Create or replace one meeting lifecycle projection. */
   upsertMeeting(input: ArchivedMeeting): void {
     this.database.prepare(`INSERT INTO meetings
-      (id, conversation_kind, conversation_id, external_meeting_id, meeting_url, title,
+      (id, conversation_kind, conversation_id, credential_owner_participant_id, external_meeting_id, meeting_url, title,
        begin_time, end_time, status, summary_status, summary, summary_error, ended_at,
        summary_posted_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         conversation_kind = excluded.conversation_kind, conversation_id = excluded.conversation_id,
+        credential_owner_participant_id = excluded.credential_owner_participant_id,
         external_meeting_id = excluded.external_meeting_id, meeting_url = excluded.meeting_url,
         title = excluded.title, begin_time = excluded.begin_time, end_time = excluded.end_time,
         status = excluded.status, summary_status = excluded.summary_status, summary = excluded.summary,
         summary_error = excluded.summary_error, ended_at = excluded.ended_at,
         summary_posted_at = excluded.summary_posted_at, updated_at = excluded.updated_at`)
       .run(
-        input.id, input.conversationKind, input.conversationId, input.externalMeetingId ?? null,
+        input.id, input.conversationKind, input.conversationId, input.credentialOwnerParticipantId ?? null,
+        input.externalMeetingId ?? null,
         input.meetingUrl ?? null, input.title, input.beginTime ?? null, input.endTime ?? null,
         input.status, input.summaryStatus, input.summary ?? null, input.summaryError ?? null,
         input.endedAt ?? null, input.summaryPostedAt ?? null, input.createdAt, input.updatedAt,
@@ -429,6 +432,7 @@ export class ChatArchive {
         id TEXT PRIMARY KEY,
         conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('room', 'thread', 'direct')),
         conversation_id TEXT NOT NULL,
+        credential_owner_participant_id TEXT,
         external_meeting_id TEXT,
         meeting_url TEXT,
         title TEXT NOT NULL,
@@ -457,6 +461,7 @@ export class ChatArchive {
       throw new Error(`unsupported chatroom archive schema ${String(current.value)}`)
     }
     if (current !== undefined && Number(current.value) < 3) this.migrateMeetingConversationKinds()
+    if (current !== undefined && Number(current.value) < 4) this.addMeetingCredentialOwners()
     this.database.prepare(`INSERT INTO archive_meta (key, value) VALUES ('schema_version', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(SCHEMA_VERSION))
   }
@@ -490,6 +495,10 @@ export class ChatArchive {
       COMMIT;
     `)
   }
+
+  private addMeetingCredentialOwners(): void {
+    this.database.exec('ALTER TABLE meetings ADD COLUMN credential_owner_participant_id TEXT;')
+  }
 }
 
 function archivedMeeting(row: Record<string, unknown>): ArchivedMeeting {
@@ -499,6 +508,9 @@ function archivedMeeting(row: Record<string, unknown>): ArchivedMeeting {
       ? 'direct'
       : row.conversation_kind === 'thread' ? 'thread' : 'room',
     conversationId: String(row.conversation_id),
+    ...(typeof row.credential_owner_participant_id === 'string'
+      ? { credentialOwnerParticipantId: row.credential_owner_participant_id }
+      : {}),
     ...(typeof row.external_meeting_id === 'string' ? { externalMeetingId: row.external_meeting_id } : {}),
     ...(typeof row.meeting_url === 'string' ? { meetingUrl: row.meeting_url } : {}),
     title: String(row.title),

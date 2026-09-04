@@ -263,7 +263,7 @@ export interface ChatroomQuickMeetingRequest {
   readonly directConversationId?: string
 }
 
-/** Deployment-wide Enterprise WeChat authorization state. */
+/** Current account's isolated Enterprise WeChat authorization state. */
 export interface ChatroomWecomAuthorizationState {
   readonly enabled: boolean
   readonly status: 'authorized' | 'unauthorized' | 'pending'
