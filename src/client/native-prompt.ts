@@ -25,6 +25,9 @@ export function installNativePromptIdentity(
         const room = store.roomForSession(String(payload.sessionId))
         return room === undefined ? undefined : { kind: 'room' as const, room }
       })()
+    if (target === undefined && !store.canPromptNativeSession(sessionId) && store.getSnapshot().auth?.enabled) {
+      await store.resolveNativeOwnership(sessionId)
+    }
     if (target === undefined && slashCommand) {
       if (!store.canPromptNativeSession(sessionId)) throw new Error('会话不存在或你无权访问。')
       return await original(payload, signal)

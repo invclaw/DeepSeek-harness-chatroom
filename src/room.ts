@@ -1,17 +1,18 @@
+import { parseSessionReferenceText } from '@deepseek-ai/dsh-session-reference'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
 import type { ServerResponse } from 'node:http'
-import { basename, relative, resolve } from 'node:path'
+import { basename } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
 import { AttachmentError, type ImageAttachmentRef, type ImageMediaType } from '@deepseek-ai/dsh-attachment'
-import { BlockAssembler, createAssistantMessage, createUserMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { BlockAssembler, createAssistantMessage, createUserMessage, freezeMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-title'
 import type {} from '@deepseek-ai/dsh-system-prompt'
+import type {} from '@deepseek-ai/dsh-fs'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
@@ -32,6 +33,7 @@ import {
   type DirectMessageRecord,
   type FileRecord,
   type IdentityRecord,
+  type InputRecord,
   type MemberRecord,
   type RecallRecord,
   type ReactionRecord,
@@ -58,6 +60,7 @@ import {
 import { CHATROOM_REACTION_EMOJIS, type ChatroomReactionEmoji } from './reactions.js'
 import { WecomCliManager, inferWecomCard, type WecomAuthorizationState, type WecomService } from './wecom.js'
 import { fetchTencentDocumentTitle, normalizeDocumentTitle, parseWecomDocumentUrl } from './wecom-document.js'
+import { messageParticipant } from './principal.js'
 import { registerWecomAgentTools } from './wecom-tools.js'
 import type {
   ChatroomAutomationOverview,
@@ -157,6 +160,8 @@ export class ChatroomRuntime {
   private readonly log
   private domain: Domain<typeof chatroomDomainSpec> | undefined
   private archive: ChatArchive | undefined
+  private inputs: KvTable<string, InputRecord> | undefined
+  private readonly inputCommits = new Map<string, Promise<void>>()
   private identities: KvTable<string, IdentityRecord> | undefined
   private roomRecords: KvTable<string, RoomRecord> | undefined
   private roomPreferences: KvTable<string, RoomPreferenceRecord> | undefined
@@ -179,11 +184,12 @@ export class ChatroomRuntime {
   private readonly ignoredAssistantMessageIds = new Set<string>()
   private readonly activeTurnDeferredMessageIds = new Map<string, Set<string>>()
   private readonly aiContextStartWrites = new Map<string, Promise<void>>()
-  private readonly chatroomAgentContexts = new WeakSet<Context>()
+  private readonly chatroomAgentContexts = new Map<Context, () => void>()
   private readonly wecom: WecomCliManager
-  private readonly sessionWecomParticipants = new Map<string, string>()
+  private readonly sessionActors = new Map<string, string>()
   private meetingPollTimer: ReturnType<typeof setTimeout> | undefined
   private meetingPoll: Promise<void> | undefined
+  private readonly shutdown = new AbortController()
   private ready = false
   private stopping = false
 
@@ -376,7 +382,11 @@ export class ChatroomRuntime {
   async agentAction(
     sessionId: string,
     input: ChatroomAgentActionInput,
+    signal?: AbortSignal,
   ): Promise<{ readonly action: ChatroomAgentAction; readonly summary: string; readonly followupText?: string }> {
+    this.assertReady()
+    signal = signal === undefined ? this.shutdown.signal : AbortSignal.any([signal, this.shutdown.signal])
+    signal.throwIfAborted()
     const target = this.agentToolTarget(sessionId)
     switch (input.action) {
       case 'send_message': {
@@ -384,7 +394,7 @@ export class ChatroomRuntime {
         return { action: input.action, summary: '消息已准备发送到当前会话。', followupText: text }
       }
       case 'send_file': {
-        const file = await this.storeAgentFile(target.room, input.path)
+        const file = await this.storeAgentFile(target, input.path, signal)
         const caption = input.caption === undefined || input.caption.trim() === ''
           ? ''
           : `${normalizeAgentToolText(input.caption, '文件说明', this.config.maxMessageTextChars)}\n\n`
@@ -419,12 +429,12 @@ export class ChatroomRuntime {
       case 'start_branch': {
         if (target.thread !== undefined) throw new ChatroomInputError('分支内不能继续创建嵌套分支。')
         const root = await this.agentMessage(target, normalizeMessageId(input.messageId ?? ''))
-        const response = await this.openThread(target.room.record.id, this.agentIdentity(target.room), root)
+        const response = await this.openThread(target.room.record.id, this.initiatingIdentity(sessionId), root)
         return { action: input.action, summary: `已创建分支 ${response.thread.id}。` }
       }
       case 'invite_members': {
         const identifiers = input.participantIds?.map(value => value.trim()).filter(Boolean) ?? []
-        const count = await this.agentInviteMembers(target.room, identifiers)
+        const count = await this.agentInviteMembers(target.room, identifiers, this.initiatingIdentity(sessionId))
         return { action: input.action, summary: `已邀请 ${count} 位成员加入群聊。` }
       }
       case 'recall_message': {
@@ -442,6 +452,7 @@ export class ChatroomRuntime {
     const domain = await this.ctx.storageDomain.open(chatroomDomainSpec)
     this.domain = domain
     this.archive = await openChatArchive(this.config.dataDirectory ?? '')
+    this.inputs = domain.table('inputs')
     this.identities = domain.table('identities')
     this.roomRecords = domain.table('rooms')
     this.roomPreferences = domain.table('room_preferences')
@@ -478,6 +489,7 @@ export class ChatroomRuntime {
     await this.ensureRoom(this.config.roomId)
     await this.backfillMeetingCards()
     this.ready = true
+    await this.recoverInputs()
     this.scheduleMeetingPoll()
   }
 
@@ -486,18 +498,22 @@ export class ChatroomRuntime {
     if (this.stopping) return
     this.stopping = true
     this.ready = false
+    this.shutdown.abort()
     if (this.meetingPollTimer !== undefined) clearTimeout(this.meetingPollTimer)
     this.meetingPollTimer = undefined
     await this.meetingPoll?.catch(() => undefined)
     this.meetingPoll = undefined
-    this.wecom.stop()
-    this.sessionWecomParticipants.clear()
+    await this.wecom.stop()
+    this.sessionActors.clear()
+    for (const dispose of this.chatroomAgentContexts.values()) dispose()
+    this.chatroomAgentContexts.clear()
     for (const state of this.states.values()) {
       for (const client of state.clients) client.response.end()
       state.clients.clear()
     }
     for (const client of this.notificationClients) client.response.end()
     this.notificationClients.clear()
+    await Promise.allSettled(this.inputCommits.values())
     await Promise.allSettled(this.roomTitleWrites.values())
     this.roomTitleWrites.clear()
     await Promise.allSettled(this.aiContextStartWrites.values())
@@ -623,14 +639,26 @@ export class ChatroomRuntime {
     const state = newRoomState(record)
     this.states.set(id, state)
     try {
+      await this.touchMember(id, identity)
       const binding = await this.ensureRoom(id)
       this.ensureRoomTitle(binding, record.title)
-      await this.touchMember(id, identity)
       return this.projectRoom(state, identity.participantId)
     } catch (error) {
       this.states.delete(id)
+      await this.requireMembers().delete(`${id}:${identity.participantId}`)
       await this.requireRoomRecords().delete(id)
       throw error
+    }
+  }
+
+  /** Authorize native cross-session mentions before their snapshots enter an Agent request. */
+  async assertPromptReferences(identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[]): Promise<void> {
+    if (!this.config.authEnabled) return
+    for (const part of content) {
+      if (part.type !== 'text') continue
+      for (const reference of parseSessionReferenceText(part.text).references) {
+        if (!await this.canAccessNativeSession(reference.sessionId, identity)) throw new ChatroomInputError('引用的会话不存在或你无权访问。')
+      }
     }
   }
 
@@ -672,6 +700,40 @@ export class ChatroomRuntime {
   ownsSoloSession(sessionId: string, identity: ChatroomIdentity): boolean {
     this.assertReady()
     return this.requireSoloSessions().get(String(SessionId(sessionId)))?.participantId === identity.participantId
+  }
+
+  /** Resolve room and Solo ownership before consulting immutable native parent lineage. */
+  async canAccessNativeSession(sessionId: string, identity: ChatroomIdentity, visited = new Set<string>()): Promise<boolean> {
+    this.assertReady()
+    if (!this.config.authEnabled) return true
+    if (visited.has(sessionId)) return false
+    visited.add(sessionId)
+    const room = [...this.states.values()].find(state => state.record.sessionId === sessionId)
+      ?? [...this.threadStates.values()].filter(state => state.record.sessionId === sessionId).map(state => this.requireState(state.record.roomId))[0]
+    if (room !== undefined) return this.requireMembers().get(`${room.record.id}:${identity.participantId}`) !== undefined
+    const solo = this.requireSoloSessions().get(sessionId)
+    if (solo !== undefined) return solo.participantId === identity.participantId
+    const header = this.ctx.agents.get(SessionId(sessionId))?.session.header
+      ?? (await this.ctx.sessionPersistence.list()).find(header => String(header.id) === sessionId)
+    return header?.parentSession !== undefined && await this.canAccessNativeSession(String(header.parentSession), identity, visited)
+  }
+
+  /** Attribute a native fork to its creator before returning the child id to the browser. */
+  async ownNativeFork(sessionId: string, identity: ChatroomIdentity): Promise<void> {
+    await this.requireSoloSessions().put(sessionId, { sessionId, participantId: identity.participantId, createdAt: Date.now() })
+  }
+
+  /** Admit native group input through the same authenticated path as the chatroom composer. */
+  async submitNativeSession(sessionId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer'): Promise<boolean> {
+    const room = [...this.states.values()].find(state => state.record.sessionId === sessionId)
+    if (room !== undefined) {
+      await this.submit(room.record.id, identity, content, mode)
+      return true
+    }
+    const thread = [...this.threadStates.values()].find(state => state.record.sessionId === sessionId)
+    if (thread === undefined) return false
+    await this.submitThread(thread.record.id, identity, content, mode)
+    return true
   }
 
   /** Adopt one native Harness Session as a shared room, once, across concurrent browsers. */
@@ -738,12 +800,13 @@ export class ChatroomRuntime {
     const state = newRoomState(record)
     this.states.set(id, state)
     try {
-      await this.ensureRoom(id)
       await this.touchMember(id, identity)
+      await this.ensureRoom(id)
       if (this.config.authEnabled) await this.requireSoloSessions().delete(normalizedSessionId)
       return this.projectRoom(state, identity.participantId)
     } catch (error) {
       this.states.delete(id)
+      await this.requireMembers().delete(`${id}:${identity.participantId}`)
       await this.requireRoomRecords().delete(id)
       throw error
     }
@@ -791,6 +854,15 @@ export class ChatroomRuntime {
       const previous = await this.ensureRoom(roomId)
       previous.agent.cancel({ kind: 'user' })
       await previous.agent.whenIdle()
+      for (const [id, input] of this.requireInputs().entries()) {
+        if (input.sessionId !== String(previous.agent.session.id)) continue
+        if (!previous.agent.session.events.some(event => event.type === 'user/message' && String(event.data.id) === id)) {
+          previous.agent.session.append('user/message', freezeMessage(input.message), { surfaceOp: 'append' })
+        }
+        await this.commitInput(previous.agent.session, id)
+      }
+      state.pendingMessages.clear()
+      this.broadcastPendingMessages(state)
       await this.aiContextStartWrites.get(roomId)
       this.archiveRoomSession(state, previous.agent.session)
       const resetSeq = previous.agent.session.events.at(-1)?.seq
@@ -1050,6 +1122,8 @@ export class ChatroomRuntime {
   ): Promise<ChatroomPromptResponse> {
     this.assertReady()
     const state = this.requireState(roomId)
+    this.assertRoomAccess(roomId, identity)
+    await this.assertPromptReferences(identity, content)
     const task = state.admission.then(async () => {
       const binding = await this.ensureRoom(roomId)
       const aiTriggered = mentionsAi(content, state.record.aiDisplayName)
@@ -1062,7 +1136,8 @@ export class ChatroomRuntime {
         }
       }
       const durable = await this.durableContent(roomId, identity, identifyPrompt(content, identity, reply))
-      const message = createUserMessage({ content: durable, source: { kind: 'user' } })
+      const message = createUserMessage({ content: durable, source: { kind: 'user', chatroomParticipantId: identity.participantId } })
+      await this.persistInput(state, binding, identity, message, aiTriggered ? 'respond' : state.record.autoTriggerEnabled === true ? 'decide' : 'passive')
       const pending = binding.agent.status === 'running'
         && mode === 'queue'
         && (aiTriggered || state.record.autoTriggerEnabled === true)
@@ -1074,6 +1149,7 @@ export class ChatroomRuntime {
           const deferFromActiveTurn = binding.agent.status === 'running'
           const event = binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
           automaticSourceMessageId = `user:${event.seq}`
+          await this.commitInput(binding.agent.session, String(message.id))
           if (deferFromActiveTurn) this.deferMessageFromActiveTurn(binding.agent, String(message.id))
         }
       } else if (mode === 'steer') {
@@ -1081,6 +1157,7 @@ export class ChatroomRuntime {
       } else {
         binding.agent.followup(message)
       }
+      if (aiTriggered) await this.commitInput(binding.agent.session, String(message.id))
       if (!aiTriggered && state.record.autoTriggerEnabled === true) {
         this.scheduleAutomaticResponse(
           state,
@@ -1089,6 +1166,7 @@ export class ChatroomRuntime {
           undefined,
           automaticSourceMessageId,
           pending,
+          identity.participantId,
         )
       }
       await this.touchMember(roomId, identity)
@@ -1134,17 +1212,19 @@ export class ChatroomRuntime {
       if (pending.view.status === 'passive' || pending.view.status === 'guiding') {
         throw new ChatroomInputError('这条消息已经开始发送，无法再修改。')
       }
-      if (action === 'guide' && binding.agent.status !== 'running') {
-        throw new ChatroomInputError('当前回复已经结束，无需再引导对话。')
-      }
       if (pending.view.status === 'queued' && !binding.agent.inbox.remove(pending.message.id)) {
         throw new ChatroomInputError('这条消息已经开始发送，无法再修改。')
       }
       if (action === 'guide') {
+        await this.setInputIntent(messageId, 'respond')
         pending.view = { ...pending.view, status: 'guiding' }
         this.broadcastPendingMessages(resolved.room)
-        binding.agent.steer(pending.message)
+        if (binding.agent.status === 'running') binding.agent.steer(pending.message)
+        else binding.agent.followup(pending.message)
+        if (!await this.ctx.sessions.flush(binding.agent.session)) throw new Error('No native Session durability listener')
       } else {
+        if (!await this.ctx.sessions.flush(binding.agent.session)) throw new Error('No native Session durability listener')
+        await this.requireInputs().delete(messageId)
         this.removePendingMessage(resolved.room, messageId)
       }
       return { accepted: true, text: pending.view.text }
@@ -1161,13 +1241,14 @@ export class ChatroomRuntime {
       }
     }
     const text = queued?.text ?? projectForwardContent(message.content, 'human').text
-    if (action === 'guide' && binding.agent.status !== 'running') {
-      throw new ChatroomInputError('当前回复已经结束，无需再引导对话。')
-    }
     if (!binding.agent.inbox.remove(message.id)) {
       throw new ChatroomInputError('这条消息已经开始发送，无法再修改。')
     }
-    if (action === 'guide') binding.agent.steer(message)
+    if (action === 'guide') {
+      if (binding.agent.status === 'running') binding.agent.steer(message)
+      else binding.agent.followup(message)
+    } else await this.requireInputs().delete(String(message.id))
+    if (!await this.ctx.sessions.flush(binding.agent.session)) throw new Error('No native Session durability listener')
     if (action !== 'guide' && queued?.sourceMessageId !== undefined) {
       await this.recallMessage(resolved.room.record.id, queued.sourceMessageId, identity)
     }
@@ -1211,6 +1292,7 @@ export class ChatroomRuntime {
   async recallMessage(roomId: string, messageId: string, identity: ChatroomIdentity): Promise<ChatroomRecall> {
     this.assertReady()
     const state = this.requireState(roomId)
+    this.assertRoomAccess(roomId, identity)
     const normalizedMessageId = normalizeMessageId(messageId)
     const task = state.admission.then(async () => {
       if (state.binding !== undefined) this.archiveRoomSession(state, state.binding.agent.session)
@@ -1253,6 +1335,7 @@ export class ChatroomRuntime {
   ): Promise<ChatroomReaction> {
     this.assertReady()
     const state = this.requireState(roomId)
+    this.assertRoomAccess(roomId, identity)
     const normalizedMessageId = normalizeMessageId(messageId)
     const task = state.admission.then(async () => {
       const key = reactionKey(roomId, normalizedMessageId, emoji, identity.participantId)
@@ -1292,6 +1375,8 @@ export class ChatroomRuntime {
     }
     const source = directSource === undefined ? this.requireState(sourceRoomId) : undefined
     const target = this.requireState(targetRoomId)
+    this.assertRoomAccess(targetRoomId, identity)
+    if (source !== undefined) this.assertRoomAccess(sourceRoomId, identity)
     const requested = normalizeForwardItems(messages)
     const normalized = directSource === undefined
       ? await Promise.all(requested.map(async item =>
@@ -1311,7 +1396,7 @@ export class ChatroomRuntime {
       const durable = await this.durableContent(targetRoomId, identity, identified)
       binding.agent.session.append('user/message', createUserMessage({
         content: durable,
-        source: { kind: 'user' },
+        source: { kind: 'user', chatroomParticipantId: identity.participantId },
       }), { surfaceOp: 'append' })
       await this.touchMember(targetRoomId, identity)
       this.notify({
@@ -1451,6 +1536,7 @@ export class ChatroomRuntime {
   subscribe(roomId: string, identity: ChatroomIdentity, response: ServerResponse): () => void {
     this.assertReady()
     const state = this.requireState(roomId)
+    this.assertRoomAccess(roomId, identity)
     if (state.binding === undefined) throw new Error(`chatroom room ${JSON.stringify(roomId)} is not active`)
     const client: SseClient = { participantId: identity.participantId, response }
     state.clients.add(client)
@@ -1686,6 +1772,7 @@ export class ChatroomRuntime {
   async openThread(roomId: string, identity: ChatroomIdentity, root: ChatroomThreadRoot): Promise<ChatroomThreadResponse> {
     this.assertReady()
     const room = this.requireState(roomId)
+    this.assertRoomAccess(roomId, identity)
     const normalized = normalizeThreadRoot(root)
     const task = room.admission.then(async () => {
       if (identity.participantId !== 'ai') await this.touchMember(roomId, identity)
@@ -1736,11 +1823,13 @@ export class ChatroomRuntime {
   ): Promise<ChatroomPromptResponse> {
     this.assertReady()
     const state = this.requireThreadState(threadId)
+    this.assertRoomAccess(state.record.roomId, identity)
     const content: readonly ChatroomPromptContentPart[] = typeof contentOrText === 'string'
       ? [{ type: 'text', text: normalizeThreadText(contentOrText, this.config.maxMessageTextChars) }]
       : contentOrText
     const mode = typeof modeOrReply === 'string' ? modeOrReply : 'queue'
     const reply = typeof modeOrReply === 'string' ? explicitReply : modeOrReply
+    await this.assertPromptReferences(identity, content)
     const task = state.admission.then(async () => {
       const binding = await this.ensureThread(threadId)
       const roomState = this.requireState(state.record.roomId)
@@ -1764,7 +1853,7 @@ export class ChatroomRuntime {
       const sequence = this.nextThreadSequence(threadId)
       const message = createUserMessage({
         content: durable,
-        source: { kind: 'user' },
+        source: { kind: 'user', chatroomParticipantId: identity.participantId },
       })
       const record: ThreadMessageRecord = {
         id: randomUUID(),
@@ -1782,19 +1871,22 @@ export class ChatroomRuntime {
         createdAt: Date.now(),
         modelMessageId: String(message.id),
       }
+      await this.persistInput(roomState, binding, identity, message, aiTriggered ? 'respond' : 'passive', state)
       await this.requireThreadMessages().put(record.id, record)
       this.archiveThreadMessage(state.record, record)
       if (!aiTriggered) {
         const deferFromActiveTurn = binding.agent.status === 'running'
         binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
+        await this.commitInput(binding.agent.session, String(message.id))
         if (deferFromActiveTurn) this.deferMessageFromActiveTurn(binding.agent, String(message.id))
       } else if (mode === 'steer') {
         binding.agent.steer(message)
       } else {
         binding.agent.followup(message)
       }
+      if (aiTriggered) await this.commitInput(binding.agent.session, String(message.id))
       if (!aiTriggered && room.autoTriggerEnabled === true) {
-        this.scheduleAutomaticResponse(roomState, binding, content, state, record.id)
+        this.scheduleAutomaticResponse(roomState, binding, content, state, record.id, undefined, identity.participantId)
       }
       await this.touchMember(state.record.roomId, identity)
       await this.touchRoom(state.record.roomId)
@@ -1832,9 +1924,9 @@ export class ChatroomRuntime {
       return
     }
     if (event.type === 'user/message') {
-      const firstText = event.data.content.find((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')?.text
-      const participantId = firstText === undefined ? undefined : participantMarker(firstText)?.participantId
-      if (participantId !== undefined) this.sessionWecomParticipants.set(String(session.id), participantId)
+      void this.commitInput(session, String(event.data.id)).catch((error: unknown) => {
+        this.log.warn('Accepted input remains available for recovery: %s', String(error))
+      })
       const room = [...this.states.values()].find(state => state.record.sessionId === String(session.id))
       if (room !== undefined) this.removePendingMessage(room, String(event.data.id))
       return
@@ -2292,20 +2384,21 @@ export class ChatroomRuntime {
     }
   }
 
-  private async storeAgentFile(room: RoomState, path: string | undefined): Promise<ChatroomFileReference> {
+  private async storeAgentFile(target: AgentToolTarget, path: string | undefined, signal?: AbortSignal): Promise<ChatroomFileReference> {
     const requested = normalizeAgentToolText(path, '文件路径', 4_096)
-    const workspace = resolve(this.config.cwd)
-    const absolute = resolve(workspace, requested)
-    const outside = relative(workspace, absolute)
-    if (outside === '..' || outside.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)) {
-      throw new ChatroomInputError('只能发送当前工作区内的文件。')
-    }
-    let data: Uint8Array
-    try {
-      data = new Uint8Array(await readFile(absolute))
-    } catch (error) {
-      throw new ChatroomInputError(`无法读取文件：${error instanceof Error ? error.message : String(error)}`)
-    }
+    const binding = target.thread === undefined
+      ? await this.ensureRoom(target.room.record.id)
+      : await this.ensureThread(target.thread.record.id)
+    const { fs } = binding.agent.ctx
+    const cwd = binding.agent.session.header.cwd
+    if (cwd === undefined) throw new ChatroomInputError('当前会话没有工作目录。')
+    const workspace = await fs.resolve(cwd, signal === undefined ? {} : { signal })
+    const file = await fs.resolve(requested, { cwd, ...(signal === undefined ? {} : { signal }) })
+    if (!fs.contains(workspace, file)) throw new ChatroomInputError('只能发送当前工作区内的文件。')
+    const data = await fs.readBytes(file, signal, this.config.maxFileBytes)
+    signal?.throwIfAborted()
+    const absolute = fs.processPath(file)
+    const room = target.room
     this.validateFiles([data])
     const identity = this.agentIdentity(room)
     const record = await this.fileRecord(room.record.id, identity, {
@@ -2339,7 +2432,7 @@ export class ChatroomRuntime {
     this.broadcast(room, { type: 'reaction', reaction: this.reactionSummary(room.record.id, messageId, emoji) })
   }
 
-  private async agentInviteMembers(room: RoomState, identifiers: readonly string[]): Promise<number> {
+  private async agentInviteMembers(room: RoomState, identifiers: readonly string[], identity: ChatroomIdentity): Promise<number> {
     if (identifiers.length === 0) throw new ChatroomInputError('请至少提供一位用户。')
     if (identifiers.length > 100) throw new ChatroomInputError('一次最多添加 100 位用户。')
     const accounts = this.auth.activeAccounts()
@@ -2349,25 +2442,9 @@ export class ChatroomRuntime {
       if (account === undefined) throw new ChatroomInputError(`找不到用户 ${JSON.stringify(identifier)}。`)
       return account
     })
-    const table = this.requireMembers()
-    const now = Date.now()
-    let added = 0
-    for (const account of selected) {
-      const key = `${room.record.id}:${account.participantId}`
-      if (table.get(key) !== undefined) continue
-      await table.put(key, {
-        roomId: room.record.id,
-        participantId: account.participantId,
-        displayName: account.displayName,
-        avatarId: account.avatarId,
-        ...(account.avatarUrl === undefined ? {} : { avatarUrl: account.avatarUrl }),
-        joinedAt: now,
-        lastSeenAt: now,
-      })
-      added += 1
-    }
-    this.broadcast(room, { type: 'room-updated', room: this.projectRoom(room), members: this.roomMembers(room) })
-    return added
+    const before = new Set(this.roomMembers(room).map(member => member.participantId))
+    await this.addRoomMembers(room.record.id, selected.map(account => account.participantId), identity)
+    return selected.filter(account => !before.has(account.participantId)).length
   }
 
   private async agentMessage(target: AgentToolTarget, messageId: string): Promise<ChatroomThreadRoot> {
@@ -2484,12 +2561,23 @@ export class ChatroomRuntime {
     }
     state.activation ??= this.activateRoom(state).then((binding) => {
       state.binding = binding
+      this.restorePendingMessages(state, binding)
       this.archiveRoomSession(state, binding.agent.session)
       return binding
     }).finally(() => {
       state.activation = undefined
     })
     return await state.activation
+  }
+
+  private restorePendingMessages(state: RoomState, binding: AgentBinding): void {
+    for (const [messages, status] of [[binding.agent.inbox.nextTurn, 'queued'], [binding.agent.inbox.nextStep, 'guiding']] as const) {
+      for (const message of messages) {
+        const participantId = messageParticipant(message)
+        const member = participantId === undefined ? undefined : this.requireMembers().get(`${state.record.id}:${participantId}`)
+        if (member !== undefined && message.source.kind === 'user') this.publishPendingMessage(state, member, message, status)
+      }
+    }
   }
 
   private async activateRoom(state: RoomState): Promise<AgentBinding> {
@@ -2570,32 +2658,58 @@ export class ChatroomRuntime {
 
   private augmentChatroomAgentContext(agentCtx: Context, sessionId: string): void {
     if (this.chatroomAgentContexts.has(agentCtx)) return
-    this.chatroomAgentContexts.add(agentCtx)
-    registerChatroomAgentTools(agentCtx, this, sessionId)
-    registerWecomAgentTools(
-      agentCtx,
-      () => {
-        const participantId = this.sessionWecomParticipants.get(sessionId)
-        if (participantId === undefined) throw new ChatroomInputError('请先由发起操作的用户完成企业微信扫码授权。')
-        return this.wecom.client(participantId)
-      },
-      async (card, operation) => this.prepareAgentWecomCard(sessionId, card, operation),
-    )
-    agentCtx.systemPrompt.section({
-      name: 'chatroom:main-agent',
-      order: 10,
-      text: () => this.resolvedAutomationSettings().mainAgentPrompt,
-    })
-    agentCtx.systemPrompt.section({
-      name: 'chatroom:collaboration-tools',
-      order: 11,
-      text: () => '你可使用 chatroom_capabilities 查看当前群聊能力和可操作的近期消息 ID，并使用 chatroom_action 拉人、主动发消息、发送工作区文件、回复引用、贴表情、创建分支或撤回自己的消息。执行群聊副作用前先调用工具，只有工具成功后才能声称操作完成。',
-    })
-    agentCtx.systemPrompt.section({
-      name: 'chatroom:wecom-tools',
-      order: 12,
-      text: () => '你可使用 wecom_schema 与 wecom_action 操作企业微信日程、会议、会议纪要、文档、在线表格、智能表格和智能文档。操作使用当前这轮发言人的个人企业微信授权；未授权时请提示该用户扫码绑定。写操作前先读取对应 schema；涉及人员时先用 contact 解析真实账号；不要猜测或向用户展示 userid、docid、meeting_id 等内部标识。用户未指定文档类型时默认创建智能文档。',
-    })
+    const disposers: Array<() => void> = []
+    const dispose = (): void => { for (const release of disposers.splice(0).reverse()) release() }
+    try {
+      disposers.push(agentCtx.on('agent/pre-step', async (payload, next) => {
+        const decision = await next()
+        if (decision.kind !== 'enter') return decision
+        const participants = new Set(decision.messages.map(messageParticipant).filter(id => id !== undefined))
+        // A step mixing different people's input cannot authorize a personal-account side effect.
+        if (participants.size === 1) this.sessionActors.set(sessionId, [...participants][0]!)
+        else if (participants.size > 1 || payload.step === 1) this.sessionActors.delete(sessionId)
+        return decision
+      }))
+      disposers.push(registerChatroomAgentTools(agentCtx, this, sessionId))
+      disposers.push(registerWecomAgentTools(agentCtx, () => {
+        const identity = this.initiatingIdentity(sessionId)
+        return {
+          client: this.wecom.client(identity.participantId),
+          prepareCard: async (card, operation) => this.prepareAgentWecomCard(sessionId, identity.participantId, card, operation),
+        }
+      }))
+      disposers.push(agentCtx.systemPrompt.section({
+        name: 'chatroom:main-agent',
+        order: 10,
+        text: () => this.resolvedAutomationSettings().mainAgentPrompt,
+      }))
+      disposers.push(agentCtx.systemPrompt.section({
+        name: 'chatroom:collaboration-tools',
+        order: 11,
+        text: () => '你可使用 chatroom_capabilities 查看当前群聊能力和可操作的近期消息 ID，并使用 chatroom_action 拉人、主动发消息、发送工作区文件、回复引用、贴表情、创建分支或撤回自己的消息。执行群聊副作用前先调用工具，只有工具成功后才能声称操作完成。',
+      }))
+      disposers.push(agentCtx.systemPrompt.section({
+        name: 'chatroom:wecom-tools',
+        order: 12,
+        text: () => '你可使用 wecom_schema 与 wecom_action 操作企业微信日程、会议、会议纪要、文档、在线表格、智能表格和智能文档。操作使用当前这轮发言人的个人企业微信授权；未授权时请提示该用户扫码绑定。写操作前先读取对应 schema；涉及人员时先用 contact 解析真实账号；不要猜测或向用户展示 userid、docid、meeting_id 等内部标识。用户未指定文档类型时默认创建智能文档。',
+      }))
+      this.chatroomAgentContexts.set(agentCtx, dispose)
+    } catch (error) {
+      dispose()
+      throw error
+    }
+  }
+
+  private initiatingIdentity(sessionId: string): ChatroomIdentity {
+    this.assertReady()
+    const participantId = this.sessionActors.get(sessionId)
+    if (participantId === undefined) throw new ChatroomInputError('当前操作没有唯一的发起用户，请单独发送操作请求。')
+    const identity = this.config.authEnabled
+      ? this.auth.activeAccounts().find(account => account.participantId === participantId)
+      : this.requireMembers().get(`${this.agentToolTarget(sessionId).room.record.id}:${participantId}`)
+    if (identity === undefined) throw new ChatroomInputError('发起操作的账号不存在或已停用。')
+    this.assertRoomAccess(this.agentToolTarget(sessionId).room.record.id, { ...identity, avatarId: identity.avatarId ?? fallbackAvatarId(participantId) })
+    return { ...identity, avatarId: identity.avatarId ?? fallbackAvatarId(participantId) }
   }
 
   private async createMeetingCard(
@@ -2649,13 +2763,13 @@ export class ChatroomRuntime {
 
   private async prepareAgentWecomCard(
     sessionId: string,
+    participantId: string,
     card: ChatroomExternalCard,
     operation: { service: WecomService; method: string; parameters: unknown; result: unknown },
   ): Promise<ChatroomExternalCard> {
     if (card.kind !== 'meeting' || operation.service !== 'meeting' || operation.method !== 'create') return card
     const tracked = { ...card, id: randomUUID(), status: card.status ?? 'init' }
     const externalMeetingId = findStringField(operation.result, ['meeting_id'])
-    const participantId = this.sessionWecomParticipants.get(sessionId)
     const thread = [...this.threadStates.values()].find(state => state.record.sessionId === sessionId)
     if (thread !== undefined) {
       this.trackMeeting(tracked, 'thread', thread.record.id, externalMeetingId, participantId)
@@ -3148,6 +3262,71 @@ export class ChatroomRuntime {
     this.broadcast(state, { type: 'presence', online: onlineCount(state), members: this.roomMembers(state) })
   }
 
+  private requireInputs(): KvTable<string, InputRecord> {
+    if (this.inputs === undefined) throw new Error('chatroom input storage is not ready')
+    return this.inputs
+  }
+
+  private async persistInput(room: RoomState, binding: AgentBinding, identity: ChatroomIdentity, message: UserMessage, intent: InputRecord['intent'], thread?: ThreadState): Promise<void> {
+    await this.requireInputs().put(String(message.id), {
+      sessionId: String(binding.agent.session.id), roomId: room.record.id,
+      ...(thread === undefined ? {} : { threadId: thread.record.id }),
+      participantId: identity.participantId, message, intent, createdAt: Date.now(),
+    })
+  }
+
+  private async setInputIntent(messageId: string, intent: InputRecord['intent']): Promise<void> {
+    if (this.requireInputs().get(messageId) === undefined) return
+    await this.requireInputs().update(messageId, record => ({ ...record!, intent }))
+  }
+
+  private commitInput(session: Session, messageId: string): Promise<void> {
+    const existing = this.inputCommits.get(messageId)
+    if (existing !== undefined) return existing
+    if (this.requireInputs().get(messageId) === undefined) return Promise.resolve()
+    const claimed = (): boolean => session.events.some(event => event.type === 'user/message' && String(event.data.id) === messageId)
+    const claimedBeforeFlush = claimed()
+    const commit = this.ctx.sessions.flush(session).then(async durable => {
+      if (!durable) throw new Error('No native Session durability listener')
+      // Native disposal cancels its inbox; retain the receipt until the claimed user event is durable.
+      if (!claimed()) return
+      if (!claimedBeforeFlush && !await this.ctx.sessions.flush(session)) throw new Error('No native Session durability listener')
+      await this.requireInputs().delete(messageId)
+    }).finally(() => { this.inputCommits.delete(messageId) })
+    this.inputCommits.set(messageId, commit)
+    return commit
+  }
+
+  private async recoverInputs(): Promise<void> {
+    for (const [id, record] of this.requireInputs().entries()) {
+      const room = this.requireState(record.roomId)
+      const thread = record.threadId === undefined ? undefined : this.requireThreadState(record.threadId)
+      const binding = thread === undefined ? await this.ensureRoom(room.record.id) : await this.ensureThread(thread.record.id)
+      if (String(binding.agent.session.id) !== record.sessionId) throw new Error('Accepted input refers to a replaced Session')
+      if (binding.agent.session.events.some(event => event.type === 'user/message' && String(event.data.id) === id)) {
+        await this.commitInput(binding.agent.session, id)
+        continue
+      }
+      // Borrowed Agents may still hold an accepted occurrence across plugin reload.
+      if ([...binding.agent.inbox.nextTurn, ...binding.agent.inbox.nextStep].some(message => String(message.id) === id)) {
+        await this.commitInput(binding.agent.session, id)
+        continue
+      }
+      const message = freezeMessage(record.message)
+      if (record.intent === 'respond') {
+        binding.agent.inbox.append('next-turn', message)
+        await this.commitInput(binding.agent.session, id)
+        if (thread === undefined) this.restorePendingMessages(room, binding)
+      }
+      else {
+        // An interrupted controller decision preserves human chat without repeating an uncertain external operation.
+        binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
+        await this.commitInput(binding.agent.session, id)
+        if (binding.agent.status === 'running') this.deferMessageFromActiveTurn(binding.agent, id)
+      }
+    }
+  }
+
   private publishPendingMessage(
     state: RoomState,
     identity: ChatroomIdentity,
@@ -3464,6 +3643,7 @@ export class ChatroomRuntime {
         provider: settings.provider,
         model: settings.model,
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        signal: this.shutdown.signal,
         system: settings.controllerPrompt,
         messages: [createUserMessage({
           source: { kind: 'user' },
@@ -3487,29 +3667,37 @@ export class ChatroomRuntime {
     thread?: ThreadState,
     sourceMessageId?: string,
     pending?: PendingRoomMessage,
+    participantId?: string,
   ): void {
     const owner = thread ?? room
+    const contextResetSeq = room.record.aiContextResetSeq
     const task = owner.automation.then(async () => {
       const wake = await this.shouldAutoTrigger(room, binding, content, thread)
+      if (this.stopping || contextResetSeq !== room.record.aiContextResetSeq) return
       if (pending !== undefined
         && (room.pendingMessages.get(pending.view.messageId) !== pending || pending.view.status !== 'deciding')) return
       if (!wake) {
         if (pending !== undefined) {
+          await this.setInputIntent(pending.view.messageId, 'passive')
           pending.view = { ...pending.view, status: 'passive' }
           this.broadcastPendingMessages(room)
-          await binding.agent.whenIdle()
+          await waitForIdle(binding.agent, this.shutdown.signal)
+          if (this.stopping) return
           if (room.pendingMessages.get(pending.view.messageId) !== pending || pending.view.status !== 'passive') return
           binding.agent.session.append('user/message', pending.message, { surfaceOp: 'append' })
+          await this.commitInput(binding.agent.session, String(pending.message.id))
         }
         return
       }
       if (pending !== undefined) {
+        await this.setInputIntent(pending.view.messageId, 'respond')
         pending.view = { ...pending.view, status: 'queued' }
         this.broadcastPendingMessages(room)
         binding.agent.followup(pending.message)
+        await this.commitInput(binding.agent.session, String(pending.message.id))
         return
       }
-      binding.agent.followup(createUserMessage({
+      const notice = createUserMessage({
         content: [{
           type: 'text',
           text: `The automatic-response controller selected this chatroom message for an AI response: ${JSON.stringify(promptPreview(content))}\nChatroom pending source: ${sourceMessageId ?? 'none'}\nRespond to that message now. Do not mention this controller notice.`,
@@ -3519,8 +3707,17 @@ export class ChatroomRuntime {
           plugin: 'deepseek-harness-chatroom',
           form: 'notice',
           summary: 'Automatic chatroom response',
+          ...(participantId === undefined ? {} : { chatroomParticipantId: participantId }),
         },
-      }))
+      })
+      if (participantId === undefined) return
+      await this.requireInputs().put(String(notice.id), {
+        sessionId: String(binding.agent.session.id), roomId: room.record.id,
+        ...(thread === undefined ? {} : { threadId: thread.record.id }),
+        participantId, message: notice, intent: 'respond', createdAt: Date.now(),
+      })
+      binding.agent.followup(notice)
+      await this.commitInput(binding.agent.session, String(notice.id))
     })
     owner.automation = task.catch((error: unknown) => {
       this.log.warn('Automatic-response wake failed: %s', String(error))
@@ -3692,6 +3889,11 @@ export class ChatroomRuntime {
   private assertRoomInviter(record: RoomRecord, identity: ChatroomIdentity): void {
     if ('role' in identity && identity.role === 'super-admin') return
     this.assertRoomManager(record, identity.participantId)
+  }
+
+  /** Enforce authenticated membership before any room operation. */
+  private assertRoomAccess(roomId: string, identity: ChatroomIdentity): void {
+    if (this.config.authEnabled) this.assertRoomMember(roomId, identity.participantId)
   }
 
   private assertRoomMember(roomId: string, participantId: string): void {
@@ -4385,4 +4587,16 @@ function writeNotificationSse(
   } catch {
     return false
   }
+}
+
+/** Stop waiting for a borrowed Agent when this plugin is withdrawn. */
+async function waitForIdle(agent: Agent, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return
+  let release: () => void = () => undefined
+  const stopped = new Promise<void>(resolve => {
+    release = resolve
+    signal.addEventListener('abort', release, { once: true })
+  })
+  try { await Promise.race([agent.whenIdle(), stopped]) }
+  finally { signal.removeEventListener('abort', release) }
 }

@@ -86,6 +86,8 @@ describe('native prompt admission', () => {
       agentTargetForSession: () => undefined,
       newSessionMode: () => undefined,
       ensurePromptTarget: async () => undefined,
+      getSnapshot: () => ({ auth: { enabled: true } }),
+      resolveNativeOwnership: async () => false,
       canPromptNativeSession: () => false,
     } as unknown as ChatroomClientStore
     installNativePromptIdentity(api, store)

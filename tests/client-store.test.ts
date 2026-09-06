@@ -28,6 +28,27 @@ afterEach(() => {
 })
 
 describe('ChatroomClientStore', () => {
+  it('refreshes native startup ownership without granting access to a foreign session', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const auth = { enabled: true, authenticated: true }
+    const refresh = Promise.withResolvers<Response>()
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ ...sessionResponse(identity, []), auth }))
+      .mockReturnValueOnce(refresh.promise)
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    expect(store.canPromptNativeSession('native-created')).toBe(false)
+    const first = store.resolveNativeOwnership('native-created')
+    expect(store.resolveNativeOwnership('native-created')).toBe(first)
+    refresh.resolve(jsonResponse({ ...sessionResponse(identity, []), auth, soloSessionIds: ['native-created'] }))
+    expect(await first).toBe(true)
+    expect(store.canPromptNativeSession('native-created')).toBe(true)
+    expect(store.canPromptNativeSession('foreign')).toBe(false)
+    store.stop()
+  })
+
   it('chooses identity first, then opens a selected native shared Session', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()

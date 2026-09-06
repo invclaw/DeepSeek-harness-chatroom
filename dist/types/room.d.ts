@@ -17,6 +17,8 @@ export declare class ChatroomRuntime {
     private readonly log;
     private domain;
     private archive;
+    private inputs;
+    private readonly inputCommits;
     private identities;
     private roomRecords;
     private roomPreferences;
@@ -41,9 +43,10 @@ export declare class ChatroomRuntime {
     private readonly aiContextStartWrites;
     private readonly chatroomAgentContexts;
     private readonly wecom;
-    private readonly sessionWecomParticipants;
+    private readonly sessionActors;
     private meetingPollTimer;
     private meetingPoll;
+    private readonly shutdown;
     private ready;
     private stopping;
     constructor(ctx: Context, config: Config);
@@ -90,7 +93,7 @@ export declare class ChatroomRuntime {
         readonly actions: ChatroomAgentAction[];
     }>;
     /** Execute one Agent-requested room side effect against its owning Session. */
-    agentAction(sessionId: string, input: ChatroomAgentActionInput): Promise<{
+    agentAction(sessionId: string, input: ChatroomAgentActionInput, signal?: AbortSignal): Promise<{
         readonly action: ChatroomAgentAction;
         readonly summary: string;
         readonly followupText?: string;
@@ -112,6 +115,8 @@ export declare class ChatroomRuntime {
     deleteIdentity(token: string | undefined): Promise<void>;
     /** Create and activate one independent shared Harness Session. */
     createRoom(title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
+    /** Authorize native cross-session mentions before their snapshots enter an Agent request. */
+    assertPromptReferences(identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[]): Promise<void>;
     /** Reserve an opaque native Session id as a private Solo conversation. */
     reserveSoloSession(identity: ChatroomIdentity): Promise<string>;
     /** Release a failed or abandoned Solo Session reservation owned by the caller. */
@@ -120,6 +125,12 @@ export declare class ChatroomRuntime {
     soloSessionIds(identity: ChatroomIdentity): readonly string[];
     /** Test whether one native Session is an identity-owned Solo conversation. */
     ownsSoloSession(sessionId: string, identity: ChatroomIdentity): boolean;
+    /** Resolve room and Solo ownership before consulting immutable native parent lineage. */
+    canAccessNativeSession(sessionId: string, identity: ChatroomIdentity, visited?: Set<string>): Promise<boolean>;
+    /** Attribute a native fork to its creator before returning the child id to the browser. */
+    ownNativeFork(sessionId: string, identity: ChatroomIdentity): Promise<void>;
+    /** Admit native group input through the same authenticated path as the chatroom composer. */
+    submitNativeSession(sessionId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer'): Promise<boolean>;
     /** Adopt one native Harness Session as a shared room, once, across concurrent browsers. */
     ensureSessionRoom(sessionId: string, title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     private createSessionRoom;
@@ -255,12 +266,14 @@ export declare class ChatroomRuntime {
     private agentRecentMessages;
     private recallAgentMessage;
     private ensureRoom;
+    private restorePendingMessages;
     private activateRoom;
     private activateSharedSession;
     private ensureRoomTitle;
     private acquireAgent;
     private setupAgentContext;
     private augmentChatroomAgentContext;
+    private initiatingIdentity;
     private createMeetingCard;
     private prepareAgentWecomCard;
     private trackMeeting;
@@ -283,6 +296,11 @@ export declare class ChatroomRuntime {
     private fileRecord;
     private resizeImage;
     private broadcastPresence;
+    private requireInputs;
+    private persistInput;
+    private setInputIntent;
+    private commitInput;
+    private recoverInputs;
     private publishPendingMessage;
     private removePendingMessage;
     private pendingMessagesForRoom;
@@ -329,6 +347,8 @@ export declare class ChatroomRuntime {
     private requireThreadState;
     private assertRoomManager;
     private assertRoomInviter;
+    /** Enforce authenticated membership before any room operation. */
+    private assertRoomAccess;
     private assertRoomMember;
     private isRoomMember;
     private roomMemberCount;

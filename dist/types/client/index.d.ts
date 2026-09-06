@@ -3,7 +3,7 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client';
 import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client';
 import { ChatroomClientStore } from './store.js';
 export declare const inject: string[];
-/** Add room identity and navigation around the existing Harness conversation UI. */
+/** Start the native browser connection before installing its chatroom consumers. */
 export declare function apply(ctx: ClientContext): void;
 /** Let RC8's shared settings mirror use the authenticated plugin carrier in a remote browser. */
 export declare function activateRemoteSettingsMirror(settingsScope: unknown): () => void;

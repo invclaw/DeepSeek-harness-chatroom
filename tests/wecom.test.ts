@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,6 +16,21 @@ describe('official Enterprise WeChat CLI adapter', () => {
     await expect(client.invoke('meeting', [], 'list', {})).rejects.toEqual(
       expect.objectContaining<Partial<WecomCliError>>({ code: 'disabled' }),
     )
+  })
+
+  it('waits for in-flight CLI process exit when its credential owner is withdrawn', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'chatroom-wecom-stop-'))
+    const cli = join(root, 'waiting.mjs')
+    const ready = join(root, 'ready')
+    await writeFile(cli, `import { writeFileSync } from 'node:fs';\nprocess.on('SIGTERM', () => {});\nwriteFileSync(${JSON.stringify(ready)}, 'ready');\nsetInterval(() => {}, 1000);\n`)
+    const client = new WecomCliClient({ wecomEnabled: true, wecomCliPath: cli, wecomCliConfigDirectory: root, wecomCliTimeoutMs: 10_000 } as Config)
+    const running = expect(client.invoke('calendar', [], 'list', {})).rejects.toBeInstanceOf(WecomCliError)
+    try {
+      await vi.waitFor(async () => expect(await readFile(ready, 'utf8')).toBe('ready'))
+      await client.stop()
+      await running
+      await expect(client.invoke('calendar', [], 'list', {})).rejects.toThrow('已取消')
+    } finally { await client.stop(); await rm(root, { recursive: true, force: true }) }
   })
 
   it('projects meeting and document results into native room cards', () => {
@@ -97,7 +112,7 @@ describe('official Enterprise WeChat CLI adapter', () => {
     await expect(readFile(join(shared, 'credentials.enc'), 'utf8')).resolves.toBe('former shared credentials')
     await expect(manager.disconnectAuthorization('alice-id')).resolves.toMatchObject({ status: 'unauthorized', qrAvailable: false })
     await expect(readFile(join(alice, 'credentials.enc'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
-    manager.stop()
+    await manager.stop()
 
     const restarted = new WecomCliManager({
       wecomEnabled: true,
@@ -138,6 +153,6 @@ describe('official Enterprise WeChat CLI adapter', () => {
     await writeFile(join(accountDirectory('alice-id'), 'credentials.enc'), 'alice credentials')
     await expect(manager.authorizationState('alice-id')).resolves.toMatchObject({ status: 'authorized' })
     await expect(manager.authorizationState('bob-id')).resolves.toMatchObject({ status: 'pending' })
-    manager.stop()
+    await manager.stop()
   })
 })

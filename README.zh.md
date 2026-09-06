@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.4.3" src="https://img.shields.io/badge/version-1.4.3-4f6bff">
+    <img alt="版本 1.4.4" src="https://img.shields.io/badge/version-1.4.4-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | Session、Agent 预设、模型、权限、Think/工具轨迹、审批、问答、斜杠命令、停止/排队/转向和失败重试全部沿用原生实现。 | 共享群聊、在线状态、提及、回复、表情贴附、图片文件、转发、多选、分支、消息提醒、群管理和私聊。 | 本地账号、管理员统一建号、角色与停用、`dsh-auth`、企业 OIDC/SSO、认证自动跳转和网关 `forward_auth`。 |
 
-插件完全独立于 Harness 主仓库，**不修改 DeepSeek Harness**。初始化是异步的：聊天室存储、模型或 Session 失败只影响插件自身，不会阻碍 Harness Web 启动。
+插件完全独立于 Harness 主仓库，**不修改 DeepSeek Harness**。初始化是异步的；聊天室尚未就绪或启动失败时，聊天室和原生会话接口均返回 `503`，防止绕过账号权限。
 
 ## 界面预览
 
@@ -108,6 +108,7 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.4.4** — 在 Host 统一校验原生 HTTP、WebSocket 和跨会话引用权限；按模型步骤认领的结构化身份固定企微凭据与邀请权限；文件交付使用实际 Agent 文件系统；先持久保存待接纳消息，再交接原生持久队列，并在卸载时回收借用 Agent 的注册和 CLI 子进程。
 - **1.4.3** — 官方会议创建操作无法覆盖当前授权账号的组织者，因此恢复按平台账号隔离的企微扫码凭据；快速会议改由发起人本人创建并邀请当前会话的其余成员，生命周期查询继续使用创建者授权，Agent 企微操作按当前已认领发言人选取凭据；旧共享凭据只用于继续跟踪升级前创建的会议。
 - **1.4.2** — 把登录后的每个 Solo Session 持久绑定到创建账号；原生侧栏不再把未加入群聊或他人 Solo 错归到当前用户的 Solo，登录响应不再返回无权访问的默认群，账号状态切换前后都会清除无权访问的活动 Session，并在原生普通消息或斜杠命令绕过群成员和发送者身份前拒绝提交。
 - **1.4.1** — 恢复原生主群消息流的唯一操作栏：未显式分组的原生消息由宿主流统一控制可见性，空闲时保留末条操作栏，悬停较早消息时只把这一条操作栏移动到悬停目标，不再让组内每条控制栏同时出现。
@@ -146,7 +147,7 @@
 
 - Node.js 22.19 或更高版本
 - pnpm 10.33.4
-- 主要兼容目标为 DeepSeek Harness 0.1.1-rc.2；最低仍支持 0.1.0-rc.7。
+- 最低支持并验证 DeepSeek Harness 0.1.1-rc.2；持久队列和原生连接接口依赖该版本。
 - Web profile 已配置可用的默认模型
 
 ### 回归门禁
@@ -177,6 +178,8 @@ pnpm dsh --profile web
 安装时会向 Web profile 加入：
 
 ```yaml
+- id: connection
+  disabled: true
 - id: chatroom
   name: deepseek-harness-chatroom
   config:
@@ -236,6 +239,8 @@ pnpm dsh --profile web
       - 当前管理员身份的-participant-id
     maxSettingsRequestBytes: 1048576
     sseHeartbeatMs: 15000
+    nativeTrustedHosts: []
+    nativeMaxRequestBytes: 314572800
     authEnabled: true
     authCookieName: dsh_chatroom_auth
     authSessionMaxAgeSeconds: 2592000
@@ -260,6 +265,20 @@ pnpm dsh --profile web
     wecomTimeZone: Asia/Shanghai
     wecomMeetingPollIntervalMs: 30000
 ```
+
+### 账号权限与消息交接
+
+安装补丁禁用原生 `connection` 条目，由聊天室提供带账号授权的 HTTP/WebSocket 传输；浏览器仍运行固定依赖的原生连接实现。不要同时重新启用原生条目。服务端逐请求、逐事件校验群成员或 Solo 归属，过滤会话目录和引用候选，并检查原生提示、附件、导出、审批回应和跨会话引用。未知 Remote 默认拒绝；部署设置、凭据和全局插件检查目录仅管理员可操作。
+
+聊天室是共享 Harness 工作区中的协作与会话权限层。Agent 仍遵循部署的文件系统、Shell 和权限策略；需要互不信任租户的进程或文件隔离时，使用独立 Harness 实例。
+
+Agent 的企微工具和邀请操作使用当前模型步骤已认领消息的结构化发起身份。普通旁观消息不会替换执行中的身份；同一步含多个发起人时，要求个人身份的操作会拒绝，需由一位用户单独发起。邀请仍要求群主、群管理员或平台超级管理员权限。工具在调用开始时固定凭据所有者，会议后续查询沿用该所有者。
+
+Agent 文件交付通过该 Agent 的 `ctx.fs` 解析真实路径，以原生 Session 的 `cwd` 为根，执行目录包含检查、读取大小限制与取消；指向根目录外的符号链接会被拒绝。
+
+每条人类消息先写入 `chatroom` storage domain 的接纳记录。原生持久队列负责调度；接纳记录一直保留到消息被认领、写入原生 `user/message` 并完成日志刷新，防止宿主销毁 Agent 时取消队列导致丢失。恢复按消息 ID 去重，不自动执行尚未认领的消息；发送者可点击“引导”继续，也可编辑或撤回。被中断的自动回复判断恢复为普通聊天，不自动重试不确定的外部操作。完整备份需保留聊天归档、`chatroom` domain 所配置的存储后端数据和 Harness Session 数据。撤回与 AI 上下文分割线由 domain 保存，单独导出 Session 日志不能恢复这些过滤设置。
+
+卸载会撤销附加到借用 Agent 上的工具、系统提示和步骤监听，取消判断请求、关闭连接并等待 CLI 子进程退出；保留原生 Agent 的生命周期所有权。
 
 ### 企业微信授权
 
@@ -291,17 +310,17 @@ OIDC 提供方在 Harness 原生“设置 → 群聊与账号”中添加，界�
 
 校验成功返回 `204` 和服务端身份 Header，未登录返回 `401` 和独立登录页位置。认证提供方异常不会阻碍 Harness 启动：插件路由仍会立即注册，自己的存储未就绪时返回 `503`，OIDC 或 dsh-auth 登录失败只影响对应登录请求。
 
-`settingsAdminParticipantIds` 默认为空，远程浏览器因此不能读取或修改 Harness 配置。生产部署可通过逗号分隔的 `DSH_CHATROOM_SETTINGS_ADMIN_IDS` 环境变量设置白名单；当前身份的 `participantId` 可从已登录浏览器请求 `/plugins/deepseek-harness-chatroom/api/session` 的响应中读取。修改显示名称或头像不会改变该 ID；重置聊天室身份会生成新 ID，需要同步更新白名单。远程模型设置请求还必须携带有效的 HttpOnly 聊天室 Cookie 并通过同源检查。
+平台超级管理员以及 `settingsAdminParticipantIds` 中的账号可读取和修改部署配置；该列表默认为空，可通过 `DSH_CHATROOM_SETTINGS_ADMIN_IDS` 扩展。服务端使用 Cookie 解析的稳定 `participantId` 授权，修改显示名称或头像不会改变权限。模型设置请求仍需通过同源检查。
 
-`sessionId` 是升级前大厅继续使用的持久 Session。普通 Harness Session 第一次由已登录成员打开时，插件会按 Session ID 幂等建立共享群记录，不创建第二套会话；群主和管理员从群管理抽屉把启用的平台账号直接加入当前群聊。每个分支仍获得独立持久 Session。聊天室文件、成员、表情贴附、分支元数据、分支消息和分支引用保存在同一个 `chatroom` storage domain。
+`sessionId` 是升级前大厅继续使用的持久 Session。已登录账号创建的原生 Session 先记录为该账号所有；选择群聊后，第一条普通消息按 Session ID 幂等建立共享群记录，不创建第二套会话；群主和管理员从群管理抽屉把启用的平台账号直接加入当前群聊。每个分支仍获得独立持久 Session。聊天室文件、成员、表情贴附、分支元数据、分支消息和分支引用保存在同一个 `chatroom` storage domain。
 
-API 路由会立即注册，在存储和 Session 就绪前返回 `503`。初始化始终在后台运行，失败被限制在插件内部，Harness Web 仍可正常运行。
+API 路由会立即注册，在存储和 Session 就绪前返回 `503`。初始化失败时，网页静态资源仍可加载，但聊天室和原生会话操作保持关闭；修复存储或 Session 错误后重启插件。
 
 ## 浏览器身份与安全
 
 认证关闭时，旧版浏览器身份仍使用仅作用于聊天室 API 的随机 256 位 `HttpOnly`、`SameSite=Strict` Cookie；它只能标识参与者，不构成访问控制。认证启用后，前述账号 Cookie 是群聊、文件、图片、模型设置管理、通知和私聊的唯一身份依据。
 
-显示名称只是房间展示身份，不是账号认证。远程模型设置授权只比较服务端从 HttpOnly Cookie 解析出的不透明 `participantId`，不相信可修改的显示名称。配置代理沿用 Harness API Proxy 的 schema 校验、机密脱敏和 revision 冲突检查；密钥值只允许写入且不会回传，`settings.openDocument`、Session、文件系统及其他特权接口不在代理列表内。所有能进入房间的人仍能向所选 Agent preset 提交输入，并可能使用该 preset 提供的工具。面向非完全可信成员时，应使用受限 preset 和范围尽可能小的 `cwd`。
+显示名称只是房间展示身份，不是账号认证。远程模型设置授权只比较服务端从 HttpOnly Cookie 解析出的不透明 `participantId`，不相信可修改的显示名称。配置代理沿用 Harness API Proxy 的 schema 校验、机密脱敏和 revision 冲突检查；密钥值只允许写入且不会回传，Session 操作按归属或群成员授权，部署配置与文件系统管理仅管理员可操作。所有能进入房间的人仍能向所选 Agent preset 提交输入，并可能使用该 preset 提供的工具。面向非完全可信成员时，应使用受限 preset 和范围尽可能小的 `cwd`。
 
 ## 验收
 

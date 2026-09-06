@@ -41,16 +41,18 @@ export class WecomCliError extends Error {
 
 /** Lazy process adapter around the official `@wecom/cli` package. */
 export class WecomCliClient {
+  private readonly children = new Map<ChildProcess, Promise<void>>()
+  private stopped = false
   constructor(private readonly config: Config, private readonly configDirectory = config.wecomCliConfigDirectory) {}
 
   /** Query one official CLI method schema without requiring plugin restart. */
-  schema(service: WecomService, resource: readonly string[], method: string): Promise<unknown> {
-    return this.run(['schema', 'get', joinCommand(service, resource, method)])
+  schema(service: WecomService, resource: readonly string[], method: string, signal?: AbortSignal): Promise<unknown> {
+    return this.run(['schema', 'get', joinCommand(service, resource, method)], signal)
   }
 
   /** Execute one official Enterprise WeChat method with JSON parameters. */
-  invoke(service: WecomService, resource: readonly string[], method: string, parameters: unknown): Promise<unknown> {
-    return this.run([service, ...resource, method, '--json', JSON.stringify(parameters)])
+  invoke(service: WecomService, resource: readonly string[], method: string, parameters: unknown, signal?: AbortSignal): Promise<unknown> {
+    return this.run([service, ...resource, method, '--json', JSON.stringify(parameters)], signal)
   }
 
   /** Read the current Enterprise WeChat authorization state. */
@@ -58,15 +60,23 @@ export class WecomCliClient {
     return this.runText(['auth', 'show', '--status'])
   }
 
-  private run(args: readonly string[]): Promise<unknown> {
-    return this.runOutput(args, output => output === '' ? {} : parseJson(output))
+  private run(args: readonly string[], signal?: AbortSignal): Promise<unknown> {
+    return this.runOutput(args, output => output === '' ? {} : parseJson(output), signal)
   }
 
   private runText(args: readonly string[]): Promise<string> {
     return this.runOutput(args, output => output)
   }
 
-  private runOutput<T>(args: readonly string[], parse: (output: string) => T): Promise<T> {
+  /** Cancel external operations and await process exit before discarding this credential owner. */
+  async stop(): Promise<void> {
+    this.stopped = true
+    for (const child of this.children.keys()) child.kill('SIGKILL')
+    await Promise.allSettled(this.children.values())
+  }
+
+  private runOutput<T>(args: readonly string[], parse: (output: string) => T, signal?: AbortSignal): Promise<T> {
+    if (this.stopped || signal?.aborted) return Promise.reject(new WecomCliError('企业微信操作已取消。', 'failed'))
     if (!this.config.wecomEnabled) {
       return Promise.reject(new WecomCliError('企业微信能力已在插件配置中关闭。', 'disabled'))
     }
@@ -81,6 +91,15 @@ export class WecomCliClient {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       })
+      const exited = new Promise<void>(resolve => child.once('close', () => {
+        this.children.delete(child)
+        resolve()
+      }))
+      this.children.set(child, exited)
+      const cancel = (): void => { child.kill('SIGKILL') }
+      signal?.addEventListener('abort', cancel, { once: true })
+      child.once('close', () => signal?.removeEventListener('abort', cancel))
+      if (signal?.aborted) cancel()
       let stdout = ''
       let stderr = ''
       let outputBytes = 0
@@ -136,6 +155,7 @@ export class WecomCliClient {
 /** Account-scoped Enterprise WeChat CLI clients and QR authorization processes. */
 export class WecomCliManager {
   private readonly clients = new Map<string, WecomCliClient>()
+  private legacy: WecomCliClient | undefined
   private readonly authorizations = new Map<string, ChildProcess>()
   private readonly authorizationErrors = new Map<string, string>()
 
@@ -152,7 +172,7 @@ export class WecomCliManager {
 
   /** Return the former deployment account only for lifecycle records created before account isolation. */
   legacyClient(): WecomCliClient {
-    return new WecomCliClient(this.config, this.legacySharedDirectory())
+    return this.legacy ??= new WecomCliClient(this.config, this.legacySharedDirectory())
   }
 
   /** Read one account's authorization state without exposing credentials. */
@@ -192,7 +212,7 @@ export class WecomCliManager {
     if (!this.config.wecomEnabled) throw new WecomCliError('企业微信能力已关闭。', 'disabled')
     const current = await this.authorizationState(participantId)
     if (current.status === 'authorized') return current
-    if (restart) this.stopAuthorization(participantId)
+    if (restart) await this.stopAuthorization(participantId)
     if (!this.authorizations.has(participantId)) await this.spawnAuthorization(participantId)
     const deadline = Date.now() + 15_000
     while (Date.now() < deadline) {
@@ -217,12 +237,13 @@ export class WecomCliManager {
   /** Remove one account's authorization and stop its unfinished QR login. */
   async disconnectAuthorization(participantId: string): Promise<WecomAuthorizationState> {
     if (!this.config.wecomEnabled) throw new WecomCliError('企业微信能力已关闭。', 'disabled')
-    this.stopAuthorization(participantId)
+    await this.stopAuthorization(participantId)
     const directory = this.accountDirectory(participantId)
     const resolved = resolve(directory)
     if (resolved === parse(resolved).root || resolved === resolve(homedir())) {
       throw new WecomCliError('企业微信授权目录配置过于宽泛，拒绝清除凭据。', 'failed')
     }
+    await this.clients.get(participantId)?.stop()
     await rm(directory, { recursive: true, force: true })
     await mkdir(directory, { recursive: true, mode: 0o700 })
     this.clients.delete(participantId)
@@ -231,14 +252,23 @@ export class WecomCliManager {
   }
 
   /** Stop outstanding authorization processes during plugin teardown. */
-  stop(): void {
-    for (const child of this.authorizations.values()) child.kill('SIGTERM')
+  async stop(): Promise<void> {
+    const exits = [...this.authorizations.values()].map(child => new Promise<void>(resolve => {
+      child.once('close', resolve)
+      child.kill('SIGKILL')
+    }))
+    await Promise.allSettled([...exits, ...[...this.clients.values(), ...(this.legacy === undefined ? [] : [this.legacy])].map(client => client.stop())])
     this.authorizations.clear()
   }
 
-  private stopAuthorization(participantId: string): void {
-    this.authorizations.get(participantId)?.kill('SIGTERM')
-    this.authorizations.delete(participantId)
+  private async stopAuthorization(participantId: string): Promise<void> {
+    const child = this.authorizations.get(participantId)
+    if (child === undefined) return
+    await new Promise<void>(resolve => {
+      child.once('close', resolve)
+      child.kill('SIGKILL')
+    })
+    if (this.authorizations.get(participantId) === child) this.authorizations.delete(participantId)
   }
 
   private async spawnAuthorization(participantId: string): Promise<void> {

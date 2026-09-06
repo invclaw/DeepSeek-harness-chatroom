@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.4.3" src="https://img.shields.io/badge/version-1.4.3-4f6bff">
+    <img alt="Version 1.4.4" src="https://img.shields.io/badge/version-1.4.4-4f6bff">
     <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -23,7 +23,7 @@ Add Group, Solo, and direct-message modes to the native [DeepSeek Harness](https
 | --- | --- | --- |
 | Sessions, Agent presets, models, permissions, Think/tool trajectory, approvals, questions, slash commands, stop/queue/steer, and retries stay native. | Shared rooms, presence, mentions, replies, reactions, rich media, forwarding, multi-select, branches, notifications, group management, and private chat. | Local accounts, administrator provisioning, roles, account revocation, `dsh-auth`, enterprise OIDC/SSO, automatic provider redirect, and an edge `forward_auth` contract. |
 
-The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initialization is asynchronous: chatroom storage, model, or Session failures remain isolated and never prevent Harness Web from starting.
+The plugin is out-of-tree and does **not** modify DeepSeek Harness. Initialization is asynchronous; until storage and Sessions are ready, or if startup fails, both chatroom and native Session APIs return `503` to prevent bypassing account authorization.
 
 ## Product tour
 
@@ -108,6 +108,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.4.4** — authorize native HTTP, WebSocket, and cross-session references on the Host; bind Enterprise WeChat credentials and invitations to structured step admission; deliver files through the actual Agent filesystem; persist input before handing it to the native durable inbox; and dispose borrowed-Agent registrations and CLI children on unload.
 - **1.4.3** — isolate Enterprise WeChat QR credentials per platform account because the official meeting-create operation cannot override its authenticated organizer; create Quick meetings as the initiating user, invite every other conversation participant, keep lifecycle polling on the creating credential, and route Agent operations through the claimed turn speaker while retaining the former shared credential only for pre-upgrade meeting lifecycle records.
 - **1.4.2** — bind every authenticated Solo Session to its creating account, hide unjoined Groups and foreign Solo Sessions from the native sidebar, omit inaccessible default-room state, clear the previously selected transcript before and after account changes, and reject native prompt or slash-command submission before it can bypass room membership or sender identity.
 - **1.4.1** — restore the native Group transcript's single action rail: the host flow owns visibility for ungrouped native rows, the final message keeps the idle rail, and hovering an earlier grouped message moves that rail without exposing every row at once.
@@ -146,7 +147,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Its initiali
 
 - Node.js 22.19 or later
 - pnpm 10.33.4
-- DeepSeek Harness 0.1.1-rc.2 is the primary compatibility target; 0.1.0-rc.7 remains the minimum supported release.
+- DeepSeek Harness 0.1.1-rc.2 is the tested minimum; the durable inbox and native connection APIs require this version.
 - A working default model selection in the Harness Web profile
 
 ### Regression gates
@@ -177,6 +178,8 @@ The browser bundle is discovered through the plugin's `dsh.client` manifest. New
 Installation adds this row to the Web profile:
 
 ```yaml
+- id: connection
+  disabled: true
 - id: chatroom
   name: deepseek-harness-chatroom
   config:
@@ -236,6 +239,8 @@ Override it in the Web profile's `cordis.patch.yml` when needed:
       - participant-id-of-an-administrator
     maxSettingsRequestBytes: 1048576
     sseHeartbeatMs: 15000
+    nativeTrustedHosts: []
+    nativeMaxRequestBytes: 314572800
     authEnabled: true
     authCookieName: dsh_chatroom_auth
     authSessionMaxAgeSeconds: 2592000
@@ -260,6 +265,20 @@ Override it in the Web profile's `cordis.patch.yml` when needed:
     wecomTimeZone: Asia/Shanghai
     wecomMeetingPollIntervalMs: 30000
 ```
+
+### Account authorization and input persistence
+
+The bundle disables the native `connection` entry and supplies account-authorized HTTP/WebSocket routes while running the pinned native browser connection implementation. Do not re-enable the original entry alongside it. The Host checks room membership or Solo ownership per request and outgoing event, filters session directories and reference candidates, and guards prompts, attachments, exports, approval responses, and cross-session references. Unknown Remotes are denied; deployment settings, credentials, and the global plugin inspect directory require an administrator.
+
+Chatroom supplies collaboration and Session authorization within a shared Harness workspace. Agents still follow the deployment's filesystem, Shell, and permission policies; mutually untrusted tenants requiring process or file isolation need separate Harness instances.
+
+Agent Enterprise WeChat and invitation actions use the structured initiating identity from messages admitted to the current model step. Passive chat does not replace an executing identity. If a step admits multiple participants, operations requiring one personal identity fail and require a separate request from one user. Invitations still require an owner, room administrator, or platform super administrator. Each tool invocation captures its credential owner before execution, and meeting polling retains that owner.
+
+Agent file delivery resolves paths through that Agent's `ctx.fs`, uses the native Session `cwd` as its root, and enforces canonical containment, bounded reads, and cancellation. Symlinks outside that root are rejected.
+
+Human input first reaches an acceptance record in the `chatroom` storage domain. The native durable inbox schedules execution; the acceptance record remains until the claimed `user/message` is flushed to the Session log, protecting unclaimed work from inbox cancellation during native Agent disposal. Recovery deduplicates by message ID and leaves unclaimed work paused; the sender can Guide, edit, or withdraw it. Interrupted auto-reply decisions recover as ordinary history without retrying uncertain external operations. Complete backups retain the chat archive, the configured `chatroom` domain backend, and Harness Sessions. Recall and AI-context reset filters live in the domain; a Session-only export cannot restore them.
+
+Unloading unregisters tools, system-prompt sections, and step listeners from borrowed Agents, cancels decision requests, closes connections, and awaits CLI child exit while retaining the native Agent's lifecycle owner.
 
 ### Enterprise WeChat authorization
 
@@ -291,17 +310,17 @@ Enabling the plugin's account APIs does not by itself make a publicly reachable 
 
 The verifier returns `204` with verified identity headers, or `401` with the standalone login location. This arrangement keeps the authentication edge independent from Harness startup: the plugin registers immediately, reports `503` until its own storage is ready, and a provider discovery/login failure does not prevent Harness from starting.
 
-`settingsAdminParticipantIds` defaults to an empty list, so remote browsers cannot read or modify Harness configuration. Production deployments may supply the allowlist through the comma-separated `DSH_CHATROOM_SETTINGS_ADMIN_IDS` environment variable. The current identity's `participantId` is available in the authenticated `/plugins/deepseek-harness-chatroom/api/session` response. Changing a display name or avatar preserves that ID; resetting the chatroom identity creates a new ID and requires an allowlist update. A remote Models request must also carry the valid HttpOnly chatroom cookie and pass the same-origin check.
+Platform super administrators and accounts listed in `settingsAdminParticipantIds` can read and modify deployment configuration. The list defaults to empty and can be extended through `DSH_CHATROOM_SETTINGS_ADMIN_IDS`. Authorization uses the stable `participantId` resolved from the cookie; changing a display name or avatar does not change access. Model configuration requests must also pass the same-origin check.
 
-`sessionId` remains the persistent Session for the pre-upgrade lobby. When an authenticated member first opens an ordinary Harness Session, the plugin idempotently creates only the shared-room record for that exact Session ID. Room managers add active platform accounts from the Group management drawer. Every branch still receives an independent persistent Session.
+`sessionId` remains the persistent Session for the pre-upgrade lobby. A newly created native Session first belongs to its creating account; selecting Group creates the room record on the first regular message, using that exact Session ID. Room managers add active platform accounts from the Group management drawer. Every branch still receives an independent persistent Session.
 
-The API route is registered immediately and reports `503` until identity storage and the Session are ready. Initialization runs in the background, and failures remain isolated from Harness Web startup.
+API routes register immediately and return `503` until identity storage and Sessions are ready. Startup failure leaves static pages available while chatroom and native Session operations stay closed. Correct the storage or Session error and restart the plugin.
 
 ## Browser identity and security
 
 When authentication is disabled, the legacy browser identity still receives a random 256-bit token in an API-scoped `HttpOnly`, `SameSite=Strict` cookie. This mode identifies participants but is not an access-control mechanism. When authentication is enabled, the account cookie described above is authoritative for rooms, files, images, settings administration, notifications, and private conversations.
 
-A display name is presentation, not authentication. Remote Models authorization compares the opaque `participantId` resolved by the server from the HttpOnly cookie and never trusts the editable display name. The configuration carrier retains API Proxy schema validation, secret redaction, and revision-conflict checks; credentials are write-only and never returned, while `settings.openDocument`, Sessions, filesystem methods, and every other privileged API are absent from the allowlist. Every participant who can reach the room can still submit input to the configured Agent preset and may use its tools. Use a restricted preset and narrow `cwd` for rooms exposed beyond a trusted team.
+A display name is presentation, not authentication. Remote Models authorization compares the opaque `participantId` resolved by the server from the HttpOnly cookie and never trusts the editable display name. The configuration carrier retains API Proxy schema validation, secret redaction, and revision-conflict checks; credentials are write-only and never returned, while Session operations require ownership or membership and deployment configuration and filesystem management require an administrator. Every participant who can reach the room can still submit input to the configured Agent preset and may use its tools. Use a restricted preset and narrow `cwd` for rooms exposed beyond a trusted team.
 
 ## Verify
 

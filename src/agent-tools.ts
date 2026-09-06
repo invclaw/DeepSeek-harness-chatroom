@@ -43,7 +43,7 @@ export interface ChatroomAgentToolsHost {
     }>
     readonly actions: ChatroomAgentAction[]
   }>
-  agentAction(sessionId: string, input: ChatroomAgentActionInput): Promise<{
+  agentAction(sessionId: string, input: ChatroomAgentActionInput, signal?: AbortSignal): Promise<{
     readonly action: ChatroomAgentAction
     readonly summary: string
     readonly followupText?: string
@@ -55,90 +55,97 @@ export function registerChatroomAgentTools(
   ctx: Context,
   host: ChatroomAgentToolsHost,
   sessionId: string,
-): void {
-  ctx.tools.register(defineTool({
-    name: 'chatroom_capabilities',
-    description: 'List the current chatroom or branch scope, members, invite candidates, and the collaboration actions you can perform.',
-    parameters: {},
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          room: { type: 'string', required: true },
-          scope: { type: 'string', required: true, enum: ['room', 'branch'] },
-          members: { type: 'array', required: true, items: { type: 'string' } },
-          inviteCandidates: { type: 'array', required: true, items: { type: 'string' } },
-          recentMessages: {
-            type: 'array',
-            required: true,
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                messageId: { type: 'string', required: true },
-                role: { type: 'string', required: true, enum: ['human', 'ai'] },
-                displayName: { type: 'string', required: true },
-                text: { type: 'string', required: true },
-                sourceSessionId: { type: 'string' },
-                sourceSeq: { type: 'integer' },
+): () => void {
+  const disposers: Array<() => void> = []
+  try {
+    disposers.push(ctx.tools.register(defineTool({
+      name: 'chatroom_capabilities',
+      description: 'List the current chatroom or branch scope, members, invite candidates, and the collaboration actions you can perform.',
+      parameters: {},
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            room: { type: 'string', required: true },
+            scope: { type: 'string', required: true, enum: ['room', 'branch'] },
+            members: { type: 'array', required: true, items: { type: 'string' } },
+            inviteCandidates: { type: 'array', required: true, items: { type: 'string' } },
+            recentMessages: {
+              type: 'array',
+              required: true,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  messageId: { type: 'string', required: true },
+                  role: { type: 'string', required: true, enum: ['human', 'ai'] },
+                  displayName: { type: 'string', required: true },
+                  text: { type: 'string', required: true },
+                  sourceSessionId: { type: 'string' },
+                  sourceSeq: { type: 'integer' },
+                },
               },
             },
+            actions: { type: 'array', required: true, items: { type: 'string', enum: [...CHATROOM_AGENT_ACTIONS] } },
           },
-          actions: { type: 'array', required: true, items: { type: 'string', enum: [...CHATROOM_AGENT_ACTIONS] } },
         },
+        render: (_args, value) => [{ type: 'text', text: `Chatroom ${value.room}: ${value.actions.join(', ')}` }],
       },
-      render: (_args, value) => [{ type: 'text', text: `Chatroom ${value.room}: ${value.actions.join(', ')}` }],
-    },
-    execute: () => host.agentCapabilities(sessionId),
-    presentCall: () => ({ card: 'generic', title: 'Inspect chatroom capabilities', kind: 'read' }),
-  }))
+      execute: () => host.agentCapabilities(sessionId),
+      presentCall: () => ({ card: 'generic', title: 'Inspect chatroom capabilities', kind: 'read' }),
+    })))
 
-  ctx.tools.register(defineTool({
-    name: 'chatroom_action',
-    description: 'Perform a collaboration action in the current chatroom. Use send_message for a proactive room message; reply quotes a message; send_file uploads a workspace file; react adds an emoji; start_branch opens a branch from a room message; invite_members adds accounts to the group; recall_message recalls one of your own room messages.',
-    parameters: {
-      action: { type: 'string', required: true, enum: [...CHATROOM_AGENT_ACTIONS] },
-      text: { type: 'string', description: 'Message text for send_message or reply.' },
-      messageId: { type: 'string', description: 'Target message id from chatroom_capabilities for react, reply, start_branch, or recall_message.' },
-      emoji: { type: 'string', enum: [...CHATROOM_REACTION_EMOJIS], description: 'Reaction emoji for react.' },
-      participantIds: { type: 'array', items: { type: 'string' }, description: 'Account ids, usernames, or display names for invite_members.' },
-      path: { type: 'string', description: 'Workspace-relative file path for send_file.' },
-      caption: { type: 'string', description: 'Optional text shown with a sent file.' },
-    },
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          action: { type: 'string', required: true, enum: [...CHATROOM_AGENT_ACTIONS] },
-          summary: { type: 'string', required: true },
-        },
+    disposers.push(ctx.tools.register(defineTool({
+      name: 'chatroom_action',
+      description: 'Perform a collaboration action in the current chatroom. Use send_message for a proactive room message; reply quotes a message; send_file uploads a workspace file; react adds an emoji; start_branch opens a branch from a room message; invite_members adds accounts to the group; recall_message recalls one of your own room messages.',
+      parameters: {
+        action: { type: 'string', required: true, enum: [...CHATROOM_AGENT_ACTIONS] },
+        text: { type: 'string', description: 'Message text for send_message or reply.' },
+        messageId: { type: 'string', description: 'Target message id from chatroom_capabilities for react, reply, start_branch, or recall_message.' },
+        emoji: { type: 'string', enum: [...CHATROOM_REACTION_EMOJIS], description: 'Reaction emoji for react.' },
+        participantIds: { type: 'array', items: { type: 'string' }, description: 'Account ids, usernames, or display names for invite_members.' },
+        path: { type: 'string', description: 'Workspace-relative file path for send_file.' },
+        caption: { type: 'string', description: 'Optional text shown with a sent file.' },
       },
-      render: (_args, value) => [{ type: 'text', text: value.summary }],
-    },
-    async execute(args, exec) {
-      const result = await host.agentAction(sessionId, args)
-      if (result.followupText !== undefined) {
-        exec.deferContext(createUserMessage({
-          content: [
-            {
-              type: 'text',
-              text: 'The chatroom action succeeded. Send the next content block as your entire next assistant response. Preserve it exactly, including invisible metadata. Do not explain the action and do not call another tool.',
-            },
-            { type: 'text', text: result.followupText },
-          ],
-          source: {
-            kind: 'plugin',
-            plugin: 'deepseek-harness-chatroom',
-            form: 'notice',
-            summary: `Deliver ${result.action} output to the chatroom`,
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            action: { type: 'string', required: true, enum: [...CHATROOM_AGENT_ACTIONS] },
+            summary: { type: 'string', required: true },
           },
-        }))
-      }
-      const { followupText: _followupText, ...output } = result
-      return output
-    },
-    presentCall: args => ({ card: 'generic', title: `Chatroom: ${args.action}`, kind: 'other', rawInput: args }),
-  }))
+        },
+        render: (_args, value) => [{ type: 'text', text: value.summary }],
+      },
+      async execute(args, exec) {
+        const result = await host.agentAction(sessionId, args, exec.signal)
+        if (result.followupText !== undefined) {
+          exec.deferContext(createUserMessage({
+            content: [
+              {
+                type: 'text',
+                text: 'The chatroom action succeeded. Send the next content block as your entire next assistant response. Preserve it exactly, including invisible metadata. Do not explain the action and do not call another tool.',
+              },
+              { type: 'text', text: result.followupText },
+            ],
+            source: {
+              kind: 'plugin',
+              plugin: 'deepseek-harness-chatroom',
+              form: 'notice',
+              summary: `Deliver ${result.action} output to the chatroom`,
+            },
+          }))
+        }
+        const { followupText: _followupText, ...output } = result
+        return output
+      },
+      presentCall: args => ({ card: 'generic', title: `Chatroom: ${args.action}`, kind: 'other', rawInput: args }),
+    })))
+  } catch (error) {
+    for (const dispose of disposers.splice(0).reverse()) dispose()
+    throw error
+  }
+  return () => { for (const dispose of disposers.splice(0).reverse()) dispose() }
 }

@@ -17,6 +17,7 @@ import { Config, type Config as ChatroomConfig, validateConfig } from './config.
 import { ChatroomHttpController } from './http.js'
 import { textCompatibleStream } from './model-history.js'
 import { CHATROOM_API_PREFIXES } from './routes.js'
+import { registerNativeGateway } from './native-gateway.js'
 import { ChatroomRuntime } from './room.js'
 
 export const name = 'deepseek-harness-chatroom'
@@ -47,6 +48,7 @@ export function apply(ctx: Context, config: ChatroomConfig): void {
   const http = new ChatroomHttpController(ctx, runtime, config)
   const log = ctx.logger('deepseek-harness-chatroom')
   ctx.effect(() => {
+    const closeGateway = registerNativeGateway(ctx, runtime, config)
     const unregister = CHATROOM_API_PREFIXES.map(path => ctx.webServer.register({
       kind: 'prefix' as const,
       path,
@@ -60,6 +62,7 @@ export function apply(ctx: Context, config: ChatroomConfig): void {
     })
     return async () => {
       for (const dispose of unregister) dispose()
+      await closeGateway()
       await startup
       await runtime.stop()
     }

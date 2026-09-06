@@ -108,6 +108,7 @@ export interface ChatroomView {
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
 export declare class ChatroomClientStore implements HostObservable<ChatroomView> {
     private readonly openSession;
+    private readonly nativeOwnershipLookups;
     private snapshot;
     private readonly listeners;
     private eventSource;
@@ -138,6 +139,8 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     releaseSoloSession: (sessionId: string) => Promise<void>;
     /** Check whether the current identity may use a native Session as Solo. */
     canPromptNativeSession(sessionId: string): boolean;
+    /** Refresh ownership for a Session created by native startup or native fork controls. */
+    resolveNativeOwnership(sessionId: string): Promise<boolean>;
     /** Read the explicit creation mode for one newly created native Session. */
     newSessionMode: (sessionId: string) => ChatroomNewSessionMode | undefined;
     /** Choose whether a new Session becomes a shared room on first prompt or stays Solo. */

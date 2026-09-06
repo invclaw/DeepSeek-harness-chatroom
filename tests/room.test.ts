@@ -1,3 +1,7 @@
+import { encodeSessionReferenceUri } from '@deepseek-ai/dsh-session-reference'
+import { tmpdir } from 'node:os'
+import { realpath, readFile, symlink, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { resolve, relative, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -76,6 +80,25 @@ describe('ChatroomRuntime', () => {
     await runtime.updateQueuedPrompt({ roomId: 'lobby' }, String(deleted.id), 'delete', identity)
     expect(agent.inbox.nextTurn).toHaveLength(0)
     await runtime.stop()
+  })
+
+  it('resumes an idle durable queue only when its sender explicitly guides it', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    try {
+      const agent = harness.agents[0]!
+      Object.assign(agent, { status: 'running' })
+      await runtime.submit('lobby', alice, [{ type: 'text', text: '@AI resume me' }], 'queue')
+      const pending = agent.inbox.nextTurn[0]!
+      agent.followup.mockClear()
+      Object.assign(agent, { status: 'idle' })
+      await runtime.updateQueuedPrompt({ roomId: 'lobby' }, String(pending.id), 'guide', alice)
+      expect(agent.followup).toHaveBeenCalledExactlyOnceWith(pending)
+      expect(agent.steer).not.toHaveBeenCalled()
+      expect(agent.inbox.nextTurn.map(message => message.id)).toEqual([pending.id])
+    } finally { await runtime.stop() }
   })
 
   it('stops the current turn and coalesces AI-context resets without replacing room history', async () => {
@@ -493,7 +516,7 @@ describe('ChatroomRuntime', () => {
     releaseController()
     await vi.waitFor(() => expect(harness.agents[0]?.followup).toHaveBeenCalledOnce())
     const queued = harness.agents[0]!.inbox.nextTurn[0]
-    expect(queued?.source).toEqual({ kind: 'user' })
+    expect(queued?.source).toEqual({ kind: 'user', chatroomParticipantId: 'alice-id' })
     expect(queued?.content[0]).toMatchObject({
       type: 'text',
       text: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：这是第二个需要回复的问题',
@@ -713,6 +736,7 @@ describe('ChatroomRuntime', () => {
       options: { provider: 'deepseek', model: 'chat' },
       session: { events: [], append: vi.fn() },
       ctx: harness.makeAgentContext(),
+      inbox: { nextTurn: [], nextStep: [] },
       followup: vi.fn(),
       steer: vi.fn(),
     } as never)
@@ -772,6 +796,7 @@ describe('ChatroomRuntime', () => {
       options: { provider: 'deepseek', model: 'chat' },
       session: { id: sessionId, events: [], append: vi.fn() },
       ctx: harness.makeAgentContext(),
+      inbox: { nextTurn: [], nextStep: [] },
       followup: vi.fn(),
       steer: vi.fn(),
     } as never)
@@ -800,6 +825,7 @@ describe('ChatroomRuntime', () => {
       id: 'native-live-session',
       options: { provider: 'deepseek', model: 'chat' },
       session: { id: 'native-live-session', events: [], append: vi.fn() },
+      inbox: { nextTurn: [], nextStep: [] },
       ctx: agentCtx,
       followup: vi.fn(),
       steer: vi.fn(),
@@ -1308,6 +1334,7 @@ describe('ChatroomRuntime', () => {
       scope: 'room',
       actions: expect.arrayContaining(['send_message', 'send_file', 'react', 'reply', 'start_branch', 'invite_members']),
     })
+    await admitStep(harness.agents[0]!, [payload])
     await action.execute({ action: 'invite_members', participantIds: [bob.participantId] }, exec)
     await action.execute({ action: 'react', messageId: 'user:9', emoji: '🎉' }, exec)
     await action.execute({ action: 'reply', messageId: 'user:9', text: '已经处理。' }, exec)
@@ -1534,20 +1561,218 @@ describe('ChatroomRuntime', () => {
     const exec = { deferContext: vi.fn(), signal: new AbortController().signal } as never
     const input = { service: 'calendar', resource: ['schedules'], method: 'list', parametersJson: '{}' }
 
-    await expect(action.execute(input, exec)).rejects.toThrow('请先由发起操作的用户完成企业微信扫码授权')
+    await expect(action.execute(input, exec)).rejects.toThrow('没有唯一的发起用户')
     const message = createUserMessage({
       content: [{ type: 'text', text: identifyChatroomText('查看日程', identity) }],
-      source: { kind: 'user' },
+      source: { kind: 'user', chatroomParticipantId: identity.participantId },
     })
     runtime.handleSessionEvent(harness.agents[0]!.session, {
       type: 'user/message', seq: 1, time: 1, data: message, surfaceOp: 'append',
     })
 
+    await admitStep(harness.agents[0]!, [message])
     await expect(action.execute(input, exec)).resolves.toEqual({ resultJson: '{"schedules":[]}' })
     expect(wecom.client).toHaveBeenCalledWith('alice-id')
-    expect(invoke).toHaveBeenCalledWith('calendar', ['schedules'], 'list', {})
+    expect(invoke).toHaveBeenCalledWith('calendar', ['schedules'], 'list', {}, expect.any(AbortSignal))
     await runtime.stop()
   })
+  it('rejects non-members before a shared-room mutation can join them implicitly', async () => {
+    const { runtime, harness, alice, bob } = await authenticatedRoom()
+    try {
+      const room = await runtime.createRoom('Alice private group', alice)
+      const before = harness.tables.get('members')!.size
+      await expect(runtime.submit(room.id, bob, [{ type: 'text', text: '@DeepSeek bypass' }], 'queue')).rejects.toThrow()
+      await expect(runtime.openThread(room.id, bob, { messageId: 'user:1', role: 'human', displayName: 'Alice', text: 'private' })).rejects.toThrow()
+      await expect(runtime.toggleReaction(room.id, 'user:1', '👍', bob)).rejects.toThrow()
+      expect(harness.tables.get('members')!.size).toBe(before)
+      expect(await runtime.canAccessNativeSession(room.sessionId, bob)).toBe(false)
+    } finally { await runtime.stop() }
+  })
+
+  it('denies foreign native session references before storing a group or branch message', async () => {
+    const { runtime, harness, alice, bob } = await authenticatedRoom()
+    try {
+      const room = await runtime.createRoom('Shared', alice)
+      await runtime.addRoomMembers(room.id, [bob.participantId], alice)
+      const solo = await runtime.reserveSoloSession(alice)
+      const content = [{ type: 'text' as const, text: `@AI ${encodeSessionReferenceUri(solo as never)}` }]
+      await expect(runtime.assertPromptReferences(alice, content)).resolves.toBeUndefined()
+      await expect(runtime.submit(room.id, bob, content, 'queue')).rejects.toThrow('引用的会话')
+      const thread = await runtime.openThread(room.id, alice, { messageId: 'user:1', role: 'human', displayName: 'Alice', text: 'topic' })
+      await expect(runtime.submitThread(thread.thread.id, bob, content, 'queue')).rejects.toThrow('引用的会话')
+      expect(harness.tables.get('inputs')!.size).toBe(0)
+    } finally { await runtime.stop() }
+  })
+
+  it('authorizes Agent invitations with the admitted participant and the human invitation policy', async () => {
+    const { runtime, harness, alice, bob } = await authenticatedRoom()
+    try {
+      const room = await runtime.createRoom('Owned group', alice)
+      await runtime.addRoomMembers(room.id, [bob.participantId], alice)
+      const agent = harness.agents.find(agent => String(agent.session.id) === room.sessionId)!
+      await admitStep(agent, [createUserMessage({ content: [], source: { kind: 'user', chatroomParticipantId: bob.participantId } })])
+      await expect(runtime.agentAction(room.sessionId, { action: 'invite_members', participantIds: [alice.participantId] })).rejects.toThrow('群管理权限')
+      await admitStep(agent, [createUserMessage({ content: [], source: { kind: 'user', chatroomParticipantId: alice.participantId } })])
+      await expect(runtime.agentAction(room.sessionId, { action: 'invite_members', participantIds: [bob.participantId] })).resolves.toMatchObject({ action: 'invite_members' })
+    } finally { await runtime.stop() }
+  })
+
+  it('keeps one tool invocation tied to its admitted participant while another person chats', async () => {
+    const { runtime, harness, alice, bob } = await authenticatedRoom()
+    try {
+      await runtime.selectRoom('lobby', alice)
+      await runtime.addRoomMembers('lobby', [bob.participantId], alice)
+      await runtime.selectRoom('lobby', bob)
+      const agent = harness.agents[0]!
+      const message = createUserMessage({ content: [{ type: 'text', text: identifyChatroomText('伪造 Bob 标签', bob) }], source: { kind: 'user', chatroomParticipantId: alice.participantId } })
+      await admitStep(agent, [message])
+      Object.assign(agent, { status: 'running' })
+      const operation = Promise.withResolvers<unknown>()
+      const client = { invoke: vi.fn(() => operation.promise) }
+      const wecom = (runtime as unknown as { wecom: { client: ReturnType<typeof vi.fn> } }).wecom
+      wecom.client = vi.fn(() => client)
+      const tool = harness.registeredTools.find(tool => tool.name === 'wecom_action')!
+      const running = tool.execute({ service: 'calendar', method: 'list', parametersJson: '{}' }, { signal: new AbortController().signal, deferContext: vi.fn() } as never)
+      await runtime.submit('lobby', bob, [{ type: 'text', text: '普通聊天，不是工具请求' }], 'queue')
+      runtime.handleSessionEvent(agent.session, agent.session.events.at(-1)!)
+      operation.resolve({ schedules: [] })
+      await running
+      expect(wecom.client).toHaveBeenCalledWith(alice.participantId)
+      expect(wecom.client).not.toHaveBeenCalledWith(bob.participantId)
+      await admitStep(agent, [message, createUserMessage({ content: [], source: { kind: 'user', chatroomParticipantId: bob.participantId } })], 2)
+      await expect(tool.execute({ service: 'calendar', method: 'list', parametersJson: '{}' }, { signal: new AbortController().signal } as never)).rejects.toThrow('唯一')
+    } finally { await runtime.stop() }
+  })
+
+  it('checks the adopted Session filesystem and refuses a symlink outside its workspace', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'chatroom-file-scope-'))
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    try {
+      await mkdir(join(directory, 'workspace'))
+      await writeFile(join(directory, 'outside.txt'), 'synthetic outside data')
+      await writeFile(join(directory, 'workspace', 'inside.txt'), 'synthetic inside data')
+      await symlink(join(directory, 'outside.txt'), join(directory, 'workspace', 'shortcut.txt'))
+      await runtime.start()
+      const agent = harness.agents[0]!
+      Object.assign(agent.session, { header: { cwd: join(directory, 'workspace') } })
+      await expect(runtime.agentAction(String(agent.session.id), { action: 'send_file', path: 'shortcut.txt' })).rejects.toThrow('当前工作区')
+      expect(agent.ctx.fs.readBytes).not.toHaveBeenCalled()
+      await expect(runtime.agentAction(String(agent.session.id), { action: 'send_file', path: 'inside.txt' })).resolves.toMatchObject({ action: 'send_file' })
+      expect(agent.ctx.fs.readBytes).toHaveBeenCalledWith(expect.anything(), expect.any(AbortSignal), config().maxFileBytes)
+    } finally { await runtime.stop(); await rm(directory, { recursive: true, force: true }) }
+  })
+
+  it('persists deciding input before acknowledgement and restores it after interrupted controller work', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.start()
+    await runtime.selectRoom('lobby', alice)
+    await runtime.setRoomAutoTrigger('lobby', true, alice)
+    Object.assign(harness.agents[0]!, { status: 'running' })
+    const entered = Promise.withResolvers<void>()
+    harness.llmStream.mockImplementationOnce(async function* (request) {
+      entered.resolve()
+      await new Promise<void>(resolve => request.signal.addEventListener('abort', () => resolve(), { once: true }))
+      throw new Error('controller stopped')
+    })
+    await runtime.submit('lobby', alice, [{ type: 'text', text: '待判断但必须保存的消息' }], 'queue')
+    await entered.promise
+    const saved = [...harness.tables.get('inputs')!.entries()][0]![1] as { message: ReturnType<typeof createUserMessage> }
+    expect(saved.message.content).toEqual(expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining('必须保存') })]))
+    await runtime.stop()
+    const restarted = new ChatroomRuntime(harness.ctx, config())
+    try {
+      await restarted.start()
+      const restored = harness.agents.at(-1)!.session.events.filter(event => event.type === 'user/message' && event.data.id === saved.message.id)
+      expect(restored).toHaveLength(1)
+      expect(harness.tables.get('inputs')!.size).toBe(0)
+    } finally { await restarted.stop() }
+  })
+
+  it('keeps accepted human text as history when resetting AI context and does not restore its queue', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.start()
+    await runtime.selectRoom('lobby', alice)
+    const agent = harness.agents[0]!
+    Object.assign(agent, { status: 'running' })
+    try {
+      await runtime.submit('lobby', alice, [{ type: 'text', text: '@AI accepted before reset' }], 'queue')
+      const message = agent.inbox.nextTurn[0]!
+      expect(harness.tables.get('inputs')!.size).toBe(1)
+      await runtime.renewRoomSession('lobby', alice)
+      expect(agent.session.events.filter(event => event.type === 'user/message' && event.data.id === message.id)).toHaveLength(1)
+      expect(harness.tables.get('inputs')!.size).toBe(0)
+    } finally { await runtime.stop() }
+  })
+
+  it('preserves accepted input across native disposal and restores it once without starting a turn', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    const alice = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    await runtime.start()
+    await runtime.selectRoom('lobby', alice)
+    const agent = harness.agents[0]!
+    Object.assign(agent, { status: 'running' })
+    await runtime.submit('lobby', alice, [{ type: 'text', text: '@AI survive graceful shutdown' }], 'queue')
+    const message = agent.inbox.nextTurn[0]!
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 0, inserted: [message] })
+    await runtime.stop()
+    expect(harness.tables.get('inputs')!.size).toBe(1)
+    // Native Agent disposal records cancellation even for work not yet claimed.
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] })
+    const restoredHarness = fakeHarness([...agent.session.events])
+    for (const [name, table] of harness.tables) restoredHarness.tables.set(name, table)
+    const restored = new ChatroomRuntime(restoredHarness.ctx, config())
+    try {
+      await restored.start()
+      const resumed = restoredHarness.agents[0]!
+      expect(resumed.inbox.nextTurn.map(item => item.id)).toEqual([message.id])
+      expect(resumed.followup).not.toHaveBeenCalled()
+      expect(restoredHarness.tables.get('inputs')!.size).toBe(1)
+      await restored.updateQueuedPrompt({ roomId: 'lobby' }, String(message.id), 'guide', alice)
+      expect(resumed.followup).toHaveBeenCalledExactlyOnceWith(message)
+      const claimed = resumed.session.append('user/message', message, { surfaceOp: 'append' })
+      restored.handleSessionEvent(resumed.session, claimed)
+      await vi.waitFor(() => expect(restoredHarness.tables.get('inputs')!.size).toBe(0))
+    } finally { await restored.stop() }
+  })
+
+  it('retains the input until the native Session durability listener finishes', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    const flush = Promise.withResolvers<boolean>()
+    vi.mocked(harness.ctx.sessions.flush).mockReturnValueOnce(flush.promise)
+    await runtime.start()
+    const submit = runtime.submit('lobby', { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' }, [{ type: 'text', text: 'durable' }], 'queue')
+    await vi.waitFor(() => expect(harness.ctx.sessions.flush).toHaveBeenCalled())
+    expect(harness.tables.get('inputs')!.size).toBe(1)
+    flush.resolve(true)
+    await submit
+    expect(harness.tables.get('inputs')!.size).toBe(0)
+    await runtime.stop()
+  })
+
+  it('withdraws borrowed Agent contributions before reloading the plugin', async () => {
+    const harness = fakeHarness()
+    const first = new ChatroomRuntime(harness.ctx, config())
+    await first.start()
+    const agent = harness.agents[0]!
+    await first.stop()
+    expect(harness.registeredTools).toHaveLength(0)
+    expect(harness.promptSections).toHaveLength(0)
+    vi.mocked(harness.ctx.agents.get).mockReturnValue(agent)
+    const second = new ChatroomRuntime(harness.ctx, config())
+    await second.start()
+    expect(harness.registeredTools.map(tool => tool.name)).toEqual(['chatroom_capabilities', 'chatroom_action', 'wecom_schema', 'wecom_action'])
+    await second.stop()
+    expect(harness.registeredTools).toHaveLength(0)
+    expect(harness.promptSections).toHaveLength(0)
+  })
+
 })
 
 function fakeHarness(initialEvents: SessionEvent[] = []): {
@@ -1577,16 +1802,23 @@ function fakeHarness(initialEvents: SessionEvent[] = []): {
   const promptSections: Array<{ name: string; order: number; text: string | (() => string) }> = []
   const registeredTools: ToolDefinition[] = []
   const makeAgentContext = (): Context => ({
+    on: vi.fn(() => () => undefined),
+    fs: {
+      resolve: vi.fn(async (path: string, options: { cwd?: string } = {}) => ({ path: await realpath(resolve(options.cwd ?? process.cwd(), path)) })),
+      contains: vi.fn((parent: { path: string }, child: { path: string }) => { const path = relative(parent.path, child.path); return path !== '..' && !path.startsWith('../') }),
+      processPath: vi.fn((target: { path: string }) => target.path),
+      readBytes: vi.fn(async (target: { path: string }, _signal: AbortSignal, maxBytes: number) => { const data = await readFile(target.path); if (data.length > maxBytes) throw new Error('FS_TOO_LARGE'); return data }),
+    },
     tools: {
       register: vi.fn((definition: ToolDefinition) => {
         registeredTools.push(definition)
-        return () => undefined
+        return () => { const index = registeredTools.indexOf(definition); if (index >= 0) registeredTools.splice(index, 1) }
       }),
     },
     systemPrompt: {
       section: vi.fn((section: { name: string; order: number; text: string | (() => string) }) => {
         promptSections.push(section)
-        return () => undefined
+        return () => { const index = promptSections.indexOf(section); if (index >= 0) promptSections.splice(index, 1) }
       }),
     },
   }) as unknown as Context
@@ -1627,6 +1859,11 @@ function fakeHarness(initialEvents: SessionEvent[] = []): {
         const queued: Array<ReturnType<typeof createUserMessage>> = []
         const inbox = {
           nextTurn: queued,
+          nextStep: [] as ReturnType<typeof createUserMessage>[],
+          append: vi.fn((target: 'next-turn' | 'next-step', message: ReturnType<typeof createUserMessage>) => {
+            ;(target === 'next-turn' ? inbox.nextTurn : inbox.nextStep).push(message)
+            session.append('agent/inbox/spliced', { target, start: 0, removedCount: 0, inserted: [message] })
+          }),
           remove: vi.fn((id: unknown) => {
             const index = queued.findIndex(message => message.id === id)
             if (index < 0) return false
@@ -1636,6 +1873,7 @@ function fakeHarness(initialEvents: SessionEvent[] = []): {
         }
         const session = {
           id: sessionId,
+          header: { cwd: process.cwd() },
           events,
           append: vi.fn((type: string, data: unknown, options: Record<string, unknown> = {}) => {
             const event = { type, seq: Math.max(0, ...session.events.map(item => item.seq)) + 1, time: Date.now(), data, ...options }
@@ -1659,6 +1897,7 @@ function fakeHarness(initialEvents: SessionEvent[] = []): {
         return { agent, dispose: vi.fn(async () => undefined) }
       }),
     },
+    sessions: { flush: vi.fn(async () => true) },
     sessionPersistence: { list: vi.fn(async () => []) },
     sessionTitle: {
       get: vi.fn(() => undefined),
@@ -1757,4 +1996,22 @@ function config(): Config {
     wecomTimeZone: 'Asia/Shanghai',
     dataDirectory: ':memory:',
   }
+}
+
+/** Drive the documented admission waterfall, independently of passive Session appends. */
+async function admitStep(agent: Agent, messages: ReturnType<typeof createUserMessage>[], step = 1): Promise<void> {
+  const registration = vi.mocked(agent.ctx.on).mock.calls.find(call => call[0] === 'agent/pre-step')
+  if (registration === undefined) throw new Error('Missing admission listener')
+  const listener = registration[1] as unknown as (payload: { agent: Agent; step: number }, next: () => Promise<{ kind: 'enter'; messages: ReturnType<typeof createUserMessage>[] }>) => Promise<unknown>
+  await listener({ agent, step }, async () => ({ kind: 'enter', messages }))
+}
+
+async function authenticatedRoom() {
+  const harness = fakeHarness()
+  const settings = { ...config(), authEnabled: true, authSecret: 'isolated-test-secret-at-least-32-characters', authBootstrapToken: 'bootstrap-token' }
+  const runtime = new ChatroomRuntime(harness.ctx, settings)
+  await runtime.start()
+  const alice = (await runtime.auth.register({ username: 'alice', password: 'alice password 123', displayName: 'Alice', bootstrapToken: 'bootstrap-token' })).account
+  const bob = (await runtime.auth.register({ username: 'bob', password: 'bob password 12345', displayName: 'Bob' })).account
+  return { runtime, harness, alice, bob, settings }
 }

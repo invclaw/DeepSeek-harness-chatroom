@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { ChatroomDirectReaction, ChatroomExternalCard, ChatroomFileReference, ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js'
 import type { ChatroomReactionEmoji } from './reactions.js'
@@ -18,6 +19,49 @@ const safeAvatarUrl = z.string().url().refine((value) => {
 const safeExternalText = z.string().min(1).refine((value) =>
   Buffer.byteLength(value, 'utf8') <= 512 && !/\p{C}/u.test(value),
   'external identity text must be at most 512 UTF-8 bytes without control characters')
+
+/** Accepted input remains here until its claimed message is durable in the native Session. */
+export interface InputRecord {
+  readonly sessionId: string
+  readonly roomId: string
+  readonly threadId?: string
+  readonly participantId: string
+  readonly message: UserMessage
+  readonly intent: 'respond' | 'decide' | 'passive'
+  readonly createdAt: number
+}
+
+const inputSchema = z.object({
+  sessionId: z.string().min(1),
+  roomId: z.string().min(1),
+  threadId: z.string().min(1).optional(),
+  participantId: z.string().min(1),
+  message: z.object({
+    id: z.uuid(),
+    role: z.literal('user'),
+    source: z.object({
+      kind: z.enum(['user', 'plugin']),
+      chatroomParticipantId: z.string().min(1),
+      plugin: z.string().optional(),
+      form: z.literal('notice').optional(),
+      summary: z.string().optional(),
+    }),
+    content: z.array(z.union([
+      z.object({ type: z.literal('text'), text: z.string() }),
+      z.object({ type: z.literal('image'), attachment: z.object({
+        attachmentId: z.string().min(1),
+        mediaType: z.enum(['image/png', 'image/jpeg', 'image/gif', 'image/webp']),
+        bytes: nonNegativeSafeInteger,
+        width: nonNegativeSafeInteger,
+        height: nonNegativeSafeInteger,
+        name: z.string().optional(),
+        originalDimensions: z.object({ width: nonNegativeSafeInteger, height: nonNegativeSafeInteger }).optional(),
+      }) }),
+    ])),
+  }),
+  intent: z.enum(['respond', 'decide', 'passive']),
+  createdAt: nonNegativeSafeInteger,
+}) as unknown as z.ZodType<InputRecord>
 
 export interface IdentityRecord {
   readonly participantId: string
@@ -501,6 +545,7 @@ export const chatroomDomainSpec = defineDomain({
   name: 'chatroom',
   version: 0,
   tables: {
+    inputs: domainTable<string, InputRecord>(inputSchema),
     identities: domainTable<string, IdentityRecord>(identitySchema),
     messages: domainTable<string, MessageRecord>(messageSchema),
     rooms: domainTable<string, RoomRecord>(roomSchema),
