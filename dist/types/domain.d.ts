@@ -1,6 +1,17 @@
+import type { UserMessage } from '@deepseek-ai/dsh-llm';
 import type { ChatroomDirectReaction, ChatroomExternalCard, ChatroomFileReference, ChatroomMessageRole, ChatroomReplyReference, ChatroomThreadRoot } from './types.js';
 import type { ChatroomReactionEmoji } from './reactions.js';
 import type { ChatroomAvatarId } from './avatars.js';
+/** Accepted input remains here until its claimed message is durable in the native Session. */
+export interface InputRecord {
+    readonly sessionId: string;
+    readonly roomId: string;
+    readonly threadId?: string;
+    readonly participantId: string;
+    readonly message: UserMessage;
+    readonly intent: 'respond' | 'decide' | 'passive';
+    readonly createdAt: number;
+}
 export interface IdentityRecord {
     readonly participantId: string;
     readonly displayName: string;
@@ -201,6 +212,7 @@ export declare const chatroomDomainSpec: {
     name: string;
     version: number;
     tables: {
+        inputs: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, InputRecord>;
         identities: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, IdentityRecord>;
         messages: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, MessageRecord>;
         rooms: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, RoomRecord>;

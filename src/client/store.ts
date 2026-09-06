@@ -165,6 +165,7 @@ export interface ChatroomView {
 
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
 export class ChatroomClientStore implements HostObservable<ChatroomView> {
+  private readonly nativeOwnershipLookups = new Map<string, Promise<boolean>>()
   private snapshot: ChatroomView = {
     branchFrame: undefined,
     open: false,
@@ -345,6 +346,23 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     if (this.snapshot.phase !== 'ready') return false
     if (!this.snapshot.auth.enabled) return true
     return this.snapshot.soloSessionIds.includes(sessionId)
+  }
+
+  /** Refresh ownership for a Session created by native startup or native fork controls. */
+  resolveNativeOwnership(sessionId: string): Promise<boolean> {
+    if (this.canPromptNativeSession(sessionId)) return Promise.resolve(true)
+    const participantId = this.snapshot.identity?.participantId
+    if (participantId === undefined || this.snapshot.phase !== 'ready') return Promise.resolve(false)
+    const key = `${participantId}:${sessionId}`
+    const pending = this.nativeOwnershipLookups.get(key)
+    if (pending !== undefined) return pending
+    const lookup = requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/session`).then(session => {
+      if (this.stopped || this.snapshot.identity?.participantId !== participantId || session.identity?.participantId !== participantId) return false
+      this.set({ soloSessionIds: session.soloSessionIds })
+      return session.soloSessionIds.includes(sessionId)
+    }).catch(() => false).finally(() => this.nativeOwnershipLookups.delete(key))
+    this.nativeOwnershipLookups.set(key, lookup)
+    return lookup
   }
 
   /** Read the explicit creation mode for one newly created native Session. */

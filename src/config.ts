@@ -21,6 +21,8 @@ export interface Config {
   maxImageSidePixels: number
   settingsAdminParticipantIds: string[]
   maxSettingsRequestBytes: number
+  nativeTrustedHosts?: string[]
+  nativeMaxRequestBytes?: number
   sseHeartbeatMs: number
   authEnabled: boolean
   authCookieName: string
@@ -67,6 +69,8 @@ export const Config: z<Config> = z.object({
   maxImageSidePixels: z.number().step(1).min(512).max(16_384).default(4_096),
   settingsAdminParticipantIds: z.array(z.string().min(1).max(128)).default([]),
   maxSettingsRequestBytes: z.number().step(1).min(1_024).max(8 * 1024 * 1024).default(1024 * 1024),
+  nativeTrustedHosts: z.array(z.string().min(1)).default([]),
+  nativeMaxRequestBytes: z.number().step(1).min(1_024).max(300 * 1024 * 1024).default(300 * 1024 * 1024),
   sseHeartbeatMs: z.number().step(1).min(5_000).max(120_000).default(15_000),
   authEnabled: z.boolean().default(false),
   authCookieName: z.string().pattern(/^[A-Za-z0-9_]+$/u).default('dsh_chatroom_auth'),

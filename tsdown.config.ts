@@ -1,6 +1,14 @@
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import type { UserConfig } from 'tsdown'
 
 const id = 'deepseek-harness-chatroom'
+// The published native client is a ModuleLoader factory, not an ESM module.
+// Embed its unmodified factory in this bundle so the authenticated transport owns both halves.
+const require = createRequire(import.meta.url)
+const nativeClient = readFileSync(require.resolve('@deepseek-ai/dsh-client-connection/client'), 'utf8')
+if (!nativeClient.startsWith('window.__ModuleLoader__.load({')) throw new Error('Unsupported native connection client bundle')
+const embeddedConnection = nativeClient.replace('window.__ModuleLoader__.load(', 'const nativeConnection = ((registration) => registration.factory(require))(').replace(/\/\/# sourceMappingURL=.*$/mu, '').replace(/^[ \t]+$/gmu, '')
 const platformModules = [
   'react',
   'react/jsx-runtime',
@@ -30,6 +38,6 @@ export default {
     entryFileNames: 'client.js',
     banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify(id)}, factory: (require) => {`,
     footer: 'return module.exports; } });',
-    intro: 'var module = { exports: {} }; var exports = module.exports;',
+    intro: `${embeddedConnection}\nvar module = { exports: {} }; var exports = module.exports;`,
   },
 } satisfies UserConfig

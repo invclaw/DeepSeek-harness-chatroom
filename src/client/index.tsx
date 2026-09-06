@@ -38,10 +38,20 @@ import {
   stageBranchFrameSession,
 } from './branch-frame.js'
 
-export const inject = ['connection', 'inputTriggers', 'sessions', 'settingsScope', 'slots', 'workspaces']
+const roomServices = ['connection', 'inputTriggers', 'sessions', 'settingsScope', 'slots', 'workspaces']
+export const inject: string[] = []
+
+/** Supplied by the build adapter from the pinned native client factory. */
+declare const nativeConnection: { apply(ctx: ClientContext): void }
+
+/** Start the native browser connection before installing its chatroom consumers. */
+export function apply(ctx: ClientContext): void {
+  ctx.plugin({ name: 'chatroom-native-connection', apply: nativeConnection.apply })
+  ctx.inject(roomServices, roomCtx => installChatroom(roomCtx))
+}
 
 /** Add room identity and navigation around the existing Harness conversation UI. */
-export function apply(ctx: ClientContext): void {
+function installChatroom(ctx: ClientContext): void {
   const connection = ctx.get('connection') as ConnectionHandle | undefined
   if (connection === undefined) throw new Error('chatroom: client connection service unavailable')
   const sessions = ctx.get('sessions') as ISessions | undefined
@@ -150,7 +160,12 @@ export function apply(ctx: ClientContext): void {
         && (snapshot.phase !== 'ready'
           || store.roomForSession(String(current)) === undefined
             && !store.canPromptNativeSession(String(current)))) {
-        sessions.clear()
+        if (snapshot.phase !== 'ready') sessions.clear()
+        else void store.resolveNativeOwnership(String(current)).then(allowed => {
+          if (sessions.list.getSnapshot().current !== current) return
+          if (allowed) syncSession()
+          else sessions.clear()
+        })
         return
       }
       if (current !== undefined && summary?.blank === true && summary.origin !== 'subagent'

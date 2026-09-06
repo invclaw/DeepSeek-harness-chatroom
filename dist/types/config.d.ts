@@ -19,6 +19,8 @@ export interface Config {
     maxImageSidePixels: number;
     settingsAdminParticipantIds: string[];
     maxSettingsRequestBytes: number;
+    nativeTrustedHosts?: string[];
+    nativeMaxRequestBytes?: number;
     sseHeartbeatMs: number;
     authEnabled: boolean;
     authCookieName: string;
