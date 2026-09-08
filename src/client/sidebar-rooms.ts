@@ -7,10 +7,10 @@ import type {
 } from '../types.js'
 import type {
   ISessions,
-  SessionId,
   SessionListState,
   SessionSummary,
-} from '@deepseek-ai/dsh-client-runtime/client'
+} from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
 
 const ROOM_ROW_SELECTOR = 'div[role="treeitem"][aria-selected]'

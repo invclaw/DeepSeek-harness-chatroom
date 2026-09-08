@@ -1,5 +1,5 @@
 import { type ComponentType } from 'react';
-import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
+import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client';
 import { type ChatroomAvatarId } from '../avatars.js';
 import type { ChatroomFileReference, ChatroomExternalCard, ChatroomForwardBundle, ChatroomForwardItem, ChatroomIdentity, ChatroomReplyReference, ChatroomRoomAvatar, ChatroomThreadRoot } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';

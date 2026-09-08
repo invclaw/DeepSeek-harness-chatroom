@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  CallId,
+  ToolCallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
@@ -98,7 +98,7 @@ describe('chatroom model history compatibility', () => {
   })
 
   it('moves an older chatroom assistant insertion after its matching tool result', async () => {
-    const callId = CallId('call-chatroom-action')
+    const callId = ToolCallId('call-chatroom-action')
     const toolCall = createAssistantMessage({
       content: [{ type: 'tool-call', id: callId, name: 'chatroom_action', arguments: '{}' }],
       source: { provider: 'deepseek', model: 'deepseek-v4-flash' },
@@ -134,7 +134,7 @@ describe('chatroom model history compatibility', () => {
   })
 
   it('removes unresolved historical tool calls at the next human exchange', () => {
-    const callId = CallId('call-without-result')
+    const callId = ToolCallId('call-without-result')
     const toolCall = createAssistantMessage({
       content: [{ type: 'tool-call', id: callId, name: 'chatroom_action', arguments: '{}' }],
       source: { provider: 'deepseek', model: 'deepseek-v4-flash' },

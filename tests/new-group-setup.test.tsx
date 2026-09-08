@@ -84,7 +84,7 @@ function dockProps(
   } as unknown as ChatroomView
   return {
     sessionId: 'native-session',
-    session: { composerPhase: blank ? 'blank' : 'ready', nodes: blank ? [] : [{}] },
+    useSession: (selector: (value: { blank: boolean }) => unknown) => selector({ blank }),
     useChatroom: (selector: (value: ChatroomView) => unknown) => selector(snapshot),
     registerNewSession,
     newSessionMode: () => mode,

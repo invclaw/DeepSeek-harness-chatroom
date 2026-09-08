@@ -13,10 +13,12 @@ import type {
   ChatroomErrorResponse,
   ChatroomForwardItem,
   ChatroomIdentity,
+  ChatroomManageableRoomsResponse,
   ChatroomInfo,
   ChatroomMember,
   ChatroomNotification,
   ChatroomGlobalEvent,
+  ChatroomAgentProfilesView,
   ChatroomPendingMessage,
   ChatroomPromptContentPart,
   ChatroomPromptRequest,
@@ -110,6 +112,12 @@ export interface ChatroomView {
   readonly threadPreviews: readonly ChatroomThreadPreview[]
   readonly pendingMessages: readonly ChatroomPendingMessage[]
   readonly membersOpen: boolean
+  readonly agentsOpen: boolean
+  readonly agentProfiles: ChatroomAgentProfilesView | undefined
+  readonly agentProfilesRoomId: string | undefined
+  readonly manageableRooms: readonly ChatroomInfo[]
+  readonly agentBusy: boolean
+  readonly agentError: string | undefined
   readonly managementBusy?: boolean
   readonly managementError?: string | undefined
   readonly error: string | undefined
@@ -166,6 +174,7 @@ export interface ChatroomView {
 /** React-free owner of room identity, directory, presence, and native Session navigation. */
 export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private readonly nativeOwnershipLookups = new Map<string, Promise<boolean>>()
+  private readonly nativeSessionAccess = new Map<string, boolean>()
   private snapshot: ChatroomView = {
     branchFrame: undefined,
     open: false,
@@ -190,6 +199,12 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     threadPreviews: [],
     pendingMessages: [],
     membersOpen: false,
+    agentsOpen: false,
+    agentProfiles: undefined,
+    agentProfilesRoomId: undefined,
+    manageableRooms: [],
+    agentBusy: false,
+    agentError: undefined,
     managementBusy: false,
     managementError: undefined,
     error: undefined,
@@ -252,6 +267,19 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private pendingFileSequence = 0
   private searchRevision = 0
   private originalTitle: string | undefined
+  // Background tabs release their SSE slots: browsers cap connections per host,
+  // and 2 SSE per tab across several tabs starves every other request.
+  private readonly handleVisibilityChange = (): void => {
+    if (this.stopped || typeof document === 'undefined') return
+    if (document.visibilityState === 'visible') {
+      const room = this.snapshot.room
+      if (room !== undefined) this.openEvents(room)
+      this.openNotifications()
+      return
+    }
+    this.closeEvents()
+    this.closeNotifications()
+  }
   private activeNativeSession: {
     readonly id: string
     readonly title: string
@@ -341,14 +369,15 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     }
   }
 
-  /** Check whether the current identity may use a native Session as Solo. */
+  /** UI hint only; the server rechecks current room/descendant ownership on every native RPC. */
   canPromptNativeSession(sessionId: string): boolean {
     if (this.snapshot.phase !== 'ready') return false
     if (!this.snapshot.auth.enabled) return true
     return this.snapshot.soloSessionIds.includes(sessionId)
+      || this.nativeSessionAccess.get(`${this.snapshot.identity?.participantId}:${sessionId}`) === true
   }
 
-  /** Refresh ownership for a Session created by native startup or native fork controls. */
+  /** Resolve Solo and descendant ownership with the same server authority as native RPCs. */
   resolveNativeOwnership(sessionId: string): Promise<boolean> {
     if (this.canPromptNativeSession(sessionId)) return Promise.resolve(true)
     const participantId = this.snapshot.identity?.participantId
@@ -356,10 +385,11 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     const key = `${participantId}:${sessionId}`
     const pending = this.nativeOwnershipLookups.get(key)
     if (pending !== undefined) return pending
-    const lookup = requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/session`).then(session => {
+    const lookup = requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/session?nativeSessionId=${encodeURIComponent(sessionId)}`).then(session => {
       if (this.stopped || this.snapshot.identity?.participantId !== participantId || session.identity?.participantId !== participantId) return false
+      this.nativeSessionAccess.set(key, session.nativeSessionAccess?.sessionId === sessionId && session.nativeSessionAccess.allowed)
       this.set({ soloSessionIds: session.soloSessionIds })
-      return session.soloSessionIds.includes(sessionId)
+      return this.canPromptNativeSession(sessionId)
     }).catch(() => false).finally(() => this.nativeOwnershipLookups.delete(key))
     this.nativeOwnershipLookups.set(key, lookup)
     return lookup
@@ -426,13 +456,17 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   /** Resolve the persistent browser identity and shared room directory. */
   async start(): Promise<void> {
     this.stopped = false
-    if (typeof document !== 'undefined') this.originalTitle = document.title
+    if (typeof document !== 'undefined') {
+      this.originalTitle = document.title
+      document.addEventListener('visibilitychange', this.handleVisibilityChange)
+    }
     await this.loadSession()
   }
 
   /** Stop network activity and notification delivery. */
   stop(): void {
     this.stopped = true
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.handleVisibilityChange)
     this.closeEvents()
     this.closeNotifications()
     this.updateActiveDocumentRoom(false)
@@ -701,6 +735,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       searchOpen: true,
       searchError: undefined,
       membersOpen: false,
+      agentsOpen: false,
+      agentProfiles: undefined,
+      agentProfilesRoomId: undefined,
       accountOpen: false,
       adminOpen: false,
     })
@@ -862,6 +899,112 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   /** Close group management without changing the active room. */
   closeMembers = (): void => {
     this.set({ membersOpen: false, memberCandidates: [], managementError: undefined })
+  }
+
+  /** Open the room AI participant manager for the active room. */
+  openAgents = (): void => {
+    if (this.snapshot.room === undefined) return
+    this.set({
+      agentsOpen: true,
+      agentError: undefined,
+      membersOpen: false,
+      memberCandidates: [],
+      thread: undefined,
+      threadMessages: [],
+      threadReply: undefined,
+      threadError: undefined,
+    })
+    void this.loadAgentProfiles()
+  }
+
+  /** Close the room AI participant manager. */
+  closeAgents = (): void => {
+    this.set({ agentsOpen: false, agentProfiles: undefined, agentProfilesRoomId: undefined, agentError: undefined })
+  }
+
+  /** Load one room's AI participant roster and, for managers, the model catalog. Defaults to the active room. */
+  loadAgentProfiles = async (roomId?: string): Promise<void> => {
+    const targetRoomId = roomId ?? this.snapshot.room?.id
+    if (targetRoomId === undefined || this.snapshot.agentBusy) return
+    this.set({ agentBusy: true, agentError: undefined })
+    try {
+      const result = await requestJson<ChatroomAgentProfilesView>(
+        `${CHATROOM_API_PREFIX}/rooms/agents?roomId=${encodeURIComponent(targetRoomId)}`,
+      )
+      this.set({ agentBusy: false, agentProfiles: result, agentProfilesRoomId: targetRoomId })
+    } catch (error) {
+      this.set({ agentBusy: false, agentError: errorMessage(error) })
+    }
+  }
+
+  /** Warm the room AI participant roster once (used by the @ mention menu). */
+  ensureAgentProfiles = async (): Promise<void> => {
+    if (this.snapshot.room === undefined || this.snapshot.agentProfiles !== undefined) return
+    await this.loadAgentProfiles()
+  }
+
+  /** Load the room directory the signed-in identity may manage AI participants in. */
+  loadManageableRooms = async (): Promise<void> => {
+    try {
+      const result = await requestJson<ChatroomManageableRoomsResponse>(`${CHATROOM_API_PREFIX}/rooms/manageable`)
+      this.set({ manageableRooms: result.rooms })
+    } catch {
+      this.set({ manageableRooms: [] })
+    }
+  }
+
+  /** Create or update one room AI participant with its own model routing. */
+  saveAgentProfile = async (input: {
+    readonly profileId?: string
+    readonly name: string
+    readonly role: string
+    readonly provider: string
+    readonly model: string
+    readonly reasoningEffort?: string
+    readonly enabled: boolean
+  }, agentRoomId?: string): Promise<boolean> => {
+    const targetRoomId = agentRoomId ?? this.snapshot.room?.id
+    if (targetRoomId === undefined || this.snapshot.agentBusy) return false
+    this.set({ agentBusy: true, agentError: undefined })
+    try {
+      const result = await requestJson<ChatroomAgentProfilesView>(`${CHATROOM_API_PREFIX}/rooms/agents`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          roomId: targetRoomId,
+          action: input.profileId === undefined ? 'create' : 'update',
+          ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
+          name: input.name,
+          role: input.role,
+          provider: input.provider,
+          model: input.model,
+          reasoningEffort: input.reasoningEffort ?? '',
+          enabled: input.enabled,
+        }),
+      })
+      this.set({ agentBusy: false, agentProfiles: result, agentProfilesRoomId: targetRoomId })
+      return true
+    } catch (error) {
+      this.set({ agentBusy: false, agentError: errorMessage(error) })
+      return false
+    }
+  }
+
+  /** Remove one room AI participant; its durable Session history stays intact. */
+  deleteAgentProfile = async (profileId: string, roomId?: string): Promise<void> => {
+    const targetRoomId = roomId ?? this.snapshot.room?.id
+    if (targetRoomId === undefined || this.snapshot.agentBusy) return
+    this.set({ agentBusy: true, agentError: undefined })
+    try {
+      const result = await requestJson<ChatroomAgentProfilesView>(`${CHATROOM_API_PREFIX}/rooms/agents`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ roomId: targetRoomId, action: 'delete', profileId }),
+      })
+      this.set({ agentBusy: false, agentProfiles: result, agentProfilesRoomId: targetRoomId })
+    } catch (error) {
+      this.set({ agentBusy: false, agentError: errorMessage(error) })
+    }
   }
 
   /** Add selected active platform accounts to the current room. */
@@ -1034,6 +1177,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         threadPreviews: [],
         pendingMessages: [],
         membersOpen: false,
+        agentsOpen: false,
+        agentProfiles: undefined,
+      agentProfilesRoomId: undefined,
         thread: undefined,
         threadMessages: [],
         threadReply: undefined,
@@ -1067,6 +1213,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       threadPreviews: [],
       pendingMessages: [],
       membersOpen: false,
+      agentsOpen: false,
+      agentProfiles: undefined,
+      agentProfilesRoomId: undefined,
       thread: undefined,
       threadMessages: [],
       threadReply: undefined,
@@ -1498,7 +1647,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   /** Create or reopen a branch rooted at one main-room message. */
   openThread = async (roomId: string, root: ChatroomThreadRoot): Promise<void> => {
-    this.set({ membersOpen: false, threadReply: undefined, threadBusy: true, threadError: undefined })
+    this.set({ membersOpen: false, agentsOpen: false, agentProfiles: undefined, agentProfilesRoomId: undefined, threadReply: undefined, threadBusy: true, threadError: undefined })
     try {
       const response = await requestJson<ChatroomThreadResponse>(`${CHATROOM_API_PREFIX}/threads/open`, {
         method: 'POST',

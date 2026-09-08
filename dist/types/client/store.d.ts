@@ -1,5 +1,5 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots';
-import type { ChatroomAutomationOverview, ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomPendingMessage, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomSearchResult, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot, ChatroomWecomAuthorizationState } from '../types.js';
+import type { ChatroomAutomationOverview, ChatroomAdminOverview, ChatroomAuthState, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectPeer, ChatroomForwardItem, ChatroomIdentity, ChatroomInfo, ChatroomMember, ChatroomNotification, ChatroomAgentProfilesView, ChatroomPendingMessage, ChatroomPromptContentPart, ChatroomPromptRequest, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomRoomInviteCandidate, ChatroomSearchResult, ChatroomThread, ChatroomThreadMessage, ChatroomThreadPreview, ChatroomThreadPromptRequest, ChatroomThreadRoot, ChatroomWecomAuthorizationState } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 export type ChatroomPhase = 'loading' | 'auth-required' | 'identity-required' | 'ready' | 'error';
 export type ChatroomConnection = 'offline' | 'connecting' | 'online';
@@ -53,6 +53,12 @@ export interface ChatroomView {
     readonly threadPreviews: readonly ChatroomThreadPreview[];
     readonly pendingMessages: readonly ChatroomPendingMessage[];
     readonly membersOpen: boolean;
+    readonly agentsOpen: boolean;
+    readonly agentProfiles: ChatroomAgentProfilesView | undefined;
+    readonly agentProfilesRoomId: string | undefined;
+    readonly manageableRooms: readonly ChatroomInfo[];
+    readonly agentBusy: boolean;
+    readonly agentError: string | undefined;
     readonly managementBusy?: boolean;
     readonly managementError?: string | undefined;
     readonly error: string | undefined;
@@ -109,6 +115,7 @@ export interface ChatroomView {
 export declare class ChatroomClientStore implements HostObservable<ChatroomView> {
     private readonly openSession;
     private readonly nativeOwnershipLookups;
+    private readonly nativeSessionAccess;
     private snapshot;
     private readonly listeners;
     private eventSource;
@@ -120,6 +127,7 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     private pendingFileSequence;
     private searchRevision;
     private originalTitle;
+    private readonly handleVisibilityChange;
     private activeNativeSession;
     private roomEnsure;
     private readonly pendingAutoTriggerWrites;
@@ -137,9 +145,9 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     reserveSoloSession: () => Promise<string>;
     /** Release an owned Session id after native creation fails. */
     releaseSoloSession: (sessionId: string) => Promise<void>;
-    /** Check whether the current identity may use a native Session as Solo. */
+    /** UI hint only; the server rechecks current room/descendant ownership on every native RPC. */
     canPromptNativeSession(sessionId: string): boolean;
-    /** Refresh ownership for a Session created by native startup or native fork controls. */
+    /** Resolve Solo and descendant ownership with the same server authority as native RPCs. */
     resolveNativeOwnership(sessionId: string): Promise<boolean>;
     /** Read the explicit creation mode for one newly created native Session. */
     newSessionMode: (sessionId: string) => ChatroomNewSessionMode | undefined;
@@ -239,6 +247,28 @@ export declare class ChatroomClientStore implements HostObservable<ChatroomView>
     completeGroupSetup: (title: string, participantIds: readonly string[]) => Promise<boolean>;
     /** Close group management without changing the active room. */
     closeMembers: () => void;
+    /** Open the room AI participant manager for the active room. */
+    openAgents: () => void;
+    /** Close the room AI participant manager. */
+    closeAgents: () => void;
+    /** Load one room's AI participant roster and, for managers, the model catalog. Defaults to the active room. */
+    loadAgentProfiles: (roomId?: string) => Promise<void>;
+    /** Warm the room AI participant roster once (used by the @ mention menu). */
+    ensureAgentProfiles: () => Promise<void>;
+    /** Load the room directory the signed-in identity may manage AI participants in. */
+    loadManageableRooms: () => Promise<void>;
+    /** Create or update one room AI participant with its own model routing. */
+    saveAgentProfile: (input: {
+        readonly profileId?: string;
+        readonly name: string;
+        readonly role: string;
+        readonly provider: string;
+        readonly model: string;
+        readonly reasoningEffort?: string;
+        readonly enabled: boolean;
+    }, agentRoomId?: string) => Promise<boolean>;
+    /** Remove one room AI participant; its durable Session history stays intact. */
+    deleteAgentProfile: (profileId: string, roomId?: string) => Promise<void>;
     /** Add selected active platform accounts to the current room. */
     addRoomMembers: (participantIds: readonly string[]) => Promise<boolean>;
     /** Pin or unpin one room for the current participant. */

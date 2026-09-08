@@ -28,6 +28,27 @@ afterEach(() => {
 })
 
 describe('ChatroomClientStore', () => {
+  it('keeps authorized native children navigable without relabeling them Solo or trusting another session grant', async () => {
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const session = { ...sessionResponse(identity, []), auth: { enabled: true, authenticated: true } }
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(session))
+      .mockResolvedValueOnce(jsonResponse({ ...session, nativeSessionAccess: { sessionId: 'child/1', allowed: true } }))
+      .mockResolvedValueOnce(jsonResponse({ ...session, nativeSessionAccess: { sessionId: 'child/1', allowed: true } }))
+      .mockResolvedValueOnce(jsonResponse({ ...session, nativeSessionAccess: { sessionId: 'foreign', allowed: false } }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
+    await store.start()
+    expect(await store.resolveNativeOwnership('child/1')).toBe(true)
+    expect(fetchMock.mock.calls[1]?.[0]).toContain('nativeSessionId=child%2F1')
+    expect(store.canPromptNativeSession('child/1')).toBe(true)
+    expect(store.getSnapshot().soloSessionIds).toEqual([])
+    expect(await store.resolveNativeOwnership('mismatched')).toBe(false)
+    expect(await store.resolveNativeOwnership('foreign')).toBe(false)
+    store.stop()
+  })
+
   it('refreshes native startup ownership without granting access to a foreign session', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const auth = { enabled: true, authenticated: true }

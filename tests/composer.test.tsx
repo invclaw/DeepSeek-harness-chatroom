@@ -50,7 +50,7 @@ describe('chatroom composer attachments', () => {
     const quickMeeting = vi.fn(async () => true)
     const props = {
       sessionId: 'chatroom-v1-lobby',
-      session: { running: true },
+      useSession: (selector: (snapshot: { running: boolean }) => unknown) => selector({ running: true }),
       useChatroom: (selector: (snapshot: ChatroomView) => unknown) => selector({
         sessionControlBusy: false,
         sessionControlError: undefined,
@@ -84,7 +84,7 @@ describe('chatroom composer attachments', () => {
     } as unknown as ChatroomView)
     const { rerender } = render(<ChatroomFileAction {...{
       sessionId: 'branch-session',
-      input: { draft: '你好', imageIds: [] },
+      useInput: (selector: (snapshot: { draft: string }) => unknown) => selector({ draft: '你好' }),
       inputActions: { setDraft },
       useChatroom,
       resolveTarget: () => target,
@@ -98,7 +98,7 @@ describe('chatroom composer attachments', () => {
 
     rerender(<ChatroomSessionControls {...{
       sessionId: 'branch-session',
-      session: { running: false },
+      useSession: (selector: (snapshot: { running: boolean }) => unknown) => selector({ running: false }),
       useChatroom,
       resolveTarget: () => target,
       stopRoomSession: vi.fn(),

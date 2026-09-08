@@ -79,6 +79,38 @@ export interface ChatroomAutomationOverview {
     readonly controllerPrompt: string;
     readonly models: readonly ChatroomAutomationModel[];
 }
+/** One durable room-level AI participant with its own model routing. */
+export interface ChatroomAgentProfile {
+    readonly id: string;
+    readonly roomId: string;
+    readonly name: string;
+    readonly role: string;
+    readonly provider: string;
+    readonly model: string;
+    readonly reasoningEffort?: string;
+    readonly enabled: boolean;
+    readonly createdAt: number;
+    readonly updatedAt: number;
+}
+/** Validated write input for one room-level AI participant. */
+export interface ChatroomAgentProfileInput {
+    readonly name: string;
+    readonly role: string;
+    readonly provider: string;
+    readonly model: string;
+    readonly reasoningEffort?: string;
+    readonly enabled: boolean;
+}
+/** Room AI participant roster; the model catalog is only populated for managers. */
+export interface ChatroomAgentProfilesView {
+    readonly canManage: boolean;
+    readonly profiles: readonly ChatroomAgentProfile[];
+    readonly models: readonly ChatroomAutomationModel[];
+}
+/** Manageable-room directory for the settings-page AI member manager. */
+export interface ChatroomManageableRoomsResponse {
+    readonly rooms: readonly ChatroomInfo[];
+}
 /** One room member projected with current presence. */
 export interface ChatroomMember extends ChatroomIdentity {
     readonly role?: ChatroomMemberRole | undefined;
@@ -197,6 +229,8 @@ export interface ChatroomInfo {
     /** Up to nine member avatars used by compact room-directory surfaces. */
     readonly memberAvatarIds?: readonly ChatroomAvatarId[];
     readonly memberAvatars?: readonly ChatroomRoomAvatar[];
+    /** Whether the viewing identity may manage this room's AI participants. */
+    readonly canManageAgents?: boolean;
 }
 /** Result of one room-management mutation. */
 export interface ChatroomRoomManageResponse {
@@ -277,6 +311,11 @@ export interface ChatroomSessionResponse {
     readonly rooms: readonly ChatroomInfo[];
     /** Native Solo Sessions owned by the authenticated identity. */
     readonly soloSessionIds: readonly string[];
+    /** Server-checked native descendant access requested by the navigation guard. */
+    readonly nativeSessionAccess?: {
+        readonly sessionId: string;
+        readonly allowed: boolean;
+    };
     /** Configured legacy room retained during rolling browser bundle upgrades after authentication. */
     readonly room?: ChatroomInfo;
 }
@@ -363,6 +402,8 @@ export type ChatroomPromptContentPart = {
 };
 /** Browser submission routed through human-first room admission. */
 export interface ChatroomPromptRequest {
+    /** Native optimistic-message identity, echoed by the persisted user message. */
+    readonly requestId?: string;
     readonly roomId: string;
     readonly mode: 'queue' | 'steer';
     readonly content: readonly ChatroomPromptContentPart[];
@@ -434,6 +475,8 @@ export interface ChatroomThreadPreview {
 }
 /** Branch text admission request. */
 export interface ChatroomThreadPromptRequest {
+    /** Native optimistic-message identity, echoed by the persisted user message. */
+    readonly requestId?: string;
     readonly threadId: string;
     readonly mode: 'queue' | 'steer';
     readonly content: readonly ChatroomPromptContentPart[];

@@ -1,4 +1,5 @@
-import type { IApiClient } from '@deepseek-ai/dsh-client-connection/client'
+import type { ConnectionHandle, ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
+import type { SessionPromptRequest } from '@deepseek-ai/dsh-api-session-controller/types'
 import { identifyPrompt, isSlashCommand } from '../message.js'
 import type { ChatroomPromptContentPart } from '../types.js'
 import {
@@ -12,11 +13,16 @@ export { identifyPrompt }
 
 /** Route shared room chat through human-first admission while preserving native slash commands. */
 export function installNativePromptIdentity(
-  api: IApiClient,
+  connection: ConnectionHandle,
   store: ChatroomClientStore,
 ): () => void {
-  const original = api.sessions.prompt
-  const wrapped: IApiClient['sessions']['prompt'] = async (payload, signal) => {
+  const rpc = connection.rpc
+  const previous = rpc.call
+  const original = previous.bind(rpc)
+  const wrapped: ClientConnectionRpc['call'] = async (channel, endpoint, wire, signal) => {
+    if (channel !== '/api' || endpoint !== 'session/prompt' || !isRecord(wire)
+      || !isRecord(wire.args) || !isRecord(wire.args.request)) return await original(channel, endpoint, wire, signal)
+    const payload = wire.args.request as unknown as SessionPromptRequest
     const sessionId = String(payload.sessionId)
     const slashCommand = isSlashCommand(payload.content as readonly ChatroomPromptContentPart[])
     let target = typeof store.agentTargetForSession === 'function'
@@ -30,7 +36,7 @@ export function installNativePromptIdentity(
     }
     if (target === undefined && slashCommand) {
       if (!store.canPromptNativeSession(sessionId)) throw new Error('会话不存在或你无权访问。')
-      return await original(payload, signal)
+      return await original(channel, endpoint, wire, signal)
     }
     const newGroup = target === undefined && typeof store.newSessionMode === 'function'
       && store.newSessionMode(sessionId) === 'group'
@@ -39,10 +45,10 @@ export function installNativePromptIdentity(
     }
     if (target === undefined) {
       if (!store.canPromptNativeSession(sessionId)) throw new Error('会话不存在或你无权访问。')
-      return await original(payload, signal)
+      return await original(channel, endpoint, wire, signal)
     }
     if (slashCommand) {
-      return await original(payload, signal)
+      return await original(channel, endpoint, wire, signal)
     }
     if (store.getSnapshot().identity === undefined) {
       throw new Error('请先选择聊天室身份。')
@@ -63,6 +69,7 @@ export function installNativePromptIdentity(
       await submitThreadPrompt({
         threadId: target.threadId,
         mode: payload.mode,
+        ...(payload.requestId === undefined ? {} : { requestId: payload.requestId }),
         content,
         ...(composition.reply === undefined ? {} : { reply: composition.reply }),
       }, signal)
@@ -70,18 +77,22 @@ export function installNativePromptIdentity(
       await submitRoomPrompt({
         roomId: target.room.id,
         mode: payload.mode,
+        ...(payload.requestId === undefined ? {} : { requestId: payload.requestId }),
         content,
         ...(composition.reply === undefined ? {} : { reply: composition.reply }),
       }, signal)
     }
     store.completeComposition(composition)
     return {
-      rpcId: 'chatroom-human-first' as never,
-      result: { ok: true, value: { accepted: true } },
+      ok: true, value: { accepted: true },
     }
   }
-  api.sessions.prompt = wrapped
+  rpc.call = wrapped
   return () => {
-    if (api.sessions.prompt === wrapped) api.sessions.prompt = original
+    if (rpc.call === wrapped) rpc.call = previous
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }

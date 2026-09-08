@@ -9,7 +9,7 @@ export { Config, ChatroomHttpController, ChatroomRuntime };
 export type { ChatroomConfig as ConfigType };
 export type * from './types.js';
 /** Register the room API immediately and initialize storage/Agent work in the background. */
-export declare function apply(ctx: Context, config: ChatroomConfig): void;
+export declare function apply(ctx: Context, config: ChatroomConfig): Promise<void>;
 declare const _default: {
     name: string;
     inject: string[];

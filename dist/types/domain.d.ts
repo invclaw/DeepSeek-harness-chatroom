@@ -82,6 +82,19 @@ export interface AutomationSettingsRecord {
     readonly controllerPrompt?: string;
     readonly updatedAt: number;
 }
+/** Durable room participant AI identity. Kept separate from native Harness subagents. */
+export interface RoomAgentProfileRecord {
+    readonly id: string;
+    readonly roomId: string;
+    readonly name: string;
+    readonly role: string;
+    readonly provider: string;
+    readonly model: string;
+    readonly reasoningEffort?: string;
+    readonly enabled: boolean;
+    readonly createdAt: number;
+    readonly updatedAt: number;
+}
 export interface MemberRecord {
     readonly roomId: string;
     readonly participantId: string;
@@ -207,6 +220,18 @@ export interface DirectMessageRecord {
     readonly card?: ChatroomExternalCard;
     readonly createdAt: number;
 }
+/**
+ * Plugin-owned persistence unit for room-level AI participants, declared apart
+ * from the legacy chatroom domain: the unit name becomes the physical storage
+ * file, so these records must never join an existing domain's table set.
+ */
+export declare const chatroomAgentDomainSpec: {
+    name: string;
+    version: number;
+    tables: {
+        room_agent_profiles: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, RoomAgentProfileRecord>;
+    };
+};
 /** Durable identities, rooms, and the version-zero message table retained for on-disk compatibility. */
 export declare const chatroomDomainSpec: {
     name: string;

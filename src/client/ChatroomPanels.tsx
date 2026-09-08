@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { chatroomAvatar, fallbackAvatarId } from '../avatars.js'
 import type {
+  ChatroomAgentProfile,
   ChatroomForwardItem,
   ChatroomNotification,
   ChatroomReplyReference,
@@ -29,6 +30,17 @@ import { ChatroomMessageFrame } from './ChatroomMessageFrame.js'
 
 interface ChatroomPanelsProps extends ChatroomAccountPanelProps {
   closeMembers(): void
+  closeAgents(): void
+  saveAgentProfile?(input: {
+    readonly profileId?: string
+    readonly name: string
+    readonly role: string
+    readonly provider: string
+    readonly model: string
+    readonly reasoningEffort?: string
+    readonly enabled: boolean
+  }): Promise<boolean>
+  deleteAgentProfile?(profileId: string): Promise<void>
   renameRoom?(title: string): Promise<boolean>
   setMemberRole?(participantId: string, role: 'admin' | 'member'): Promise<boolean>
   addRoomMembers?(participantIds: readonly string[]): Promise<boolean>
@@ -61,6 +73,7 @@ export function ChatroomPanels(props: ChatroomPanelsProps): JSX.Element {
       <ToastStack toasts={props.room.toasts} dismiss={props.dismissToast} />
       <ChatroomAccountPanels {...props} />
       {props.room.membersOpen && <MemberPanel {...props} />}
+      {props.room.agentsOpen && <AgentProfilesPanel {...props} />}
       {props.room.thread !== undefined && <ThreadPanel
         {...props}
         thread={props.room.thread}
@@ -73,8 +86,110 @@ export function ChatroomPanels(props: ChatroomPanelsProps): JSX.Element {
   )
 }
 
-function SearchPanel(props: ChatroomPanelsProps): JSX.Element {
-  const [query, setQuery] = useState(props.room.searchQuery)
+/** Room AI participant manager: every profile owns its model routing and durable Session. */
+export function AgentProfilesPanel(props: ChatroomPanelsProps): JSX.Element {
+  const view = props.room.agentProfiles
+  const profiles = view?.profiles ?? []
+  const models = view?.models ?? []
+  const [editing, setEditing] = useState<ChatroomAgentProfile | undefined>()
+  const [name, setName] = useState('')
+  const [role, setRole] = useState('')
+  const [modelSelection, setModelSelection] = useState('')
+  const [effort, setEffort] = useState('')
+  const [enabled, setEnabled] = useState(true)
+  const canManage = view?.canManage ?? false
+  const effectiveSelection = modelSelection !== '' ? modelSelection
+    : models[0] === undefined ? '' : modelKey(models[0].provider, models[0].model)
+  const reset = (): void => {
+    setEditing(undefined)
+    setName('')
+    setRole('')
+    setModelSelection('')
+    setEffort('')
+    setEnabled(true)
+  }
+  const startEdit = (profile: ChatroomAgentProfile): void => {
+    setEditing(profile)
+    setName(profile.name)
+    setRole(profile.role)
+    setModelSelection(modelKey(profile.provider, profile.model))
+    setEffort(profile.reasoningEffort ?? '')
+    setEnabled(profile.enabled)
+  }
+  return (
+    <aside className="dsh-chatroom-member-card" data-testid="chatroom-agents" aria-label="AI 成员">
+      <button className="dsh-chatroom-close" aria-label="关闭 AI 成员管理" type="button" onClick={props.closeAgents}>×</button>
+      <h2>AI 成员</h2>
+      <p>{props.room.room?.title} · {profiles.length} 个 AI 成员 · 在消息里 @名字 唤起</p>
+      {canManage && <form className="dsh-chatroom-manage-title" onSubmit={async (event) => {
+        event.preventDefault()
+        const model = models.find(item => modelKey(item.provider, item.model) === effectiveSelection)
+        if (model === undefined || name.trim() === '' || role.trim() === '') return
+        if (await props.saveAgentProfile?.({
+          ...(editing === undefined ? {} : { profileId: editing.id }),
+          name: name.trim(),
+          role: role.trim(),
+          provider: model.provider,
+          model: model.model,
+          ...(effort.trim() === '' ? {} : { reasoningEffort: effort.trim() }),
+          enabled,
+        })) reset()
+      }}>
+        <label>名称<input value={name} maxLength={80} aria-label="AI 成员名称" onChange={event => { setName(event.target.value) }} /></label>
+        <label>职责<input value={role} maxLength={120} aria-label="AI 成员职责" placeholder="例如：代码评审员" onChange={event => { setRole(event.target.value) }} /></label>
+        <label>模型<select
+          value={effectiveSelection}
+          disabled={props.room.agentBusy || models.length === 0}
+          aria-label="AI 成员模型"
+          onChange={event => { setModelSelection(event.target.value) }}
+        >{models.map(model => <option key={modelKey(model.provider, model.model)} value={modelKey(model.provider, model.model)}>{model.label}</option>)}</select></label>
+        <label>推理强度<input value={effort} aria-label="AI 成员推理强度" placeholder="留空为默认，如 low / high" onChange={event => { setEffort(event.target.value) }} /></label>
+        <label className="dsh-chatroom-switch">
+          <input type="checkbox" aria-label="启用 AI 成员" checked={enabled} onChange={event => { setEnabled(event.target.checked) }} />
+          <span aria-hidden />
+        </label>
+        <button type="submit" disabled={props.room.agentBusy || name.trim() === '' || role.trim() === '' || effectiveSelection === ''}>
+          {editing === undefined ? '添加 AI 成员' : '保存修改'}
+        </button>
+        {editing !== undefined && <button type="button" onClick={reset}>取消编辑</button>}
+      </form>}
+      <div className="dsh-chatroom-member-list">
+        {profiles.map(profile => (
+          <div className="dsh-chatroom-member" key={profile.id}>
+            <span className="dsh-chatroom-member-avatar">{profile.name.slice(0, 1)}</span>
+            <span><strong>{profile.name} <em>{profile.enabled ? '' : '已停用'}</em></strong><small>{profile.role} · {profile.provider} · {profile.model}{profile.reasoningEffort === undefined ? '' : ` · ${profile.reasoningEffort}`}</small></span>
+            {canManage && <span className="dsh-chatroom-agent-profile-actions">
+              <button type="button" disabled={props.room.agentBusy} onClick={() => { startEdit(profile) }}>编辑</button>
+              <button
+                type="button"
+                disabled={props.room.agentBusy}
+                onClick={() => { void props.saveAgentProfile?.({
+                  profileId: profile.id,
+                  name: profile.name,
+                  role: profile.role,
+                  provider: profile.provider,
+                  model: profile.model,
+                  ...(profile.reasoningEffort === undefined ? {} : { reasoningEffort: profile.reasoningEffort }),
+                  enabled: !profile.enabled,
+                }) }}
+              >{profile.enabled ? '停用' : '启用'}</button>
+              <button type="button" disabled={props.room.agentBusy} onClick={() => { void props.deleteAgentProfile?.(profile.id) }}>删除</button>
+            </span>}
+          </div>
+        ))}
+        {profiles.length === 0 && <p>{canManage ? '还没有 AI 成员，用上面的表单添加第一个。' : '本群没有启用中的 AI 成员。'}</p>}
+      </div>
+      {!canManage && <small>只有群主和管理员可以修改 AI 成员。</small>}
+      {props.room.agentError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.agentError}</div>}
+    </aside>
+  )
+}
+
+function modelKey(provider: string, model: string): string {
+  return `${provider}\u0000${model}`
+}
+
+function SearchPanel(props: ChatroomPanelsProps): JSX.Element {  const [query, setQuery] = useState(props.room.searchQuery)
   useEffect(() => {
     const close = (event: KeyboardEvent) => { if (event.key === 'Escape') props.closeSearch() }
     document.addEventListener('keydown', close)

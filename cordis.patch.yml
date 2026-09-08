@@ -1,5 +1,8 @@
 - id: connection
   disabled: true
+- id: typert-gateway
+  isolate:
+    webServer: true
 - insert:
     - id: chatroom
       name: deepseek-harness-chatroom

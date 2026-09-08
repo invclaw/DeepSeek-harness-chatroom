@@ -5,7 +5,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-attachment'
-import type {} from '@deepseek-ai/dsh-host-apiproxy'
+import type {} from '@deepseek-ai/dsh-api-gateway'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
@@ -26,7 +26,9 @@ export const inject = [
   'agentPresets',
   'agents',
   'attachments',
-  'apiProxy',
+  'typert',
+  'typertGateway',
+  'credentials',
   'llm',
   'sessionPersistence',
   'sessions',
@@ -42,13 +44,13 @@ export type { ChatroomConfig as ConfigType }
 export type * from './types.js'
 
 /** Register the room API immediately and initialize storage/Agent work in the background. */
-export function apply(ctx: Context, config: ChatroomConfig): void {
+export async function apply(ctx: Context, config: ChatroomConfig): Promise<void> {
   validateConfig(config)
   const runtime = new ChatroomRuntime(ctx, config)
+  const closeGateway = await registerNativeGateway(ctx, runtime, config)
   const http = new ChatroomHttpController(ctx, runtime, config)
   const log = ctx.logger('deepseek-harness-chatroom')
   ctx.effect(() => {
-    const closeGateway = registerNativeGateway(ctx, runtime, config)
     const unregister = CHATROOM_API_PREFIXES.map(path => ctx.webServer.register({
       kind: 'prefix' as const,
       path,

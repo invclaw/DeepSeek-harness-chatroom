@@ -126,6 +126,7 @@ export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
   const active = target?.room
   const input = useRef<HTMLInputElement>(null)
   const [emojiOpen, setEmojiOpen] = useState(false)
+  const draft = props.useInput(state => state.draft)
   if (active === undefined) return null
   return (
     <div className="dsh-chatroom-composer-actions">
@@ -133,7 +134,7 @@ export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
         open={emojiOpen}
         toggle={() => { setEmojiOpen(open => !open) }}
         close={() => { setEmojiOpen(false) }}
-        pick={emoji => { props.inputActions.setDraft(`${props.input.draft}${emoji}`) }}
+        pick={emoji => { props.inputActions.setDraft(`${draft}${emoji}`) }}
       />
       <button
         className="dsh-chatroom-file-button"
@@ -164,6 +165,7 @@ export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
 /** Native-composer controls for stopping work or rotating the room Session. */
 export function ChatroomSessionControls(props: ComposerRightProps): JSX.Element | null {
   const room = props.useChatroom(snapshot => snapshot)
+  const running = props.useSession(snapshot => snapshot.running)
   const target = props.resolveTarget(String(props.sessionId))
   if (target === undefined) return null
   return (
@@ -171,7 +173,7 @@ export function ChatroomSessionControls(props: ComposerRightProps): JSX.Element 
       {target.kind === 'room' && <>
         <button
           type="button"
-          disabled={!props.session.running || room.sessionControlBusy}
+          disabled={!running || room.sessionControlBusy}
           onClick={() => { void props.stopRoomSession(target.room.id) }}
         >■ 停止</button>
         <button

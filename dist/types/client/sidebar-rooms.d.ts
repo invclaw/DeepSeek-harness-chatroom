@@ -1,4 +1,5 @@
-import type { ISessions, SessionId, SessionListState } from '@deepseek-ai/dsh-client-runtime/client';
+import type { ISessions, SessionListState } from '@deepseek-ai/dsh-api-session-controller/client';
+import type { SessionId } from '@deepseek-ai/dsh-session/types';
 import type { ChatroomClientStore, ChatroomView } from './store.js';
 type SidebarSessionList = Pick<SessionListState, 'byId'>;
 /** Decorate native Workspace Session rows without replacing the Harness sidebar. */

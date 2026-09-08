@@ -25,6 +25,17 @@ interface ChatroomEntryInjected {
   resetIdentity(): Promise<void>
   retry(): Promise<void>
   closeMembers(): void
+  closeAgents(): void
+  saveAgentProfile?(input: {
+    readonly profileId?: string
+    readonly name: string
+    readonly role: string
+    readonly provider: string
+    readonly model: string
+    readonly reasoningEffort?: string
+    readonly enabled: boolean
+  }): Promise<boolean>
+  deleteAgentProfile?(profileId: string): Promise<void>
   renameRoom?(title: string): Promise<boolean>
   setMemberRole?(participantId: string, role: 'admin' | 'member'): Promise<boolean>
   addRoomMembers?(participantIds: readonly string[]): Promise<boolean>

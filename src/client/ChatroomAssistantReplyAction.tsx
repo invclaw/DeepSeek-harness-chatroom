@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { AssistantMessageNode } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {
   ChatroomForwardContentPart,
   ChatroomForwardItem,
@@ -39,7 +40,7 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
   const target = props.resolveTarget?.(String(props.sessionId))
     ?? (directRoom === undefined ? undefined : { kind: 'room' as const, room: directRoom })
   const room = target?.room
-  const assistant = props.useSession(snapshot => snapshot.nodes.find(node =>
+  const assistant: AssistantMessageNode | undefined = props.useChat(snapshot => snapshot.legacy.nodes.find((node): node is AssistantMessageNode =>
     node.kind === 'assistant' && node.messageId === props.messageId))
   const rootRef = useRef<HTMLDivElement>(null)
   const menu = useChatroomMessageMenu()

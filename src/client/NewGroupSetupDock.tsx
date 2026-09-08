@@ -17,7 +17,7 @@ export function NewGroupSetupDock(props: NewGroupSetupDockProps): JSX.Element | 
   const view = props.useChatroom(snapshot => snapshot)
   const mode = props.newSessionMode(String(props.sessionId))
   const [nativeHeroBody, setNativeHeroBody] = useState<HTMLElement>()
-  const blank = props.session.composerPhase === 'blank' && props.session.nodes.length === 0
+  const blank = props.useSession(snapshot => snapshot.blank)
 
   useEffect(() => {
     if (blank && mode === undefined) props.registerNewSession(String(props.sessionId))

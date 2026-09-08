@@ -1,9 +1,9 @@
 /** Browser half of the AI chatroom plugin. */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client';
+import type { Context as ClientContext } from '@deepseek-ai/cordis';
 import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client';
 import { ChatroomClientStore } from './store.js';
 export declare const inject: string[];
-/** Start the native browser connection before installing its chatroom consumers. */
+/** Consume the native connection and UI services materialized by the host. */
 export declare function apply(ctx: ClientContext): void;
 /** Let RC8's shared settings mirror use the authenticated plugin carrier in a remote browser. */
 export declare function activateRemoteSettingsMirror(settingsScope: unknown): () => void;

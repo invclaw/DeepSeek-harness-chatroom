@@ -4,9 +4,10 @@ import { type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
 import { ChatroomAuth } from './auth.js';
 import { type ChatroomAgentAction, type ChatroomAgentActionInput } from './agent-tools.js';
 import type { Config } from './config.js';
+import { type RoomAgentProfileRecord } from './domain.js';
 import { type ChatroomReactionEmoji } from './reactions.js';
 import { type WecomAuthorizationState } from './wecom.js';
-import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomDocumentCard, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMeetingCard, ChatroomMeetingSummary, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomSearchResponse, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
+import type { ChatroomAgentProfileInput, ChatroomAgentProfilesView, ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDirectMessage, ChatroomDirectResponse, ChatroomDocumentCard, ChatroomFileReference, ChatroomForwardItem, ChatroomIdentity, ChatroomImageReference, ChatroomInfo, ChatroomMeetingCard, ChatroomMeetingSummary, ChatroomMember, ChatroomPromptContentPart, ChatroomPromptResponse, ChatroomReaction, ChatroomRecall, ChatroomReplyReference, ChatroomSearchResponse, ChatroomRoomInviteCandidate, ChatroomThreadResponse, ChatroomThreadRoot } from './types.js';
 /** Runtime validation failure safe to return to a browser. */
 export declare class ChatroomInputError extends Error {
 }
@@ -16,6 +17,7 @@ export declare class ChatroomRuntime {
     readonly config: Config;
     private readonly log;
     private domain;
+    private agentDomain;
     private archive;
     private inputs;
     private readonly inputCommits;
@@ -24,6 +26,7 @@ export declare class ChatroomRuntime {
     private roomPreferences;
     private soloSessions;
     private automationSettings;
+    private roomAgentProfiles;
     private files;
     private members;
     private threads;
@@ -58,6 +61,18 @@ export declare class ChatroomRuntime {
     roomsFor(identity?: ChatroomIdentity): readonly ChatroomInfo[];
     /** Global automatic-response settings and the available controller-model catalog. */
     automationOverview(canManage: boolean): Promise<ChatroomAutomationOverview>;
+    /** Read durable room-level AI participants. These are independent of native subagent UI. */
+    roomAgentProfilesFor(roomId: string): readonly RoomAgentProfileRecord[];
+    /** Room AI participant roster plus, for managers, the configurable model catalog. */
+    agentProfilesOverview(roomId: string, identity: ChatroomIdentity): Promise<ChatroomAgentProfilesView>;
+    /** Create one room AI participant in the plugin-independent agent storage unit. */
+    createRoomAgentProfile(roomId: string, identity: ChatroomIdentity, input: ChatroomAgentProfileInput): Promise<RoomAgentProfileRecord>;
+    /** Replace one room AI participant; changing model routing releases the live agent for re-creation. */
+    updateRoomAgentProfile(roomId: string, profileId: string, identity: ChatroomIdentity, input: ChatroomAgentProfileInput): Promise<RoomAgentProfileRecord>;
+    /** Remove one room AI participant and release its live agent; its durable Session history is left untouched. */
+    deleteRoomAgentProfile(roomId: string, profileId: string, identity: ChatroomIdentity): Promise<void>;
+    private validateRoomAgentProfile;
+    private modelCatalog;
     /** Validate and persist the controller model plus both chatroom prompt roles. */
     updateAutomationSettings(provider: string, model: string, mainAgentPrompt: string, controllerPrompt: string, meetingSummaryProvider?: string, meetingSummaryModel?: string): Promise<void>;
     /** Current member roster for one room-management response. */
@@ -130,9 +145,11 @@ export declare class ChatroomRuntime {
     /** Attribute a native fork to its creator before returning the child id to the browser. */
     ownNativeFork(sessionId: string, identity: ChatroomIdentity): Promise<void>;
     /** Admit native group input through the same authenticated path as the chatroom composer. */
-    submitNativeSession(sessionId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer'): Promise<boolean>;
+    submitNativeSession(sessionId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', requestId?: string): Promise<boolean>;
     /** Adopt one native Harness Session as a shared room, once, across concurrent browsers. */
     ensureSessionRoom(sessionId: string, title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
+    /** New groups must never inherit native session placeholder titles (workspace name, dsh-chatroom:<id>). */
+    private defaultSessionRoomTitle;
     private createSessionRoom;
     /** Activate an existing room and return its public metadata. */
     selectRoom(roomId: string, identity?: ChatroomIdentity): Promise<ChatroomInfo>;
@@ -177,7 +194,7 @@ export declare class ChatroomRuntime {
     /** Add active platform accounts to a room as ordinary members. */
     addRoomMembers(roomId: string, participantIds: readonly string[], identity: ChatroomIdentity): Promise<readonly ChatroomMember[]>;
     /** Append human chat immediately and evaluate optional automatic responses in a separate queue. */
-    submit(roomId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
+    submit(roomId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference, requestId?: string): Promise<ChatroomPromptResponse>;
     /** Guide, remove, or take back one queued AI prompt before the Agent claims it. */
     updateQueuedPrompt(target: {
         readonly roomId: string;
@@ -232,7 +249,7 @@ export declare class ChatroomRuntime {
     openThread(roomId: string, identity: ChatroomIdentity, root: ChatroomThreadRoot): Promise<ChatroomThreadResponse>;
     /** Append one branch message immediately and evaluate optional automatic responses in a separate queue. */
     submitThread(threadId: string, identity: ChatroomIdentity, text: string, reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
-    submitThread(threadId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
+    submitThread(threadId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference, requestId?: string): Promise<ChatroomPromptResponse>;
     /** Project committed AI output into its parent room or branch stream. */
     handleSessionEvent(session: Session, event: SessionEvent): void;
     private createThread;
@@ -271,6 +288,17 @@ export declare class ChatroomRuntime {
     private activateSharedSession;
     private ensureRoomTitle;
     private acquireAgent;
+    /** Rooms the identity may manage AI participants in (super-admin: every room). */
+    manageableRooms(identity: ChatroomIdentity): readonly ChatroomInfo[];
+    private enabledRoomAgentProfiles;
+    /** Durable Session id owning one profile's private context: isolation is one Session per room + agent. */
+    private roomAgentSessionId;
+    private ensureRoomAgent;
+    private activateRoomAgent;
+    /** Fan out one human message to every @-mentioned room AI participant; one failure never blocks the others. */
+    private dispatchRoomAgentMentions;
+    /** Project one room AI participant utterance into the shared room message stream under its own name. */
+    private projectRoomAgentMessage;
     private setupAgentContext;
     private augmentChatroomAgentContext;
     private initiatingIdentity;
@@ -309,6 +337,10 @@ export declare class ChatroomRuntime {
     private assertReady;
     private requireRoom;
     private projectRoom;
+    /** Whether this identity may manage the room's AI participants (super-admin, owner, or admin). */
+    private canManageRoomAgents;
+    /** Room AI participant access: super-admin may manage any room; others must be a managing member. */
+    private assertRoomAgentAccess;
     private roomPinned;
     private defaultAutomationSettings;
     private resolvedAutomationSettings;
@@ -333,6 +365,7 @@ export declare class ChatroomRuntime {
     private requireRoomPreferences;
     private requireSoloSessions;
     private requireAutomationSettings;
+    private requireRoomAgentProfiles;
     private requireArchive;
     private requireFiles;
     private requireMembers;
@@ -353,4 +386,9 @@ export declare class ChatroomRuntime {
     private isRoomMember;
     private roomMemberCount;
 }
+/** Resolve one plugin-managed room AI participant Session id back to its room and profile. */
+export declare function parseRoomAgentSessionId(sessionId: string): {
+    roomId: string;
+    profileId: string;
+} | undefined;
 //# sourceMappingURL=room.d.ts.map

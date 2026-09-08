@@ -24,18 +24,18 @@ describe('chatroom mention source', () => {
     const signal = new AbortController().signal
 
     await expect(source.candidates({ sessionId: 'shared' as never }, {
-      query: '', position: 'inline', signal,
+      query: '', position: 'inline', drilled: false, signal,
     })).resolves.toMatchObject([
-      { name: 'DeepSeek（AI 助手）', icon: '✦', description: '提及后回复' },
+      { name: 'DeepSeek（AI 助手）', hint: '✦', description: '提及后回复' },
     ])
     await expect(memberSource.candidates({ sessionId: 'shared' as never }, {
-      query: '', position: 'inline', signal,
+      query: '', position: 'inline', drilled: false, signal,
     })).resolves.toMatchObject([
       { name: 'Bob', description: '在线成员' },
       { name: 'Carol', description: '群成员' },
     ])
     await expect(source.candidates({ sessionId: 'ordinary' as never }, {
-      query: '', position: 'inline', signal,
+      query: '', position: 'inline', drilled: false, signal,
     })).resolves.toEqual([])
     expect(source.name).toBe('AI 助手')
     expect(memberSource.name).toBe('群聊成员')
@@ -64,12 +64,12 @@ describe('chatroom mention source', () => {
     const memberSource = createChatroomMemberSource(store)
 
     await expect(source.candidates({ sessionId: 'new-group' as never }, {
-      query: '', position: 'inline', signal: new AbortController().signal,
+      query: '', position: 'inline', drilled: false, signal: new AbortController().signal,
     })).resolves.toMatchObject([
       { name: 'DeepSeek（AI 助手）', description: '创建群聊后立即回复' },
     ])
     await expect(memberSource.candidates({ sessionId: 'new-group' as never }, {
-      query: '', position: 'inline', signal: new AbortController().signal,
+      query: '', position: 'inline', drilled: false, signal: new AbortController().signal,
     })).resolves.toMatchObject([
       { name: 'Bob', description: '创建群聊时自动邀请 · @bob' },
     ])

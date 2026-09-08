@@ -140,6 +140,20 @@ export interface AutomationSettingsRecord {
   readonly updatedAt: number
 }
 
+/** Durable room participant AI identity. Kept separate from native Harness subagents. */
+export interface RoomAgentProfileRecord {
+  readonly id: string
+  readonly roomId: string
+  readonly name: string
+  readonly role: string
+  readonly provider: string
+  readonly model: string
+  readonly reasoningEffort?: string
+  readonly enabled: boolean
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
 export interface MemberRecord {
   readonly roomId: string
   readonly participantId: string
@@ -355,6 +369,32 @@ const automationSettingsSchema = z.object({
   controllerPrompt: z.string().optional(),
   updatedAt: nonNegativeSafeInteger,
 }) as z.ZodType<AutomationSettingsRecord>
+
+const roomAgentProfileSchema = z.object({
+  id: z.string().min(1),
+  roomId: z.string().min(1),
+  name: z.string().min(1).max(80),
+  role: z.string().min(1).max(120),
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  reasoningEffort: z.string().min(1).optional(),
+  enabled: z.boolean(),
+  createdAt: nonNegativeSafeInteger,
+  updatedAt: nonNegativeSafeInteger,
+}) as z.ZodType<RoomAgentProfileRecord>
+
+/**
+ * Plugin-owned persistence unit for room-level AI participants, declared apart
+ * from the legacy chatroom domain: the unit name becomes the physical storage
+ * file, so these records must never join an existing domain's table set.
+ */
+export const chatroomAgentDomainSpec = defineDomain({
+  name: 'chatroom_agents',
+  version: 0,
+  tables: {
+    room_agent_profiles: domainTable<string, RoomAgentProfileRecord>(roomAgentProfileSchema),
+  },
+})
 
 const memberSchema = z.object({
   roomId: z.string().min(1),

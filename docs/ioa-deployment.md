@@ -26,7 +26,9 @@ For rollback, clear the avatar template and switch to `authMode: hybrid` or `loc
 
 ## Native transport authorization
 
-The Chatroom bundle disables the profile's original `connection` entry and mounts the native `/api` HTTP routes and `/api/events.mux` and `/api/events.host` WebSocket upgrades itself. Keep this replacement enabled when upgrading; a second native transport must not expose an unguarded route. Use Harness 0.1.1-rc.2 or later with this bundle.
+This local `1.4.4-codex.rc1.4` build is pinned to Harness `0.1.2-rc.1`; it is not an upstream release. The Chatroom bundle disables the profile's original `connection` entry and mounts account-authorized `/api` HTTP routes and `/api/remote.mux`. The official Gateway remains active with an isolated `webServer`, preserving its protocol and client module without an unguarded WebSocket listener. Do not re-enable a second native transport or install older Harness peers alongside this build. Other Harness cohorts require a fresh compatibility check.
+
+For a shared LAN installation, use a dedicated `DSH_HOME` and workspace rather than exposing a private profile's Sessions, MCP credentials, and unrelated plugin APIs. Each person signs in with a distinct account; the group owner adds existing accounts from Group management. A trusted-LAN HTTP endpoint does not encrypt passwords or messages. Use a TLS reverse proxy and an HTTPS `authPublicOrigin` for untrusted networks or Internet access.
 
 An edge `forward_auth` check establishes login, not room membership. Chatroom verifies the account and Session ownership on HTTP requests and outgoing WebSocket frames, including expiry and disabled-account revocation. The edge should still protect private static assets and other plugins' endpoints. Keep the Host bound to loopback behind the authenticated TLS proxy.
 

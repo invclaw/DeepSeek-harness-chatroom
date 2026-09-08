@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentType } from 'react'
-import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { ChatroomAgentTarget } from './store.js'
 import type { ChatroomView } from './store.js'
 import type {
@@ -53,21 +53,21 @@ export function ChatroomAssistantNodeView(props: ChatroomAssistantNodeViewProps)
     ? finalNode.messageId
     : undefined
   const standaloneMeetingSummary = standaloneMeetingSummaryMessageId !== undefined
-  const latestAssistant = props.useSession((snapshot) => {
-    const index = snapshot.chat.order.indexOf(props.node.key)
+  const latestAssistant = props.useChat((snapshot) => {
+    const index = snapshot.order.indexOf(props.node.key)
     if (index < 0) return false
-    return snapshot.chat.order.slice(index + 1).every((key) =>
-      snapshot.chat.nodes.get(key)?.kind !== 'assistant-step')
+    return snapshot.order.slice(index + 1).every((key) =>
+      snapshot.nodes.get(key)?.kind !== 'assistant-step')
   })
   const pendingMessages = props.useChatroom(snapshot => target?.kind === 'room' && latestAssistant
     ? snapshot.pendingMessages.filter(message => message.roomId === target.room.id)
     : [])
   const identity = props.useChatroom(snapshot => snapshot.identity)
-  const processSignature = props.useSession((snapshot) => {
+  const processSignature = props.useChat((snapshot) => {
     if (!closing) return ''
     const turn = props.node.data.turn
-    return snapshot.chat.order.flatMap((key) => {
-      const candidate = snapshot.chat.nodes.get(key)
+    return snapshot.order.flatMap((key) => {
+      const candidate = snapshot.nodes.get(key)
       if (candidate === undefined || candidate.key === props.node.key) return []
       const location = candidate.location
       const candidateTurn = location.kind === 'turn' || location.kind === 'step'

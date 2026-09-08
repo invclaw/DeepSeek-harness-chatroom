@@ -2,11 +2,18 @@
 
 import type { ComponentType } from 'react'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
-import type { ClientContext, ISessions, IWorkspaces, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
-import type { ChatNodeViewProps, ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { IWorkspaces } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type { ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import { chatroomAvatar } from '../avatars.js'
 import { ChatroomEntry } from './ChatroomEntry.js'
 import { ChatroomSettingsSection } from './ChatroomAccountPanels.js'
@@ -19,9 +26,9 @@ import {
 } from './ChatroomMessageNodeView.js'
 import { installNativePromptIdentity } from './native-prompt.js'
 import { installNativeMentionAvatarImages } from './mention-avatars.js'
+import { createChatroomAgentProfileSource } from './agent-mention-source.js'
 import { installFreshSessionStart } from './fresh-session.js'
 import { NewGroupSetupDock } from './NewGroupSetupDock.js'
-import { installRemoteConfigurationApi } from './remote-configuration.js'
 import { RoomIdentityAction } from './RoomIdentityAction.js'
 import { installSidebarRoomRows } from './sidebar-rooms.js'
 import { registerChatroomSettingsNavIcon } from './settings-nav-icon.js'
@@ -38,13 +45,13 @@ import {
   stageBranchFrameSession,
 } from './branch-frame.js'
 
-const roomServices = ['connection', 'inputTriggers', 'sessions', 'settingsScope', 'slots', 'workspaces']
+const roomServices = ['connection', 'inputTriggers', 'sessions', 'settingsScope', 'slots', 'workspaces', 'uiWorkspace']
 export const inject: string[] = []
 
-/** Supplied by the build adapter from the pinned native client factory. */
+/** Official client factory supplied by the build, not a second transport implementation. */
 declare const nativeConnection: { apply(ctx: ClientContext): void }
 
-/** Start the native browser connection before installing its chatroom consumers. */
+/** Consume the native connection and UI services materialized by the host. */
 export function apply(ctx: ClientContext): void {
   ctx.plugin({ name: 'chatroom-native-connection', apply: nativeConnection.apply })
   ctx.inject(roomServices, roomCtx => installChatroom(roomCtx))
@@ -69,19 +76,15 @@ function installChatroom(ctx: ClientContext): void {
     sessions.open(sessionId)
     return true
   }, branchFrame)
-  ctx.effect(() => installFreshSessionStart(workspaces, sessions, async (workspaceId) => {
+  ctx.effect(() => installFreshSessionStart(ctx.uiWorkspace, async (workspaceId) => {
     const snapshot = store.getSnapshot()
     if (snapshot.phase === 'loading') throw new Error('chatroom identity is still loading')
     const reservedSessionId = snapshot.auth.enabled ? await store.reserveSoloSession() : undefined
     try {
-      const response = await connection.api.sessions.create({
+      const sessionId = await sessions.create({
         workspaceId,
         ...(reservedSessionId === undefined ? {} : { sessionId: reservedSessionId as SessionId }),
       })
-      if (!response.result.ok) {
-        throw new Error(`new shared session failed: ${response.result.error.code}: ${response.result.error.message}`)
-      }
-      const sessionId = response.result.value.sessionId
       if (reservedSessionId !== undefined && String(sessionId) !== reservedSessionId) {
         throw new Error('native Session id does not match its Solo reservation')
       }
@@ -106,9 +109,8 @@ function installChatroom(ctx: ClientContext): void {
     style.dataset.dshChatroomStyles = ''
     style.textContent = CHATROOM_STYLES
     document.head.append(style)
-    const restoreConfiguration = installRemoteConfigurationApi(connection)
     const restoreSettingsMirror = activateRemoteSettingsMirror(ctx.get('settingsScope'))
-    const restorePrompt = installNativePromptIdentity(connection.api, store)
+    const restorePrompt = installNativePromptIdentity(connection, store)
     const restoreSidebarRoomRows = installSidebarRoomRows(store, sessions)
     const restoreMentionAvatars = installNativeMentionAvatarImages(store)
     let activeBranchFrame = branchFrame
@@ -180,6 +182,7 @@ function installChatroom(ctx: ClientContext): void {
       const phase = store.getSnapshot().phase
       if (phase === synchronizedPhase) return
       synchronizedPhase = phase
+      if (phase === 'ready') connection.reconnect()
       syncSession()
     })
     void store.start().then(async () => {
@@ -196,7 +199,6 @@ function installChatroom(ctx: ClientContext): void {
       restoreMentionAvatars()
       restoreSidebarRoomRows()
       restoreSettingsMirror()
-      restoreConfiguration()
       store.stop()
       style.remove()
       shellObserver?.disconnect()
@@ -209,8 +211,10 @@ function installChatroom(ctx: ClientContext): void {
   }, 'chatroom: browser state and styles')
 
   const aiSource = createChatroomAiSource(store)
+  const agentProfileSource = createChatroomAgentProfileSource(store)
   const memberSource = createChatroomMemberSource(store)
   ctx.effect(() => inputTriggers.registerSource(aiSource), 'chatroom: AI mention source')
+  ctx.effect(() => inputTriggers.registerSource(agentProfileSource), 'chatroom: room AI participant mention source')
   ctx.effect(() => inputTriggers.registerSource(memberSource), 'chatroom: member mention source')
 
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
@@ -233,6 +237,11 @@ function installChatroom(ctx: ClientContext): void {
       resetIdentity: store.resetIdentity,
       retry: store.retry,
       closeMembers: store.closeMembers,
+      openAgents: store.openAgents,
+      closeAgents: store.closeAgents,
+      loadAgentProfiles: store.loadAgentProfiles,
+      saveAgentProfile: store.saveAgentProfile,
+      deleteAgentProfile: store.deleteAgentProfile,
       renameRoom: store.renameRoom,
       setMemberRole: store.setMemberRole,
       addRoomMembers: store.addRoomMembers,
@@ -295,6 +304,10 @@ function installChatroom(ctx: ClientContext): void {
       adminDeleteProvider: store.adminDeleteProvider,
       loadAutomation: store.loadAutomation,
       saveAutomation: store.saveAutomation,
+      loadManageableRooms: store.loadManageableRooms,
+      loadAgentProfiles: store.loadAgentProfiles,
+      saveAgentProfile: store.saveAgentProfile,
+      deleteAgentProfile: store.deleteAgentProfile,
       openDirect: store.openDirect,
       closeDirect: store.closeDirect,
       sendDirect: store.sendDirect,
@@ -323,6 +336,8 @@ function installChatroom(ctx: ClientContext): void {
     inject: () => ({
       hooks: { chatroom: store },
       openMembers: store.openMembers,
+      openAgents: store.openAgents,
+      sessions,
     }),
   }, RoomIdentityAction))
 
@@ -424,7 +439,7 @@ function installChatroom(ctx: ClientContext): void {
       name: 'conversation.chat.node',
       key: 'assistant-step',
       priority: -10,
-      locale: 'conversation',
+      locale: 'chat',
       inject: () => ({
         hooks: { chatroom: store },
         nativeMessageView,
@@ -450,7 +465,7 @@ function installChatroom(ctx: ClientContext): void {
       name: 'conversation.chat.node',
       key: 'user',
       priority: -10,
-      locale: 'conversation',
+      locale: 'chat',
       inject: () => chatroomMessageInjection(store, nativeMessageView),
     }, ChatroomUserMessageNodeView),
   ))
@@ -465,7 +480,7 @@ function installChatroom(ctx: ClientContext): void {
       name: 'conversation.chat.node',
       key: 'steering',
       priority: -10,
-      locale: 'conversation',
+      locale: 'chat',
       inject: () => chatroomMessageInjection(store, nativeMessageView),
     }, ChatroomSteeringMessageNodeView),
   ))
@@ -562,7 +577,7 @@ export function createChatroomAiSource(store: ChatroomClientStore): InputTrigger
       if (room === undefined && !newGroup) return []
       const candidates = [{
         name: aiMentionMenuName(room?.aiDisplayName ?? 'DeepSeek'),
-        icon: '✦',
+        hint: '✦',
         description: room === undefined ? '创建群聊后立即回复' : '提及后回复',
       }]
       const needle = query.toLocaleLowerCase()
@@ -602,14 +617,14 @@ export function createChatroomMemberSource(store: ChatroomClientStore): InputTri
           .filter(peer => peer.participantId !== snapshot.identity?.participantId)
           .map(peer => ({
             name: newGroupMentionName(peer, snapshot.directPeers),
-            icon: chatroomAvatar(peer.avatarId, peer.participantId).emoji,
+            hint: chatroomAvatar(peer.avatarId, peer.participantId).emoji,
             description: `创建群聊时自动邀请 · @${peer.username}`,
           }))
         : snapshot.members
           .filter(member => member.participantId !== snapshot.identity?.participantId)
           .map(member => ({
             name: member.displayName,
-            icon: chatroomAvatar(member.avatarId, member.participantId).emoji,
+            hint: chatroomAvatar(member.avatarId, member.participantId).emoji,
             description: member.online ? '在线成员' : '群成员',
           }))
       const needle = query.toLocaleLowerCase()

@@ -132,9 +132,6 @@ function validateConfig(config) {
   }
 }
 
-// src/http.ts
-import { toFetchHandler } from "@deepseek-ai/dsh-host-apiproxy";
-
 // src/auth.ts
 import {
   createCipheriv,
@@ -986,7 +983,7 @@ async function verifyPassword(password, encoded) {
   return timingSafeEqual(actual, expected);
 }
 function scrypt(password, salt) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     deriveScrypt(password, salt, 32, {
       N: SCRYPT_N,
       r: SCRYPT_R,
@@ -994,7 +991,7 @@ function scrypt(password, salt) {
       maxmem: 64 * 1024 * 1024
     }, (error, derived) => {
       if (error !== null) reject(error);
-      else resolve3(derived);
+      else resolve4(derived);
     });
   });
 }
@@ -1160,7 +1157,7 @@ function matchChatroomApi(pathname) {
 import { parseSessionReferenceText } from "@deepseek-ai/dsh-session-reference";
 import { createHash as createHash4, randomBytes as randomBytes2, randomUUID as randomUUID3 } from "crypto";
 import { basename } from "path";
-import { resolveSessionPreset } from "@deepseek-ai/dsh-agent-presets";
+import { agentPresetProjectionDefinition } from "@deepseek-ai/dsh-agent-presets";
 import { AttachmentError } from "@deepseek-ai/dsh-attachment";
 import { BlockAssembler, createAssistantMessage, createUserMessage as createUserMessage3, freezeMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
@@ -1844,6 +1841,25 @@ var automationSettingsSchema = z2.object({
   controllerPrompt: z2.string().optional(),
   updatedAt: nonNegativeSafeInteger
 });
+var roomAgentProfileSchema = z2.object({
+  id: z2.string().min(1),
+  roomId: z2.string().min(1),
+  name: z2.string().min(1).max(80),
+  role: z2.string().min(1).max(120),
+  provider: z2.string().min(1),
+  model: z2.string().min(1),
+  reasoningEffort: z2.string().min(1).optional(),
+  enabled: z2.boolean(),
+  createdAt: nonNegativeSafeInteger,
+  updatedAt: nonNegativeSafeInteger
+});
+var chatroomAgentDomainSpec = defineDomain({
+  name: "chatroom_agents",
+  version: 0,
+  tables: {
+    room_agent_profiles: domainTable(roomAgentProfileSchema)
+  }
+});
 var memberSchema = z2.object({
   roomId: z2.string().min(1),
   participantId: z2.string().min(1),
@@ -2312,15 +2328,15 @@ var WecomCliClient = class {
       ...process.env,
       ...this.configDirectory === "" ? {} : { WECOM_CLI_CONFIG_DIR: this.configDirectory }
     };
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       const child = spawn(process.execPath, [cli, ...args], {
         env: environment,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true
       });
-      const exited = new Promise((resolve4) => child.once("close", () => {
+      const exited = new Promise((resolve5) => child.once("close", () => {
         this.children.delete(child);
-        resolve4();
+        resolve5();
       }));
       this.children.set(child, exited);
       const cancel = () => {
@@ -2368,7 +2384,7 @@ ${diagnostic}`);
           return;
         }
         try {
-          resolve3(parse2(output));
+          resolve4(parse2(output));
         } catch (error) {
           reject(error instanceof WecomCliError ? error : new WecomCliError("\u4F01\u4E1A\u5FAE\u4FE1 CLI \u6CA1\u6709\u8FD4\u56DE\u6709\u6548\u6570\u636E\u3002", "invalid-output"));
         }
@@ -2476,8 +2492,8 @@ var WecomCliManager = class {
   }
   /** Stop outstanding authorization processes during plugin teardown. */
   async stop() {
-    const exits = [...this.authorizations.values()].map((child) => new Promise((resolve3) => {
-      child.once("close", resolve3);
+    const exits = [...this.authorizations.values()].map((child) => new Promise((resolve4) => {
+      child.once("close", resolve4);
       child.kill("SIGKILL");
     }));
     await Promise.allSettled([...exits, ...[...this.clients.values(), ...this.legacy === void 0 ? [] : [this.legacy]].map((client) => client.stop())]);
@@ -2486,8 +2502,8 @@ var WecomCliManager = class {
   async stopAuthorization(participantId) {
     const child = this.authorizations.get(participantId);
     if (child === void 0) return;
-    await new Promise((resolve3) => {
-      child.once("close", resolve3);
+    await new Promise((resolve4) => {
+      child.once("close", resolve4);
       child.kill("SIGKILL");
     });
     if (this.authorizations.get(participantId) === child) this.authorizations.delete(participantId);
@@ -2650,7 +2666,7 @@ async function fileExists(path) {
   }
 }
 function delay(milliseconds) {
-  return new Promise((resolve3) => setTimeout(resolve3, milliseconds));
+  return new Promise((resolve4) => setTimeout(resolve4, milliseconds));
 }
 function summarizeFailure(value) {
   return [...value.replace(/\s+/gu, " ").trim()].slice(0, 500).join("") || "\u4F01\u4E1A\u5FAE\u4FE1\u64CD\u4F5C\u5931\u8D25\u3002";
@@ -2868,6 +2884,7 @@ var ChatroomRuntime = class {
   config;
   log;
   domain;
+  agentDomain;
   archive;
   inputs;
   inputCommits = /* @__PURE__ */ new Map();
@@ -2876,6 +2893,7 @@ var ChatroomRuntime = class {
   roomPreferences;
   soloSessions;
   automationSettings;
+  roomAgentProfiles;
   files;
   members;
   threads;
@@ -2918,24 +2936,17 @@ var ChatroomRuntime = class {
       const rightPinned = participantId === void 0 ? false : this.roomPinned(right.record.id, participantId);
       return Number(rightPinned) - Number(leftPinned) || roomUpdatedAt(right.record) - roomUpdatedAt(left.record) || left.record.id.localeCompare(right.record.id);
     });
-    return states.map((state) => this.projectRoom(state, participantId));
+    return states.map((state) => this.projectRoom(
+      state,
+      participantId,
+      identity === void 0 ? void 0 : this.canManageRoomAgents(state.record, identity)
+    ));
   }
   /** Global automatic-response settings and the available controller-model catalog. */
   async automationOverview(canManage) {
     const settings = this.resolvedAutomationSettings();
     if (!canManage) return { canManage: false, ...settings, models: [] };
-    const models = (await Promise.all(this.ctx.llm.listProviders().map(async (provider) => {
-      try {
-        return (await this.ctx.llm.listModels(provider.id)).map((model) => ({
-          provider: provider.id,
-          model: model.id,
-          label: `${provider.name} \xB7 ${model.name}`
-        }));
-      } catch (error) {
-        this.log.warn("Unable to list automatic-response models for %s: %s", provider.id, String(error));
-        return [];
-      }
-    }))).flat();
+    const models = await this.modelCatalog("automatic-response");
     if (!models.some((model) => model.provider === settings.provider && model.model === settings.model)) {
       models.unshift({ provider: settings.provider, model: settings.model, label: `${settings.provider} \xB7 ${settings.model}` });
     }
@@ -2947,6 +2958,123 @@ var ChatroomRuntime = class {
       });
     }
     return { canManage: true, ...settings, models };
+  }
+  /** Read durable room-level AI participants. These are independent of native subagent UI. */
+  roomAgentProfilesFor(roomId) {
+    if (this.roomAgentProfiles === void 0) throw new Error("chatroom room agent profile storage is unavailable");
+    const profiles = [];
+    for (const [, profile] of this.roomAgentProfiles.entries()) {
+      if (profile.roomId === roomId) profiles.push(profile);
+    }
+    return profiles;
+  }
+  /** Room AI participant roster plus, for managers, the configurable model catalog. */
+  async agentProfilesOverview(roomId, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    if (!("role" in identity && identity.role === "super-admin")) this.assertRoomAccess(roomId, identity);
+    const canManage = this.canManageRoomAgents(state.record, identity);
+    const profiles = this.roomAgentProfilesFor(roomId);
+    if (!canManage) return { canManage: false, profiles, models: [] };
+    return { canManage: true, profiles, models: await this.modelCatalog("room AI participant") };
+  }
+  /** Create one room AI participant in the plugin-independent agent storage unit. */
+  async createRoomAgentProfile(roomId, identity, input) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    this.assertRoomAgentAccess(roomId, identity);
+    const validated = await this.validateRoomAgentProfile(state, input);
+    const now = Date.now();
+    const record = {
+      id: randomUUID3(),
+      roomId,
+      ...validated,
+      createdAt: now,
+      updatedAt: now
+    };
+    await this.requireRoomAgentProfiles().put(record.id, record);
+    return record;
+  }
+  /** Replace one room AI participant; changing model routing releases the live agent for re-creation. */
+  async updateRoomAgentProfile(roomId, profileId, identity, input) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    this.assertRoomAgentAccess(roomId, identity);
+    const table = this.requireRoomAgentProfiles();
+    const existing = table.get(profileId);
+    if (existing === void 0 || existing.roomId !== roomId) throw new ChatroomInputError("\u8BE5 AI \u6210\u5458\u4E0D\u5B58\u5728\u3002");
+    const validated = await this.validateRoomAgentProfile(state, input, existing);
+    const record = {
+      id: existing.id,
+      roomId,
+      ...validated,
+      createdAt: existing.createdAt,
+      updatedAt: Date.now()
+    };
+    await table.put(record.id, record);
+    const routingChanged = existing.provider !== record.provider || existing.model !== record.model || existing.reasoningEffort !== record.reasoningEffort;
+    if (routingChanged) {
+      const binding = state.agentBindings.get(profileId);
+      state.agentBindings.delete(profileId);
+      state.agentActivations.delete(profileId);
+      await binding?.release();
+    }
+    return record;
+  }
+  /** Remove one room AI participant and release its live agent; its durable Session history is left untouched. */
+  async deleteRoomAgentProfile(roomId, profileId, identity) {
+    this.assertReady();
+    const state = this.requireState(roomId);
+    this.assertRoomAgentAccess(roomId, identity);
+    const table = this.requireRoomAgentProfiles();
+    const existing = table.get(profileId);
+    if (existing === void 0 || existing.roomId !== roomId) return;
+    await table.delete(profileId);
+    const binding = state.agentBindings.get(profileId);
+    state.agentBindings.delete(profileId);
+    state.agentActivations.delete(profileId);
+    await binding?.release();
+  }
+  async validateRoomAgentProfile(state, input, existing) {
+    const name2 = normalizeModelRoute(input.name, "AI \u6210\u5458\u540D\u79F0").trim();
+    if (name2 === "") throw new ChatroomInputError("\u8BF7\u586B\u5199 AI \u6210\u5458\u540D\u79F0\u3002");
+    if (name2.length > 80) throw new ChatroomInputError("AI \u6210\u5458\u540D\u79F0\u8FC7\u957F\u3002");
+    if (name2 === state.record.aiDisplayName || name2 === "AI") throw new ChatroomInputError("\u8BE5\u540D\u79F0\u4E0E\u623F\u95F4\u4E3B Agent \u51B2\u7A81\u3002");
+    if (this.roomAgentProfilesFor(state.record.id).some((profile) => profile.id !== existing?.id && profile.name === name2)) {
+      throw new ChatroomInputError(`\u5DF2\u5B58\u5728\u540D\u4E3A\u300C${name2}\u300D\u7684 AI \u6210\u5458\u3002`);
+    }
+    const role = normalizeModelRoute(input.role, "AI \u6210\u5458\u804C\u8D23").trim();
+    if (role === "") throw new ChatroomInputError("\u8BF7\u586B\u5199 AI \u6210\u5458\u804C\u8D23\u3002");
+    if (role.length > 120) throw new ChatroomInputError("AI \u6210\u5458\u804C\u8D23\u63CF\u8FF0\u8FC7\u957F\u3002");
+    const provider = normalizeModelRoute(input.provider, "\u6A21\u578B\u63D0\u4F9B\u65B9");
+    const model = normalizeModelRoute(input.model, "\u6A21\u578B");
+    const modelInfo = await this.ctx.llm.resolveModelInfo(provider, model);
+    const requestedEffort = input.reasoningEffort?.trim();
+    if (requestedEffort !== void 0 && requestedEffort !== "" && modelInfo.reasoning !== void 0 && !modelInfo.reasoning.efforts.some((effort) => String(effort.id) === requestedEffort)) {
+      throw new ChatroomInputError(`\u6A21\u578B ${JSON.stringify(model)} \u4E0D\u652F\u6301\u63A8\u7406\u5F3A\u5EA6 ${JSON.stringify(requestedEffort)}\u3002`);
+    }
+    return {
+      name: name2,
+      role,
+      provider,
+      model,
+      ...requestedEffort === void 0 || requestedEffort === "" ? {} : { reasoningEffort: requestedEffort },
+      enabled: input.enabled
+    };
+  }
+  async modelCatalog(logLabel) {
+    return (await Promise.all(this.ctx.llm.listProviders().map(async (provider) => {
+      try {
+        return (await this.ctx.llm.listModels(provider.id)).map((model) => ({
+          provider: provider.id,
+          model: model.id,
+          label: `${provider.name} \xB7 ${model.name}`
+        }));
+      } catch (error) {
+        this.log.warn("Unable to list %s models for %s: %s", logLabel, provider.id, String(error));
+        return [];
+      }
+    }))).flat();
   }
   /** Validate and persist the controller model plus both chatroom prompt roles. */
   async updateAutomationSettings(provider, model, mainAgentPrompt, controllerPrompt, meetingSummaryProvider = provider, meetingSummaryModel = model) {
@@ -3005,7 +3133,7 @@ var ChatroomRuntime = class {
     for (const messageId of this.activeTurnDeferredMessageIds.get(sessionId) ?? []) hidden.add(messageId);
     const state = [...this.states.values()].find((candidate) => candidate.record.sessionId === sessionId);
     const resetSeq = state?.record.aiContextResetSeq;
-    const events = state?.binding?.agent.session.events;
+    const events = state?.binding?.agent.session.snapshotEvents();
     if (resetSeq === void 0 || events === void 0) return hidden;
     for (const event of events) {
       if (event.seq > resetSeq) break;
@@ -3101,6 +3229,8 @@ var ChatroomRuntime = class {
   async start() {
     const domain = await this.ctx.storageDomain.open(chatroomDomainSpec);
     this.domain = domain;
+    const agentDomain = await this.ctx.storageDomain.open(chatroomAgentDomainSpec);
+    this.agentDomain = agentDomain;
     this.archive = await openChatArchive(this.config.dataDirectory ?? "");
     this.inputs = domain.table("inputs");
     this.identities = domain.table("identities");
@@ -3108,6 +3238,7 @@ var ChatroomRuntime = class {
     this.roomPreferences = domain.table("room_preferences");
     this.soloSessions = domain.table("solo_sessions");
     this.automationSettings = domain.table("automation_settings");
+    this.roomAgentProfiles = agentDomain.table("room_agent_profiles");
     this.files = domain.table("files");
     this.members = domain.table("members");
     this.threads = domain.table("threads");
@@ -3174,6 +3305,9 @@ var ChatroomRuntime = class {
       await state.activation?.catch(() => void 0);
       await state.binding?.release();
       state.binding = void 0;
+      await Promise.allSettled([...state.agentBindings.values()].map((binding) => binding.release()));
+      state.agentBindings.clear();
+      state.agentActivations.clear();
     }));
     this.states.clear();
     await Promise.allSettled([...this.threadStates.values()].map(async (state) => {
@@ -3188,11 +3322,14 @@ var ChatroomRuntime = class {
     this.archive = void 0;
     await this.domain?.close();
     this.domain = void 0;
+    await this.agentDomain?.close();
+    this.agentDomain = void 0;
     this.identities = void 0;
     this.roomRecords = void 0;
     this.roomPreferences = void 0;
     this.soloSessions = void 0;
     this.automationSettings = void 0;
+    this.roomAgentProfiles = void 0;
     this.files = void 0;
     this.members = void 0;
     this.threads = void 0;
@@ -3354,15 +3491,15 @@ var ChatroomRuntime = class {
     await this.requireSoloSessions().put(sessionId, { sessionId, participantId: identity.participantId, createdAt: Date.now() });
   }
   /** Admit native group input through the same authenticated path as the chatroom composer. */
-  async submitNativeSession(sessionId, identity, content, mode) {
+  async submitNativeSession(sessionId, identity, content, mode, requestId) {
     const room = [...this.states.values()].find((state) => state.record.sessionId === sessionId);
     if (room !== void 0) {
-      await this.submit(room.record.id, identity, content, mode);
+      await this.submit(room.record.id, identity, content, mode, void 0, requestId);
       return true;
     }
     const thread = [...this.threadStates.values()].find((state) => state.record.sessionId === sessionId);
     if (thread === void 0) return false;
-    await this.submitThread(thread.record.id, identity, content, mode);
+    await this.submitThread(thread.record.id, identity, content, mode, void 0, requestId);
     return true;
   }
   /** Adopt one native Harness Session as a shared room, once, across concurrent browsers. */
@@ -3389,6 +3526,17 @@ var ChatroomRuntime = class {
       this.sessionRoomCreations.delete(sessionId);
     }
   }
+  /** New groups must never inherit native session placeholder titles (workspace name, dsh-chatroom:<id>). */
+  defaultSessionRoomTitle(title) {
+    const trimmed = title.trim();
+    const workspaceName = basename(this.config.cwd);
+    if (trimmed === "" || trimmed === workspaceName || trimmed.startsWith("dsh-chatroom:")) {
+      const now = /* @__PURE__ */ new Date();
+      const stamp = `${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      return `\u65B0\u7FA4\u804A ${stamp}`;
+    }
+    return trimmed;
+  }
   async createSessionRoom(sessionId, title, identity) {
     const normalizedSessionId = String(SessionId(sessionId));
     if (this.config.authEnabled && !this.ownsSoloSession(normalizedSessionId, identity)) {
@@ -3404,7 +3552,7 @@ var ChatroomRuntime = class {
     const now = Date.now();
     const record = {
       id,
-      title: normalizeRoomTitle(title, this.config.maxRoomTitleChars),
+      title: normalizeRoomTitle(this.defaultSessionRoomTitle(title), this.config.maxRoomTitleChars),
       aiDisplayName: this.config.aiDisplayName,
       sessionId: normalizedSessionId,
       createdAt: now,
@@ -3463,8 +3611,8 @@ var ChatroomRuntime = class {
     }
     let resolveRotation;
     const predecessor = state.admission;
-    state.admission = new Promise((resolve3) => {
-      resolveRotation = resolve3;
+    state.admission = new Promise((resolve4) => {
+      resolveRotation = resolve4;
     });
     const rotation = (async () => {
       await predecessor;
@@ -3473,7 +3621,7 @@ var ChatroomRuntime = class {
       await previous.agent.whenIdle();
       for (const [id, input] of this.requireInputs().entries()) {
         if (input.sessionId !== String(previous.agent.session.id)) continue;
-        if (!previous.agent.session.events.some((event) => event.type === "user/message" && String(event.data.id) === id)) {
+        if (!previous.agent.session.snapshotEvents().some((event) => event.type === "user/message" && String(event.data.id) === id)) {
           previous.agent.session.append("user/message", freezeMessage(input.message), { surfaceOp: "append" });
         }
         await this.commitInput(previous.agent.session, id);
@@ -3482,7 +3630,7 @@ var ChatroomRuntime = class {
       this.broadcastPendingMessages(state);
       await this.aiContextStartWrites.get(roomId);
       this.archiveRoomSession(state, previous.agent.session);
-      const resetSeq = previous.agent.session.events.at(-1)?.seq;
+      const resetSeq = previous.agent.session.snapshotEvents().at(-1)?.seq;
       const record = await this.requireRoomRecords().update(roomId, (current) => ({
         ...withoutAiContextStart(current),
         ...resetSeq === void 0 ? {} : { aiContextResetSeq: resetSeq },
@@ -3631,7 +3779,7 @@ var ChatroomRuntime = class {
     const state = this.requireState(roomId);
     const normalizedTitle = normalizeRoomTitle(title, this.config.maxRoomTitleChars);
     const record = await this.requireRoomRecords().update(roomId, (current) => {
-      this.assertRoomManager(current, identity.participantId);
+      this.assertRoomInviter(current, identity);
       return { ...current, title: normalizedTitle, updatedAt: Date.now() };
     });
     state.record = record;
@@ -3698,7 +3846,7 @@ var ChatroomRuntime = class {
     return members;
   }
   /** Append human chat immediately and evaluate optional automatic responses in a separate queue. */
-  async submit(roomId, identity, content, mode, reply) {
+  async submit(roomId, identity, content, mode, reply, requestId) {
     this.assertReady();
     const state = this.requireState(roomId);
     this.assertRoomAccess(roomId, identity);
@@ -3714,7 +3862,7 @@ var ChatroomRuntime = class {
         }
       }
       const durable = await this.durableContent(roomId, identity, identifyPrompt(content, identity, reply));
-      const message = createUserMessage3({ content: durable, source: { kind: "user", chatroomParticipantId: identity.participantId } });
+      const message = createUserMessage3({ content: durable, source: { kind: "user", chatroomParticipantId: identity.participantId, ...requestId === void 0 ? {} : { rpcId: requestId } } });
       await this.persistInput(state, binding, identity, message, aiTriggered ? "respond" : state.record.autoTriggerEnabled === true ? "decide" : "passive");
       const pending = binding.agent.status === "running" && mode === "queue" && (aiTriggered || state.record.autoTriggerEnabled === true) ? this.publishPendingMessage(state, identity, message, aiTriggered ? "queued" : "deciding") : void 0;
       let automaticSourceMessageId;
@@ -3732,6 +3880,8 @@ var ChatroomRuntime = class {
         binding.agent.followup(message);
       }
       if (aiTriggered) await this.commitInput(binding.agent.session, String(message.id));
+      const mentionedProfiles = this.enabledRoomAgentProfiles(roomId).filter((profile) => mentionsName(content, profile.name));
+      if (mentionedProfiles.length > 0) this.dispatchRoomAgentMentions(state, mentionedProfiles, identity, durable, requestId);
       if (!aiTriggered && state.record.autoTriggerEnabled === true) {
         this.scheduleAutomaticResponse(
           state,
@@ -3981,7 +4131,7 @@ var ChatroomRuntime = class {
       throw new ChatroomInputError("\u8F6C\u53D1\u6765\u6E90\u6D88\u606F\u4E0D\u5B8C\u6574\u3002");
     }
     const source = await this.forwardSourceBinding(sourceRoomId, item.sourceSessionId);
-    const event = source.agent.session.events.find((candidate) => candidate.seq === item.sourceSeq);
+    const event = source.agent.session.snapshotEvents().find((candidate) => candidate.seq === item.sourceSeq);
     if (event === void 0) throw new ChatroomInputError("\u8F6C\u53D1\u6765\u6E90\u6D88\u606F\u4E0D\u5B58\u5728\u6216\u5DF2\u53D8\u5316\u3002");
     const message = event.type === "user/message" ? event.data : event.type === "assistant/message" ? event.data.message : void 0;
     if (message === void 0 || message.role === "assistant" !== (item.role === "ai")) {
@@ -4032,7 +4182,7 @@ var ChatroomRuntime = class {
   async image(sourceRoomId, sourceSessionId, sourceSeq, ref) {
     this.assertReady();
     const binding = await this.forwardSourceBinding(sourceRoomId, sourceSessionId);
-    const event = binding.agent.session.events.find((candidate) => candidate.seq === sourceSeq);
+    const event = binding.agent.session.snapshotEvents().find((candidate) => candidate.seq === sourceSeq);
     const message = event?.type === "user/message" ? event.data : event?.type === "assistant/message" ? event.data.message : void 0;
     const attachment = message?.content.find((block) => block.type === "image" && String(block.attachment.attachmentId) === ref.attachmentId && block.attachment.mediaType === ref.mediaType)?.attachment;
     if (attachment === void 0) throw new ChatroomInputError("\u56FE\u7247\u6765\u6E90\u6D88\u606F\u4E0D\u5B58\u5728\u6216\u5DF2\u53D8\u5316\u3002");
@@ -4268,7 +4418,7 @@ var ChatroomRuntime = class {
     room.admission = task.then(() => void 0, () => void 0);
     return await task;
   }
-  async submitThread(threadId, identity, contentOrText, modeOrReply = "queue", explicitReply) {
+  async submitThread(threadId, identity, contentOrText, modeOrReply = "queue", explicitReply, requestId) {
     this.assertReady();
     const state = this.requireThreadState(threadId);
     this.assertRoomAccess(state.record.roomId, identity);
@@ -4298,7 +4448,7 @@ var ChatroomRuntime = class {
       const sequence = this.nextThreadSequence(threadId);
       const message = createUserMessage3({
         content: durable,
-        source: { kind: "user", chatroomParticipantId: identity.participantId }
+        source: { kind: "user", chatroomParticipantId: identity.participantId, ...requestId === void 0 ? {} : { rpcId: requestId } }
       });
       const record = {
         id: randomUUID3(),
@@ -4379,6 +4529,16 @@ var ChatroomRuntime = class {
     if (this.ignoredAssistantMessageIds.delete(String(event.data.message.id))) return;
     const text = assistantText(event.data.message.content);
     if (text === "") return;
+    const agentSession = parseRoomAgentSessionId(String(session.id));
+    if (agentSession !== void 0) {
+      const profile = this.roomAgentProfilesFor(agentSession.roomId).find((profile2) => profile2.id === agentSession.profileId);
+      if (profile !== void 0 && profile.enabled) {
+        void this.projectRoomAgentMessage(this.requireState(agentSession.roomId), profile, text).catch((error) => {
+          this.log.warn("Room AI participant projection failed: %s", String(error));
+        });
+      }
+      return;
+    }
     const thread = [...this.threadStates.values()].find((state) => state.record.sessionId === String(session.id));
     if (thread !== void 0) {
       void this.recordThreadAssistant(thread, text, event.time, String(event.data.message.id), event.seq).catch((error) => {
@@ -4816,7 +4976,7 @@ var ChatroomRuntime = class {
       throw new ChatroomInputError("\u76EE\u6807\u6D88\u606F\u4E0D\u5B58\u5728\u3002");
     }
     const binding = await this.ensureRoom(target.room.record.id);
-    const event = binding.agent.session.events.find((candidate) => {
+    const event = binding.agent.session.snapshotEvents().find((candidate) => {
       if (candidate.type === "user/message") {
         return messageId === `user:${candidate.seq}` || messageId === `steering:${candidate.seq}`;
       }
@@ -4851,7 +5011,7 @@ var ChatroomRuntime = class {
       ].slice(-20);
     }
     const binding = await this.ensureRoom(target.room.record.id);
-    return binding.agent.session.events.flatMap((event) => {
+    return binding.agent.session.snapshotEvents().flatMap((event) => {
       if (event.type !== "user/message" && event.type !== "assistant/message") return [];
       const messageId = event.type === "assistant/message" ? String(event.data.message.id) : `user:${event.seq}`;
       if (recalled.has(messageId) || event.type === "user/message" && recalled.has(`steering:${event.seq}`)) return [];
@@ -4935,7 +5095,7 @@ var ChatroomRuntime = class {
       this.ctx.sessionTitle.rename(binding.agent.session, title);
     }
   }
-  async acquireAgent(sessionId, parentSessionId) {
+  async acquireAgent(sessionId, parentSessionId, agentOptions, configureAgent) {
     const id = SessionId(sessionId);
     const live = this.ctx.agents.get(id);
     if (live !== void 0) {
@@ -4944,16 +5104,17 @@ var ChatroomRuntime = class {
     }
     const persisted = (await this.ctx.sessionPersistence.list()).some((header) => header.id === id);
     const model = this.ctx.agentDefaultModel.currentSelection();
-    const agentOptions = { provider: model.provider, model: model.model };
+    const options = agentOptions ?? { provider: model.provider, model: model.model };
     if (persisted) {
       const inspected = await this.ctx.sessionPersistence.inspect(id);
-      const agentPreset = resolveSessionPreset({ header: inspected.meta, events: inspected.events }) ?? this.config.agentPreset;
+      const agentPreset = inspected.events.reduce(agentPresetProjectionDefinition.apply, agentPresetProjectionDefinition.init(inspected.meta)) ?? this.config.agentPreset;
       try {
         return ownAgent(await this.ctx.agents.resume({
           resumeSessionId: id,
-          agentOptions,
+          agentOptions: options,
           setup: async (agentCtx) => {
             await this.setupAgentContext(agentCtx, agentPreset, sessionId);
+            configureAgent?.(agentCtx);
           }
         }));
       } catch (error) {
@@ -4973,9 +5134,10 @@ var ChatroomRuntime = class {
           agentPreset: this.config.agentPreset,
           ...parentSessionId === void 0 ? {} : { parentSession: SessionId(parentSessionId) }
         },
-        agentOptions,
+        agentOptions: options,
         setup: async (agentCtx) => {
           await this.setupAgentContext(agentCtx, this.config.agentPreset, sessionId);
+          configureAgent?.(agentCtx);
         }
       }));
     } catch (error) {
@@ -4986,6 +5148,94 @@ var ChatroomRuntime = class {
       }
       throw error;
     }
+  }
+  /** Rooms the identity may manage AI participants in (super-admin: every room). */
+  manageableRooms(identity) {
+    this.assertReady();
+    return [...this.states.values()].filter((state) => this.canManageRoomAgents(state.record, identity)).sort((left, right) => roomUpdatedAt(right.record) - roomUpdatedAt(left.record)).map((state) => this.projectRoom(state, identity.participantId, true));
+  }
+  enabledRoomAgentProfiles(roomId) {
+    return this.roomAgentProfilesFor(roomId).filter((profile) => profile.enabled);
+  }
+  /** Durable Session id owning one profile's private context: isolation is one Session per room + agent. */
+  roomAgentSessionId(roomId, profileId) {
+    return `chatroom-agent-v1-${roomId}-${profileId}`;
+  }
+  async ensureRoomAgent(state, profile) {
+    const existing = state.agentBindings.get(profile.id);
+    if (existing !== void 0) return existing;
+    let activation = state.agentActivations.get(profile.id);
+    if (activation === void 0) {
+      activation = this.activateRoomAgent(state, profile).then((binding) => {
+        state.agentBindings.set(profile.id, binding);
+        return binding;
+      }).finally(() => {
+        state.agentActivations.delete(profile.id);
+      });
+      state.agentActivations.set(profile.id, activation);
+    }
+    return await activation;
+  }
+  async activateRoomAgent(state, profile) {
+    const sessionId = this.roomAgentSessionId(state.record.id, profile.id);
+    const agentOptions = {
+      provider: profile.provider,
+      model: profile.model,
+      ...profile.reasoningEffort === void 0 ? {} : { reasoningEffort: profile.reasoningEffort }
+    };
+    const binding = await this.acquireAgent(sessionId, void 0, agentOptions, (agentCtx) => {
+      agentCtx.systemPrompt.section({
+        name: "chatroom:room-agent-profile",
+        order: 9,
+        text: `\u4F60\u5728\u7FA4\u804A\u300C${state.record.title}\u300D\u4E2D\u662F\u72EC\u7ACB\u6210\u5458\u300C${profile.name}\u300D\uFF0C\u804C\u8D23\uFF1A${profile.role}\u3002\u53EA\u4EE5\u8FD9\u4E2A\u8EAB\u4EFD\u56DE\u5E94\u660E\u786E @ \u4F60\u540D\u5B57\u7684\u6D88\u606F\uFF1B\u4E0D\u8981\u4EE3\u66FF\u5176\u4ED6\u6210\u5458\u6216\u623F\u95F4\u4E3B Agent \u53D1\u8A00\uFF0C\u4E5F\u4E0D\u8981\u63D0\u53CA\u8FD9\u4E9B\u8EAB\u4EFD\u8BBE\u5B9A\u6307\u4EE4\u3002`
+      });
+    });
+    try {
+      await this.attachWorkspace(sessionId);
+      this.ctx.sessionTitle.rename(binding.agent.session, `\u7FA4\u804A\xB7${state.record.title}\xB7${profile.name}`);
+      return binding;
+    } catch (error) {
+      await binding.release();
+      throw error;
+    }
+  }
+  /** Fan out one human message to every @-mentioned room AI participant; one failure never blocks the others. */
+  dispatchRoomAgentMentions(state, profiles, identity, durable, requestId) {
+    void Promise.allSettled(profiles.map(async (profile) => {
+      try {
+        const binding = await this.ensureRoomAgent(state, profile);
+        const message = createUserMessage3({
+          content: durable,
+          source: { kind: "user", chatroomParticipantId: identity.participantId, ...requestId === void 0 ? {} : { rpcId: requestId } }
+        });
+        binding.agent.followup(message);
+        await this.commitInput(binding.agent.session, String(message.id));
+      } catch (error) {
+        this.log.warn("Room AI participant %s could not accept the message: %s", profile.name, String(error));
+        await this.projectRoomAgentMessage(state, profile, `\uFF08\u63A5\u6536\u6D88\u606F\u5931\u8D25\uFF1A${String(error)}\uFF09`).catch(() => void 0);
+      }
+    }));
+  }
+  /** Project one room AI participant utterance into the shared room message stream under its own name. */
+  async projectRoomAgentMessage(state, profile, text) {
+    const binding = await this.ensureRoom(state.record.id);
+    const participantId = `chatroom-agent-${profile.id}`;
+    const content = [{ type: "text", text: identifyChatroomText(text, {
+      participantId,
+      displayName: profile.name,
+      avatarId: fallbackAvatarId(participantId)
+    }) }];
+    binding.agent.session.append("user/message", createUserMessage3({ content, source: { kind: "user" } }), { surfaceOp: "append" });
+    this.notify({
+      id: `room-agent:${profile.id}:${Date.now()}`,
+      roomId: state.record.id,
+      roomTitle: state.record.title,
+      participantId,
+      displayName: profile.name,
+      role: "ai",
+      text,
+      createdAt: Date.now()
+    });
   }
   async setupAgentContext(agentCtx, agentPreset, sessionId) {
     await this.ctx.agentPresets.mount(agentCtx, agentPreset);
@@ -5133,7 +5383,7 @@ var ChatroomRuntime = class {
     const persisted = new Set((await this.ctx.sessionPersistence.list()).map((header) => String(header.id)));
     let complete = true;
     for (const state of this.states.values()) {
-      let events = state.binding?.agent.session.events;
+      let events = state.binding?.agent.session.snapshotEvents();
       if (events === void 0 && persisted.has(state.record.sessionId)) {
         try {
           events = (await this.ctx.sessionPersistence.inspect(SessionId(state.record.sessionId))).events;
@@ -5152,7 +5402,7 @@ var ChatroomRuntime = class {
       }
     }
     for (const state of this.threadStates.values()) {
-      let events = state.binding?.agent.session.events;
+      let events = state.binding?.agent.session.snapshotEvents();
       if (events === void 0 && persisted.has(state.record.sessionId)) {
         try {
           events = (await this.ctx.sessionPersistence.inspect(SessionId(state.record.sessionId))).events;
@@ -5544,7 +5794,7 @@ ${meeting.summary ?? ""}` }],
     const existing = this.inputCommits.get(messageId);
     if (existing !== void 0) return existing;
     if (this.requireInputs().get(messageId) === void 0) return Promise.resolve();
-    const claimed = () => session.events.some((event) => event.type === "user/message" && String(event.data.id) === messageId);
+    const claimed = () => session.snapshotEvents().some((event) => event.type === "user/message" && String(event.data.id) === messageId);
     const claimedBeforeFlush = claimed();
     const commit = this.ctx.sessions.flush(session).then(async (durable) => {
       if (!durable) throw new Error("No native Session durability listener");
@@ -5563,7 +5813,7 @@ ${meeting.summary ?? ""}` }],
       const thread = record.threadId === void 0 ? void 0 : this.requireThreadState(record.threadId);
       const binding = thread === void 0 ? await this.ensureRoom(room.record.id) : await this.ensureThread(thread.record.id);
       if (String(binding.agent.session.id) !== record.sessionId) throw new Error("Accepted input refers to a replaced Session");
-      if (binding.agent.session.events.some((event) => event.type === "user/message" && String(event.data.id) === id)) {
+      if (binding.agent.session.snapshotEvents().some((event) => event.type === "user/message" && String(event.data.id) === id)) {
         await this.commitInput(binding.agent.session, id);
         continue;
       }
@@ -5627,13 +5877,25 @@ ${meeting.summary ?? ""}` }],
   requireRoom(roomId) {
     return this.projectRoom(this.requireState(roomId));
   }
-  projectRoom(state, participantId) {
+  projectRoom(state, participantId, canManageAgents) {
     const members = this.roomMembers(state).slice().sort((left, right) => left.joinedAt - right.joinedAt || left.participantId.localeCompare(right.participantId)).slice(0, 9);
     return publicRoom(
       state.record,
       members,
-      participantId === void 0 ? void 0 : this.roomPinned(state.record.id, participantId)
+      participantId === void 0 ? void 0 : this.roomPinned(state.record.id, participantId),
+      canManageAgents
     );
+  }
+  /** Whether this identity may manage the room's AI participants (super-admin, owner, or admin). */
+  canManageRoomAgents(record, identity) {
+    if (identity === void 0) return false;
+    if ("role" in identity && identity.role === "super-admin") return true;
+    return record.ownerParticipantId === identity.participantId || (record.adminParticipantIds ?? []).includes(identity.participantId);
+  }
+  /** Room AI participant access: super-admin may manage any room; others must be a managing member. */
+  assertRoomAgentAccess(roomId, identity) {
+    if (!("role" in identity && identity.role === "super-admin")) this.assertRoomAccess(roomId, identity);
+    this.assertRoomInviter(this.requireState(roomId).record, identity);
   }
   roomPinned(roomId, participantId) {
     return this.requireRoomPreferences().get(roomPreferenceKey(roomId, participantId))?.pinned ?? false;
@@ -5791,7 +6053,7 @@ ${meeting.summary ?? ""}` }],
     });
   }
   archiveRoomSession(state, session) {
-    for (const event of session.events) this.archiveSessionEvent(session, event);
+    for (const event of session.snapshotEvents()) this.archiveSessionEvent(session, event);
     for (const recall of this.recallsForRoom(state.record.id)) {
       this.requireArchive().recallMessage(
         state.record.id,
@@ -5840,7 +6102,7 @@ ${meeting.summary ?? ""}` }],
   async shouldAutoTrigger(room, binding, content, thread) {
     if (room.record.autoTriggerEnabled !== true) return false;
     if (addressesAi(content, room.record.aiDisplayName)) return true;
-    const history = thread === void 0 ? recentRoomConversation(binding.agent.session.events, this.hiddenModelMessageIds(room.record.sessionId)) : recentThreadConversation(
+    const history = thread === void 0 ? recentRoomConversation(binding.agent.session.snapshotEvents(), this.hiddenModelMessageIds(room.record.sessionId)) : recentThreadConversation(
       thread.record,
       this.messagesForThread(thread.record.id).filter((message) => !this.requireRecalls().get(recallKey(room.record.id, message.id)))
     );
@@ -5992,6 +6254,10 @@ Respond to that message now. Do not mention this controller notice.`
     if (this.automationSettings === void 0) throw new Error("chatroom automation settings are unavailable");
     return this.automationSettings;
   }
+  requireRoomAgentProfiles() {
+    if (this.roomAgentProfiles === void 0) throw new Error("chatroom room agent profile storage is unavailable");
+    return this.roomAgentProfiles;
+  }
   requireArchive() {
     if (this.archive === void 0) throw new Error("chatroom archive is unavailable");
     return this.archive;
@@ -6036,7 +6302,7 @@ Respond to that message now. Do not mention this controller notice.`
     }
     const match = /^(?:user|steering):(\d+)$/u.exec(messageId);
     const sequence = match === null ? void 0 : Number(match[1]);
-    const event = sequence === void 0 ? void 0 : state.binding?.agent.session.events.find((candidate) => candidate.seq === sequence && candidate.type === "user/message");
+    const event = sequence === void 0 ? void 0 : state.binding?.agent.session.snapshotEvents().find((candidate) => candidate.seq === sequence && candidate.type === "user/message");
     const text = event?.type === "user/message" ? event.data.content.find((block) => block.type === "text")?.text : void 0;
     if (text === void 0 || participantMarker(text)?.participantId !== participantId) {
       throw new ChatroomInputError("\u53EA\u80FD\u64A4\u56DE\u81EA\u5DF1\u53D1\u9001\u7684\u6D88\u606F\u3002");
@@ -6083,6 +6349,13 @@ Respond to that message now. Do not mention this controller notice.`
     return [...this.requireMembers().entries()].filter(([, member]) => member.roomId === roomId).length;
   }
 };
+function parseRoomAgentSessionId(sessionId) {
+  const prefix = "chatroom-agent-v1-";
+  if (!sessionId.startsWith(prefix)) return void 0;
+  const rest = sessionId.slice(prefix.length);
+  if (rest.length < 38 || rest[rest.length - 37] !== "-") return void 0;
+  return { roomId: rest.slice(0, rest.length - 37), profileId: rest.slice(rest.length - 36) };
+}
 function newRoomState(record) {
   return {
     record,
@@ -6092,7 +6365,9 @@ function newRoomState(record) {
     activation: void 0,
     admission: Promise.resolve(),
     automation: Promise.resolve(),
-    rotation: void 0
+    rotation: void 0,
+    agentBindings: /* @__PURE__ */ new Map(),
+    agentActivations: /* @__PURE__ */ new Map()
   };
 }
 function newThreadState(record) {
@@ -6121,7 +6396,7 @@ function publicIdentity(record) {
 function publicFile(record) {
   return { id: record.id, name: record.name, mediaType: record.mediaType, bytes: record.bytes };
 }
-function publicRoom(record, members, pinned) {
+function publicRoom(record, members, pinned, canManageAgents) {
   return {
     id: record.id,
     title: record.title,
@@ -6137,7 +6412,8 @@ function publicRoom(record, members, pinned) {
       participantId: member.participantId,
       avatarId: member.avatarId,
       ...member.avatarUrl === void 0 ? {} : { avatarUrl: member.avatarUrl }
-    }))
+    })),
+    ...canManageAgents === void 0 ? {} : { canManageAgents }
   };
 }
 function withoutAiContextStart(record) {
@@ -6660,8 +6936,8 @@ function writeNotificationSse(response, event) {
 async function waitForIdle(agent, signal) {
   if (signal.aborted) return;
   let release = () => void 0;
-  const stopped = new Promise((resolve3) => {
-    release = resolve3;
+  const stopped = new Promise((resolve4) => {
+    release = resolve4;
     signal.addEventListener("abort", release, { once: true });
   });
   try {
@@ -6677,7 +6953,7 @@ var ChatroomHttpController = class {
     this.runtime = runtime;
     this.config = config;
     this.log = ctx.logger("deepseek-harness-chatroom");
-    this.configurationApi = toFetchHandler(ctx.apiProxy);
+    this.configurationApi = ctx.connection.createSharedFetchHandler("/api");
   }
   runtime;
   config;
@@ -6750,6 +7026,14 @@ var ChatroomHttpController = class {
       }
       if (route.endpoint === "/rooms/manage") {
         await this.handleRoomManagement(request, response);
+        return;
+      }
+      if (route.endpoint === "/rooms/agents") {
+        await this.handleRoomAgents(request, response);
+        return;
+      }
+      if (route.endpoint === "/rooms/manageable") {
+        await this.handleManageableRooms(request, response);
         return;
       }
       if (route.endpoint === "/rooms/session") {
@@ -6870,7 +7154,14 @@ var ChatroomHttpController = class {
         } else {
           account = await this.runtime.auth.synchronizeDshAuthProfile(request.headers, account);
         }
-        json(response, 200, this.sessionPayload(account ?? null, account));
+        const sessionId = new URL(request.url ?? "/", "http://chatroom.local").searchParams.get("nativeSessionId");
+        json(response, 200, {
+          ...this.sessionPayload(account ?? null, account),
+          ...sessionId === null ? {} : { nativeSessionAccess: {
+            sessionId,
+            allowed: account !== void 0 && sessionId.length <= 256 && await this.runtime.canAccessNativeSession(sessionId, account)
+          } }
+        });
         return;
       }
       json(response, 200, this.sessionPayload(this.runtime.identity(token) ?? null));
@@ -7341,6 +7632,59 @@ var ChatroomHttpController = class {
     }
     throw new ChatroomInputError("\u7FA4\u7BA1\u7406\u64CD\u4F5C\u65E0\u6548\u3002");
   }
+  /** Rooms the current identity may manage AI participants in (settings-page room picker). */
+  async handleManageableRooms(request, response) {
+    if (request.method !== "GET") {
+      methodNotAllowed(response, "GET");
+      return;
+    }
+    const identity = await this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    json(response, 200, { rooms: this.runtime.manageableRooms(identity) });
+  }
+  /** Room AI participant roster (GET) and manager CRUD (POST with an action field). */
+  async handleRoomAgents(request, response) {
+    const identity = await this.requireIdentity(request, response);
+    if (identity === void 0) return;
+    if (request.method === "GET") {
+      const url = new URL(request.url ?? "/", "http://chatroom.local");
+      const roomId2 = url.searchParams.get("roomId");
+      if (roomId2 === null || roomId2 === "") throw new ChatroomInputError("\u7F3A\u5C11\u7FA4\u804A\u6807\u8BC6\u3002");
+      json(response, 200, await this.runtime.agentProfilesOverview(roomId2, identity));
+      return;
+    }
+    if (request.method !== "POST") {
+      methodNotAllowed(response, "GET, POST");
+      return;
+    }
+    assertSameOrigin(request);
+    const body = await readJson(request, smallRequestLimit(this.config) + 4096);
+    const roomId = fieldString(body, "roomId");
+    const action = fieldString(body, "action");
+    const effort = body["reasoningEffort"];
+    if (action === "delete") {
+      await this.runtime.deleteRoomAgentProfile(roomId, fieldString(body, "profileId"), identity);
+      json(response, 200, await this.runtime.agentProfilesOverview(roomId, identity));
+      return;
+    }
+    if (effort !== void 0 && typeof effort !== "string") throw new ChatroomInputError("\u5B57\u6BB5 reasoningEffort \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002");
+    const input = {
+      name: fieldString(body, "name"),
+      role: fieldString(body, "role"),
+      provider: fieldString(body, "provider"),
+      model: fieldString(body, "model"),
+      ...typeof effort === "string" && effort !== "" ? { reasoningEffort: effort } : {},
+      enabled: fieldBoolean(body, "enabled")
+    };
+    if (action === "create") {
+      await this.runtime.createRoomAgentProfile(roomId, identity, input);
+    } else if (action === "update") {
+      await this.runtime.updateRoomAgentProfile(roomId, fieldString(body, "profileId"), identity, input);
+    } else {
+      throw new ChatroomInputError("AI \u6210\u5458\u64CD\u4F5C\u65E0\u6548\u3002");
+    }
+    json(response, 200, await this.runtime.agentProfilesOverview(roomId, identity));
+  }
   async handleRoomSession(request, response) {
     if (request.method !== "POST") {
       methodNotAllowed(response, "POST");
@@ -7503,6 +7847,7 @@ var ChatroomHttpController = class {
       threadId: fieldString(body, "threadId"),
       mode: parsed.mode,
       content: parsed.content,
+      ...parsed.requestId === void 0 ? {} : { requestId: parsed.requestId },
       ...parsed.reply === void 0 ? {} : { reply: parsed.reply }
     };
     const result = await this.runtime.submitThread(
@@ -7510,7 +7855,8 @@ var ChatroomHttpController = class {
       identity,
       prompt.content,
       prompt.mode,
-      prompt.reply
+      prompt.reply,
+      prompt.requestId
     );
     json(response, 200, result);
   }
@@ -7524,7 +7870,7 @@ var ChatroomHttpController = class {
     if (identity === void 0) return;
     const body = await readJson(request, this.runtime.maxPromptRequestBytes);
     const prompt = promptRequest(body, this.config);
-    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode, prompt.reply);
+    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode, prompt.reply, prompt.requestId);
     json(response, 200, result);
   }
   async handleReactionToggle(request, response) {
@@ -8011,7 +8357,8 @@ function promptRequest(body, config) {
     throw new ChatroomInputError("\u6D88\u606F\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A\u3002");
   }
   const reply = replyRequest(body.reply);
-  return { roomId, mode, content, ...reply === void 0 ? {} : { reply } };
+  if (body.requestId !== void 0 && (typeof body.requestId !== "string" || body.requestId.length === 0 || body.requestId.length > 256)) throw new ChatroomInputError("\u8BF7\u6C42\u7F16\u53F7\u65E0\u6548\u3002");
+  return { roomId, mode, content, ...reply === void 0 ? {} : { reply }, ...body.requestId === void 0 ? {} : { requestId: body.requestId } };
 }
 function replyRequest(value) {
   if (value === void 0) return void 0;
@@ -8193,78 +8540,89 @@ function startsNewProviderExchange(message) {
 }
 
 // src/native-gateway.ts
-import { randomUUID as randomUUID4 } from "crypto";
 import { once } from "events";
 import { realpath } from "fs/promises";
-import { HostConnectionService, HOST_EVENTS_PATH, MUX_EVENTS_PATH } from "@deepseek-ai/dsh-client-connection";
-import { toFetchHandler as toFetchHandler2 } from "@deepseek-ai/dsh-host-apiproxy";
-import { RpcId } from "@deepseek-ai/dsh-host-apiproxy/api";
-import { sessionCreateRequestSchema, sessionPromptRequestSchema } from "@deepseek-ai/dsh-host-apiproxy/api/sessions.schema";
-import { WebSocketServer } from "ws";
+import { resolve as resolve3 } from "path";
+
+// src/native-platform.ts
+import { readFile as readFile2 } from "fs/promises";
+import { apply as applyNativeConnection } from "@deepseek-ai/dsh-client-connection";
+async function nativeModule(packageName, file) {
+  const manifest = new URL(import.meta.resolve(`${packageName}/package.json`));
+  const metadata = JSON.parse(await readFile2(manifest, "utf8"));
+  if (typeof metadata !== "object" || metadata === null || !("version" in metadata) || metadata.version !== "0.1.2-rc.1") {
+    throw new Error(`chatroom requires ${packageName}@0.1.2-rc.1; refusing an unverified transport`);
+  }
+  return await import(new URL(`lib/types/${file}.js`, manifest).href);
+}
+async function createNativeTransport(ctx, hosts) {
+  const muxModule = await nativeModule("@deepseek-ai/dsh-api-gateway", "stream-server");
+  const Mux = muxModule.RemoteStreamMuxServer;
+  if (typeof Mux !== "function") {
+    throw new Error("chatroom: native transport helpers are unavailable");
+  }
+  const connectionCtx = ctx.extend({
+    webServer: {
+      register(route) {
+        if (route.kind !== "prefix" || route.path !== "/api") throw new Error("Unexpected native connection route");
+        return () => {
+        };
+      }
+    }
+  });
+  await applyNativeConnection(connectionCtx, { trustedHosts: hosts });
+  const connection = ctx.connection;
+  const gateway = ctx.typertGateway;
+  return { connection, gateway, Mux };
+}
+
+// src/native-gateway.ts
+var MUX_PATH = "/api/remote.mux";
+var PUBLIC_METHODS = /* @__PURE__ */ new Set([
+  "session/list",
+  "session/search",
+  "session/modelCatalog",
+  "session/canOpenWorkspacePath",
+  "workspace/list",
+  "agentPresets/list",
+  "agentPreset/list",
+  "llm/providers",
+  "llm/models",
+  "dynamicCordisRunner/inventory"
+]);
 var SESSION_METHODS = /* @__PURE__ */ new Set([
-  "session.history",
-  "session.models",
-  "session.selectModel",
-  "session.rename",
-  "session.fork",
-  "session.prompt",
-  "session.attachment",
-  "session.cancel",
-  "session.updateQueue",
-  "agentPreset.select",
-  "goal.create",
-  "goal.edit",
-  "goal.pause",
-  "goal.resume",
-  "goal.complete",
-  "goal.clear",
-  "workspace.archiveSession",
-  "workspace.insertSessionBefore"
-]);
-var PUBLIC_METHODS = /* @__PURE__ */ new Set(["session.list", "session.search", "workspace.list", "host.describe", "skill.list", "agentPreset.list", "llm.providers", "llm.models", "dynamicCordisRunner/inventory"]);
-var ADMIN_METHODS = /* @__PURE__ */ new Set([
-  "settings.describe",
-  "settings.openDocument",
-  "settings.update",
-  "settings.replace",
-  "settings.mutate",
-  "credentials.describe",
-  "credentials.set",
-  "credentials.unset",
-  "llm.discoverModels",
-  "dynamicCordisRunner/syncInspectManifest",
-  "host.pickDirectory",
-  "host.listDirectory",
-  "host.createDirectory",
-  "host.openPath",
-  "workspace.create",
-  "workspace.rename",
-  "workspace.delete",
-  "workspace.insertBefore",
-  "agentPreset.read",
-  "agentPreset.copy",
-  "agentPreset.openDocument",
-  "agentPreset.remove"
-]);
-var SESSION_REMOTES = /* @__PURE__ */ new Set([
+  "session/page",
+  "session/selectModel",
+  "session/rename",
+  "session/fork",
+  "session/prompt",
+  "session/attachment",
+  "session/cancel",
+  "session/updateQueue",
+  "workspace/archiveSession",
+  "workspace/insertSessionBefore",
+  "agentPresets/select",
+  "subagents/list",
+  "subagents/prompt",
+  "subagents/interruptByParent",
   "commands/list",
   "commands/execute",
   "fileReferences/list",
   "sessionReferenceResolver/candidates",
-  "dynamicCordisRunner/getClientCode",
-  "dynamicCordisRunner/reportClientGuardFailure",
-  "dynamicCordisRunner/reportRenderFailure",
-  "dynamicCordisRunner/resolveInspectQuery",
-  "dynamicCordisRunner/runHostHalf",
-  "dynamicCordisRunner/settleUserRun",
-  "dynamicCordisRunner/stopFromPanel",
-  "dynamicCordisRunner/undefineFromPanel",
   "goals/create",
   "goals/edit",
   "goals/pause",
   "goals/resume",
   "goals/complete",
   "goals/clear"
+]);
+var SESSION_EVENTS = /* @__PURE__ */ new Set([
+  "agent-preset/selected",
+  "api-session/activity",
+  "api-session/error",
+  "api-session/removed",
+  "api-session/status",
+  "commands/change"
 ]);
 var CarrierError = class extends Error {
   constructor(status, message) {
@@ -8274,29 +8632,24 @@ var CarrierError = class extends Error {
   status;
 };
 var NativeGateway = class {
-  constructor(ctx, runtime, config, dispatch) {
+  constructor(ctx, runtime, config, dispatch, transport) {
     this.ctx = ctx;
     this.runtime = runtime;
     this.config = config;
     this.dispatch = dispatch;
-    this.server.on("headers", (headers, request) => {
-      const cookie = this.upgradeRenewals.get(request);
-      if (cookie !== void 0) headers.push(`Set-Cookie: ${cookie}`);
-    });
+    this.transport = transport;
   }
   ctx;
   runtime;
   config;
   dispatch;
-  server = new WebSocketServer({ noServer: true });
-  pumps = /* @__PURE__ */ new Set();
+  transport;
   requests = /* @__PURE__ */ new Set();
+  requestCompletions = /* @__PURE__ */ new Set();
+  renewals = /* @__PURE__ */ new WeakMap();
+  muxes = /* @__PURE__ */ new Map();
   answerable = /* @__PURE__ */ new Map();
   stopped = false;
-  renewals = /* @__PURE__ */ new WeakMap();
-  upgradeRenewals = /* @__PURE__ */ new WeakMap();
-  requestCompletions = /* @__PURE__ */ new Set();
-  /** Check authentication and authorization before dispatching a native or Remote request. */
   async fetch(request) {
     const response = await this.authorizedFetch(request);
     const renewal = this.renewals.get(request);
@@ -8305,112 +8658,132 @@ var NativeGateway = class {
     headers.append("Set-Cookie", renewal);
     return new Response(response.body, { status: response.status, headers });
   }
+  async requireSession(id, identity) {
+    if (typeof id !== "string" || !await this.runtime.canAccessNativeSession(id, identity)) {
+      throw new CarrierError(403, "\u4F1A\u8BDD\u4E0D\u5B58\u5728\u6216\u4F60\u65E0\u6743\u8BBF\u95EE\u3002");
+    }
+  }
+  async sessionArguments(args, identity) {
+    const request = isRecord(args.request) ? args.request : args;
+    const address = isRecord(request.address) ? request.address : request;
+    const ids = ["sessionId", "agentId", "parentSessionId", "childSessionId", "beforeSessionId"].filter((key) => address[key] !== void 0).map((key) => address[key]);
+    if (ids.length === 0) throw new CarrierError(400, "Missing session identity");
+    for (const id of ids) await this.requireSession(id, identity);
+  }
   async authorizedFetch(request) {
     try {
       this.assertOrigin(request);
       const identity = await this.identity(request);
-      const path = new URL(request.url).pathname;
-      const method = path.slice("/api/".length);
-      if (path === MUX_EVENTS_PATH || path === HOST_EVENTS_PATH) return new Response("WebSocket required", { status: 426 });
+      const url = new URL(request.url);
+      if (url.pathname === MUX_PATH) return new Response("WebSocket required", { status: 426 });
       if (!this.config.authEnabled) return await this.dispatch(request);
       if (identity === void 0) throw new CarrierError(401, "\u8BF7\u5148\u767B\u5F55\u3002");
-      const canAccess = (id) => typeof id === "string" ? this.runtime.canAccessNativeSession(id, identity) : Promise.resolve(false);
-      const requireSession = async (id) => {
-        if (!await canAccess(id)) throw new CarrierError(403, "\u4F1A\u8BDD\u4E0D\u5B58\u5728\u6216\u4F60\u65E0\u6743\u8BBF\u95EE\u3002");
-      };
-      if (method === "session.export") {
-        const url = new URL(request.url);
-        await requireSession(url.searchParams.get("sessionId"));
-        if (url.searchParams.get("includeDescendants") === "true") throw new CarrierError(403, "\u8BF7\u5355\u72EC\u5BFC\u51FA\u6709\u6743\u8BBF\u95EE\u7684\u4F1A\u8BDD\u3002");
-        return await this.dispatch(request);
-      }
+      const endpoint = url.pathname.slice("/api/".length);
       if (request.method !== "POST") throw new CarrierError(405, "POST required");
       const body = await request.clone().json();
-      if (!isRecord(body) || typeof body.rpcId !== "string") throw new CarrierError(400, "Invalid RPC envelope");
-      if (method === "respond") {
-        const sessionId = this.answerable.get(body.rpcId);
-        await requireSession(sessionId);
-        const result = await this.dispatch(request);
-        if (result.ok) this.answerable.delete(body.rpcId);
-        return result;
-      }
-      if (body.type !== "client-request" || body.method !== method || !isRecord(body.payload)) {
-        throw new CarrierError(400, "Invalid RPC envelope");
-      }
-      const payload = body.payload;
-      if (SESSION_METHODS.has(method)) {
-        await requireSession(payload.sessionId);
-        if (payload.beforeSessionId !== void 0) await requireSession(payload.beforeSessionId);
-        if (method === "session.updateQueue" && this.runtime.ownsSession(String(payload.sessionId))) {
-          throw new CarrierError(403, "\u8BF7\u901A\u8FC7\u7FA4\u804A\u961F\u5217\u64CD\u4F5C\u81EA\u5DF1\u7684\u6D88\u606F\u3002");
-        }
-      } else if (method.startsWith("subagent.") && ["subagent.list", "subagent.history", "subagent.prompt", "subagent.interrupt"].includes(method)) {
-        await requireSession(payload.parentSessionId);
-        if (method !== "subagent.list") await requireSession(payload.childSessionId);
-      } else if (method === "session.create") {
-        if (!sessionCreateRequestSchema.safeParse(payload).success) throw new CarrierError(400, "Invalid session creation");
-        if (payload.cwd !== void 0 && payload.cwd !== this.config.cwd) throw new CarrierError(403, "\u53EA\u80FD\u5728\u804A\u5929\u5BA4\u5DE5\u4F5C\u533A\u521B\u5EFA\u4F1A\u8BDD\u3002");
-        if (payload.workspaceId !== void 0) {
-          const listed = await this.ctx.apiProxy.workspace.list({ rpcId: RpcId(randomUUID4()), payload: {} });
-          if (!listed.result.ok || !await this.isWorkspace(listed.result.value.items.find((item) => item.workspaceId === payload.workspaceId)?.path)) {
+      if (!isRecord(body) || body.type !== "client-request" || typeof body.rpcId !== "string" || body.method !== endpoint || !isRecord(body.payload)) throw new CarrierError(400, "Invalid RPC envelope");
+      const args = body.payload.args;
+      if (endpoint === "$events/result") {
+        const result = isRecord(args) ? args : body.payload;
+        const owned = this.answerable.get(String(result.clientId) + ":" + String(result.eventId));
+        if (owned?.participantId !== identity.participantId) throw new CarrierError(403, "No authorized event delivery");
+        await this.requireSession(owned.sessionId, identity);
+      } else {
+        if (!isRecord(args)) throw new CarrierError(400, "Invalid Remote arguments");
+        const input = isRecord(args.request) ? args.request : args;
+        if (SESSION_METHODS.has(endpoint)) {
+          await this.sessionArguments(args, identity);
+          if (endpoint === "session/updateQueue" && this.runtime.ownsSession(String(input.sessionId))) {
+            throw new CarrierError(403, "\u8BF7\u901A\u8FC7\u7FA4\u804A\u961F\u5217\u64CD\u4F5C\u81EA\u5DF1\u7684\u6D88\u606F\u3002");
+          }
+        } else if (endpoint === "session/create") {
+          for (const key of ["agentPreset", "sessionId", "workspaceId", "cwd"]) {
+            if (input[key] !== void 0 && typeof input[key] !== "string") throw new CarrierError(400, "Invalid session creation parameters");
+          }
+          if (input.cwd !== void 0 && !await this.isWorkspace(typeof input.cwd === "string" ? input.cwd : void 0)) {
             throw new CarrierError(403, "\u53EA\u80FD\u5728\u804A\u5929\u5BA4\u5DE5\u4F5C\u533A\u521B\u5EFA\u4F1A\u8BDD\u3002");
           }
+          if (input.workspaceId !== void 0) {
+            const workspace = this.ctx.workspaceRegistry.list().find((item) => String(item.id) === input.workspaceId);
+            if (!await this.isWorkspace(workspace?.path)) {
+              throw new CarrierError(403, "\u53EA\u80FD\u5728\u804A\u5929\u5BA4\u5DE5\u4F5C\u533A\u521B\u5EFA\u4F1A\u8BDD\u3002");
+            }
+          }
+          if (input.sessionId === void 0) input.sessionId = await this.runtime.reserveSoloSession(identity);
+          if (typeof input.sessionId !== "string" || !this.runtime.ownsSoloSession(input.sessionId, identity)) {
+            throw new CarrierError(403, "\u8BF7\u5148\u9884\u7559\u81EA\u5DF1\u7684 Solo \u4F1A\u8BDD\u3002");
+          }
+          if (input.workspaceId === void 0) input.cwd = this.config.cwd;
+        } else if (!PUBLIC_METHODS.has(endpoint) && !this.isAdmin(identity)) {
+          throw new CarrierError(403, "\u6B64\u63A5\u53E3\u5C1A\u672A\u914D\u7F6E\u8D26\u53F7\u6743\u9650\u3002");
         }
-        if (payload.sessionId === void 0) payload.sessionId = await this.runtime.reserveSoloSession(identity);
-        if (typeof payload.sessionId !== "string" || !this.runtime.ownsSoloSession(payload.sessionId, identity)) {
-          throw new CarrierError(403, "\u8BF7\u5148\u9884\u7559\u81EA\u5DF1\u7684 Solo \u4F1A\u8BDD\u3002");
+        if (endpoint === "session/prompt" || endpoint === "subagents/prompt") {
+          if (input.requestId !== void 0 && (typeof input.requestId !== "string" || !input.requestId.length || input.requestId.length > 256)) throw new CarrierError(400, "Invalid request identity");
+          if (!Array.isArray(input.content) || !input.content.every(isPromptPart)) {
+            throw new CarrierError(400, "Invalid prompt");
+          }
+          await this.runtime.assertPromptReferences(identity, input.content);
         }
-      } else if (SESSION_REMOTES.has(method)) {
-        if (!isRecord(payload.args)) throw new CarrierError(400, "Invalid Remote arguments");
-        await requireSession(payload.args.agentId);
-        if (method === "commands/execute" && typeof payload.args.line === "string") await this.runtime.assertPromptReferences(identity, [{ type: "text", text: payload.args.line }]);
-      } else if (ADMIN_METHODS.has(method)) {
-        if (!this.isAdmin(identity)) throw new CarrierError(403, "\u4EC5\u7BA1\u7406\u5458\u53EF\u64CD\u4F5C\u90E8\u7F72\u8BBE\u7F6E\u3002");
-      } else if (!PUBLIC_METHODS.has(method)) {
-        throw new CarrierError(403, "\u6B64\u63A5\u53E3\u5C1A\u672A\u914D\u7F6E\u8D26\u53F7\u6743\u9650\u3002");
+        if (endpoint === "session/prompt") {
+          if (!["queue", "steer"].includes(String(input.mode)) || typeof input.sessionId !== "string") throw new CarrierError(400, "Invalid prompt");
+          const content = input.content;
+          const command = content.length === 1 && content[0]?.type === "text" && content[0].text.startsWith("/");
+          if (!command && await this.runtime.submitNativeSession(input.sessionId, identity, content, input.mode, input.requestId)) {
+            return Response.json({ type: "server-response", rpcId: body.rpcId, result: { ok: true, value: { accepted: true } } });
+          }
+        }
+        if (endpoint === "commands/execute" && typeof input.line === "string") {
+          await this.runtime.assertPromptReferences(identity, [{ type: "text", text: input.line }]);
+        }
       }
-      if (method === "session.prompt") {
-        const parsed = sessionPromptRequestSchema.safeParse(payload);
-        if (!parsed.success) throw new CarrierError(400, "Invalid prompt");
-        const input = parsed.data;
-        await this.runtime.assertPromptReferences(identity, input.content);
-        const command = input.content.length === 1 && input.content[0]?.type === "text" && input.content[0].text.startsWith("/");
-        if (!command && await this.runtime.submitNativeSession(input.sessionId, identity, input.content, input.mode)) {
-          return Response.json({ type: "server-response", rpcId: body.rpcId, result: { ok: true, value: { accepted: true } } });
-        }
-      }
-      const authorizedRequest = method === "session.create" ? new Request(request.url, { method: "POST", headers: request.headers, signal: request.signal, body: JSON.stringify({ ...body, payload: { ...payload, ...payload.workspaceId === void 0 ? { cwd: this.config.cwd } : {} } }) }) : request;
-      const response = await this.dispatch(authorizedRequest);
+      const response = await this.dispatch(new Request(request.url, {
+        method: "POST",
+        headers: request.headers,
+        signal: request.signal,
+        body: JSON.stringify(body)
+      }));
       if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) return response;
       const output = await response.json();
       if (!isRecord(output) || !isRecord(output.result) || output.result.ok !== true) return Response.json(output, { status: response.status });
-      if ((method === "sessionReferenceResolver/candidates" || method === "dynamicCordisRunner/inventory") && Array.isArray(output.result.value)) {
-        output.result.value = await filterAsync(output.result.value, (item) => isRecord(item) ? canAccess(method === "sessionReferenceResolver/candidates" ? item.sessionId : item.agentId) : Promise.resolve(false));
-      }
-      if (!isRecord(output.result.value)) return Response.json(output, { status: response.status });
-      const value = output.result.value;
-      if (method === "session.fork" && typeof value.sessionId === "string") await this.runtime.ownNativeFork(value.sessionId, identity);
-      if ((method === "session.list" || method === "session.search") && Array.isArray(value.items)) {
-        value.items = await filterAsync(value.items, (item) => isRecord(item) ? canAccess(item.sessionId) : Promise.resolve(false));
-        if (method === "session.search") value.hasMore = false;
-      }
-      if (method.startsWith("workspace.")) {
-        if (Array.isArray(value.items)) value.items = (await Promise.all(value.items.map((item) => this.workspace(item, identity)))).filter((item) => item !== void 0);
-        if (isRecord(value.workspace)) value.workspace = await this.workspace(value.workspace, identity);
-        if (Array.isArray(value.archivedSessionIds)) value.archivedSessionIds = await filterAsync(value.archivedSessionIds, canAccess);
-      }
+      output.result.value = await this.filterResult(endpoint, output.result.value, identity);
       return Response.json(output, { status: response.status });
     } catch (error) {
       const status = error instanceof CarrierError ? error.status : error instanceof ChatroomInputError ? 403 : error instanceof SyntaxError ? 400 : 500;
       return Response.json({ error: error instanceof CarrierError || error instanceof ChatroomInputError ? error.message : "Native request failed" }, { status });
     }
   }
+  async filterResult(endpoint, value, identity) {
+    const canAccess = (id) => typeof id === "string" ? this.runtime.canAccessNativeSession(id, identity) : Promise.resolve(false);
+    if (Array.isArray(value) && ["sessionReferenceResolver/candidates", "dynamicCordisRunner/inventory"].includes(endpoint)) {
+      return await filterAsync(value, (item) => isRecord(item) ? canAccess(item.sessionId ?? item.agentId) : Promise.resolve(false));
+    }
+    if (!isRecord(value)) return value;
+    if (endpoint === "subagents/list" && Array.isArray(value.entries)) {
+      return { ...value, entries: await filterAsync(value.entries, (item) => isRecord(item) ? canAccess(item.id) : Promise.resolve(false)) };
+    }
+    if (endpoint === "session/fork" && typeof value.sessionId === "string") await this.runtime.ownNativeFork(value.sessionId, identity);
+    if (["session/list", "session/search"].includes(endpoint) && Array.isArray(value.items)) {
+      return {
+        ...value,
+        items: (await filterAsync(value.items, (item) => isRecord(item) ? canAccess(item.sessionId) : Promise.resolve(false))).map((item) => isRecord(item) && typeof item.sessionId === "string" && this.runtime.ownsSession(item.sessionId) ? { ...item, blank: false } : item),
+        ...endpoint === "session/search" ? { hasMore: false } : {}
+      };
+    }
+    if (endpoint.startsWith("workspace/")) {
+      const output = { ...value };
+      if (Array.isArray(value.items)) output.items = (await Promise.all(value.items.map((item) => this.workspace(item, identity)))).filter(Boolean);
+      if (isRecord(value.workspace)) output.workspace = await this.workspace(value.workspace, identity);
+      if (Array.isArray(value.archivedSessionIds)) output.archivedSessionIds = await filterAsync(value.archivedSessionIds, canAccess);
+      return output;
+    }
+    return value;
+  }
   /** Bridge a bounded Node request and propagate disconnect cancellation through the native carrier. */
   async handle(request, response) {
     const abort = new AbortController();
     let finish;
-    const completed = new Promise((resolve3) => {
-      finish = resolve3;
+    const completed = new Promise((resolve4) => {
+      finish = resolve4;
     });
     this.requestCompletions.add(completed);
     this.requests.add(abort);
@@ -8460,91 +8833,137 @@ var NativeGateway = class {
       finish();
     }
   }
-  /** Authenticate before upgrading; each outgoing frame rechecks account and session access. */
-  async upgrade(request, socket, head, kind) {
+  /** Keep one native mux per authenticated socket so identities cannot share an opener. */
+  async upgrade(request, socket, head) {
     const fetchRequest = new Request(`http://${request.headers.host ?? "localhost"}${request.url ?? "/"}`, { headers: nodeHeaders(request) });
     try {
       this.assertOrigin(fetchRequest);
       await this.identity(fetchRequest);
-      const renewal = this.renewals.get(fetchRequest);
-      if (renewal !== void 0) this.upgradeRenewals.set(request, renewal);
+      if (this.stopped || socket.destroyed) {
+        socket.destroy();
+        return;
+      }
+      let clientId;
+      const mux = new this.transport.Mux(async (endpoint, payload, signal) => {
+        const identity = await this.identity(fetchRequest);
+        if (this.config.authEnabled) {
+          if (identity === void 0) throw new CarrierError(401, "\u8BF7\u5148\u767B\u5F55\u3002");
+          if (endpoint === "session/follow") {
+            if (!isRecord(payload) || !isRecord(payload.args)) throw new CarrierError(400, "Invalid stream arguments");
+            await this.sessionArguments(payload.args, identity);
+          } else if (!["$events", "session/control", "workspace/follow"].includes(endpoint)) {
+            throw new CarrierError(403, "\u6B64\u6570\u636E\u6D41\u5C1A\u672A\u914D\u7F6E\u8D26\u53F7\u6743\u9650\u3002");
+          }
+        }
+        const source = await this.transport.gateway.wireStream.open(endpoint, payload, signal);
+        const self = this;
+        return (async function* () {
+          for await (const frame of source) {
+            signal.throwIfAborted();
+            const current = await self.identity(fetchRequest).catch((error) => {
+              socket.destroy();
+              throw error;
+            });
+            if (endpoint === "$events" && isRecord(frame) && frame.type === "ready" && typeof frame.clientId === "string") clientId = frame.clientId;
+            if (!self.config.authEnabled || current === void 0) {
+              yield frame;
+              continue;
+            }
+            if (endpoint === "session/follow" && isRecord(payload) && isRecord(payload.args)) await self.sessionArguments(payload.args, current);
+            const filtered = await self.filterFrame(endpoint, frame, current, clientId);
+            if (filtered !== void 0) yield filtered;
+          }
+        })();
+      }, this.transport.gateway.wireStream.failure, 2e3);
+      this.muxes.set(socket, mux);
+      const heartbeat = setInterval(() => {
+        void this.identity(fetchRequest).catch(() => socket.destroy());
+      }, this.config.sseHeartbeatMs);
+      heartbeat.unref();
+      socket.once("close", () => {
+        clearInterval(heartbeat);
+        this.muxes.delete(socket);
+        if (clientId !== void 0) {
+          for (const key of this.answerable.keys()) if (key.startsWith(clientId + ":")) this.answerable.delete(key);
+        }
+        void mux.close();
+      });
+      mux.handleUpgrade(request, socket, head);
     } catch (error) {
       socket.end(`HTTP/1.1 ${error instanceof CarrierError ? error.status : 500} Forbidden\r
 Connection: close\r
 \r
 `);
-      return;
     }
-    if (this.stopped || socket.destroyed) {
-      socket.destroy();
-      return;
-    }
-    this.server.handleUpgrade(request, socket, head, (websocket) => {
-      const abort = new AbortController();
-      websocket.once("close", () => abort.abort());
-      websocket.once("error", () => abort.abort());
-      websocket.once("message", () => websocket.close(1008, "Downlink only"));
-      const source = this.ctx.apiProxy.events[kind]({ rpcId: RpcId(randomUUID4()), payload: {} }, abort.signal);
-      const pump = this.pump(websocket, fetchRequest, source, abort);
-      this.pumps.add(pump);
-      void pump.finally(() => this.pumps.delete(pump));
-    });
   }
-  /** Stop intake, cancel disconnected work, and await all owned downlink iterators. */
+  async filterFrame(endpoint, frame, identity, clientId) {
+    if (!isRecord(frame)) return void 0;
+    const canAccess = (id) => typeof id === "string" ? this.runtime.canAccessNativeSession(id, identity) : Promise.resolve(false);
+    if (endpoint === "session/follow") return frame;
+    if (endpoint === "session/control") {
+      if (frame.type === "baseline" && isRecord(frame.value)) {
+        const value = {};
+        for (const key of ["queues", "jobs", "projections"]) {
+          const rows = frame.value[key];
+          if (!isRecord(rows)) throw new CarrierError(500, "Invalid native control baseline");
+          value[key] = Object.fromEntries(await filterAsync(Object.entries(rows), ([id]) => canAccess(id)));
+        }
+        return { ...frame, value };
+      }
+      return await canAccess(frame.sessionId) ? frame : void 0;
+    }
+    if (endpoint === "workspace/follow") {
+      if (frame.type === "baseline") return { ...frame, value: await this.filterResult("workspace/list", frame.value, identity) };
+      if (frame.type === "upsert" && isRecord(frame.workspace)) {
+        const workspace = await this.workspace(frame.workspace, identity);
+        return workspace === void 0 ? void 0 : { ...frame, workspace };
+      }
+      if (frame.type === "archived" && Array.isArray(frame.archivedSessionIds)) return { ...frame, archivedSessionIds: await filterAsync(frame.archivedSessionIds, canAccess) };
+      return void 0;
+    }
+    if (endpoint !== "$events") return void 0;
+    if (frame.type === "ready") return frame;
+    if (frame.type === "waterfall" && typeof frame.eventId === "string" && typeof frame.agentId === "string" && clientId !== void 0 && await canAccess(frame.agentId)) {
+      this.answerable.set(clientId + ":" + frame.eventId, { participantId: identity.participantId, sessionId: frame.agentId });
+      return frame;
+    }
+    if (frame.type === "cancel" && typeof frame.eventId === "string" && clientId !== void 0) {
+      const key = clientId + ":" + frame.eventId;
+      const owned = this.answerable.get(key);
+      this.answerable.delete(key);
+      return owned?.participantId === identity.participantId ? frame : void 0;
+    }
+    if (frame.type !== "emit" || !Array.isArray(frame.args)) return void 0;
+    if (frame.event === "llm/adapters-updated") return frame;
+    if (frame.event === "api-session/added") {
+      const item = frame.args[0];
+      if (!isRecord(item) || !await canAccess(item.sessionId)) return void 0;
+      return { ...frame, args: [this.runtime.ownsSession(String(item.sessionId)) ? { ...item, blank: false } : item, ...frame.args.slice(1)] };
+    }
+    if (typeof frame.event === "string" && SESSION_EVENTS.has(frame.event)) return await canAccess(frame.args[0]) ? frame : void 0;
+    return this.isAdmin(identity) && ["settings/document-updated", "credentials/reference-updated"].includes(String(frame.event)) ? frame : void 0;
+  }
   async close() {
     this.stopped = true;
     for (const abort of this.requests) abort.abort();
-    for (const socket of this.server.clients) socket.terminate();
-    await Promise.allSettled([...this.pumps, ...this.requestCompletions]);
-    await new Promise((resolve3) => this.server.close(() => resolve3()));
+    await Promise.allSettled([...this.muxes.values()].map((mux) => mux.close()));
+    for (const socket of this.muxes.keys()) socket.destroy();
+    this.muxes.clear();
+    await Promise.allSettled(this.requestCompletions);
     this.answerable.clear();
-  }
-  async pump(socket, request, frames, abort) {
-    const heartbeat = setInterval(() => {
-      void this.identity(request).catch(() => socket.terminate());
-    }, this.config.sseHeartbeatMs);
-    heartbeat.unref();
-    try {
-      for await (const frame of frames) {
-        const identity = await this.identity(request);
-        const payload = this.config.authEnabled && identity !== void 0 ? await this.filterFrame(frame, identity) : frame.payload;
-        if (payload === void 0) continue;
-        await new Promise((resolve3, reject) => socket.send(JSON.stringify({ type: "server-request", rpcId: frame.rpcId, method: payload.type, payload }), (error) => error ? reject(error) : resolve3()));
-      }
-    } catch {
-    } finally {
-      clearInterval(heartbeat);
-      abort.abort();
-      socket.terminate();
-    }
-  }
-  async filterFrame(frame, identity) {
-    const payload = frame.payload;
-    if ("sessionId" in payload) {
-      if (!await this.runtime.canAccessNativeSession(payload.sessionId, identity)) return void 0;
-      if (payload.type === "approval/requested" || payload.type === "question/requested") this.answerable.set(frame.rpcId, payload.sessionId);
-      return payload;
-    }
-    if (payload.type === "host/workspace-changed") {
-      const workspace = await this.workspace(payload.workspace, identity);
-      return workspace === void 0 ? void 0 : { ...payload, workspace };
-    }
-    if (payload.type === "host/archived-sessions-changed") return { ...payload, archivedSessionIds: await filterAsync(payload.archivedSessionIds, (id) => this.runtime.canAccessNativeSession(id, identity)) };
-    if (payload.type === "host/remote-event") {
-      if (payload.event === "llm/adapters-updated") return payload;
-      if (payload.event === "agent-preset/selected" || payload.event === "commands/change") {
-        return typeof payload.args[0] === "string" && await this.runtime.canAccessNativeSession(payload.args[0], identity) ? payload : void 0;
-      }
-      return this.isAdmin(identity) && ["credentials/reference-updated", "settings/document-updated"].includes(payload.event) ? payload : void 0;
-    }
-    return void 0;
   }
   async workspace(value, identity) {
     const sessionIds = await filterAsync(value.sessionIds, (id) => this.runtime.canAccessNativeSession(id, identity));
     return sessionIds.length > 0 || await this.isWorkspace(value.path) ? { ...value, sessionIds } : void 0;
   }
   async isWorkspace(path) {
-    return path !== void 0 && (path === this.config.cwd || path === await realpath(this.config.cwd));
+    if (path === void 0) return false;
+    const canonical = (value) => process.platform === "win32" ? resolve3(value).toLowerCase() : resolve3(value);
+    try {
+      return canonical(await realpath(path)) === canonical(await realpath(this.config.cwd));
+    } catch {
+      return false;
+    }
   }
   async identity(request) {
     if (this.stopped || !this.runtime.isReady) throw new CarrierError(503, "\u804A\u5929\u5BA4\u5C1A\u672A\u5C31\u7EEA\u3002");
@@ -8571,26 +8990,39 @@ Connection: close\r
     if (request.headers.get("sec-fetch-site") === "cross-site") throw new CarrierError(403, "Cross-site request denied");
   }
 };
-function registerNativeGateway(ctx, runtime, config) {
+async function registerNativeGateway(ctx, runtime, config) {
   const hosts = [...config.nativeTrustedHosts ?? [], ...config.authPublicOrigin === "" ? [] : [new URL(config.authPublicOrigin).host]];
-  const connection = new HostConnectionService(ctx, hosts);
-  const handler = toFetchHandler2(ctx.apiProxy);
-  const shared = connection.createSharedFetchHandler("/api", handler);
-  const gateway = new NativeGateway(ctx, runtime, config, (request) => shared.fetch(request));
+  const transport = await createNativeTransport(ctx, hosts);
+  const shared = transport.connection.createSharedFetchHandler("/api");
+  const gateway = new NativeGateway(ctx, runtime, config, (request) => shared.fetch(request), transport);
+  if (config.authEnabled) transport.connection.authorizeIndex = (req, res) => {
+    const host = req.headers instanceof Headers ? req.headers.get("host") : req.headers.host;
+    const allowed = typeof host === "string" && ["localhost", "127.0.0.1", "[::1]", ...hosts].some((item) => item === host || item === new URL("http://" + host).hostname);
+    if (!allowed) {
+      res.writeHead(403);
+      res.end("Untrusted host");
+      return false;
+    }
+    return true;
+  };
   const disposers = [];
   try {
     disposers.push(ctx.webServer.register({ kind: "prefix", path: "/api", handler: (req, res) => gateway.handle(req, res) }));
-    disposers.push(ctx.webServer.registerUpgrade({ path: MUX_EVENTS_PATH, handler: (req, socket, head) => gateway.upgrade(req, socket, head, "mux") }));
-    disposers.push(ctx.webServer.registerUpgrade({ path: HOST_EVENTS_PATH, handler: (req, socket, head) => gateway.upgrade(req, socket, head, "host") }));
+    disposers.push(ctx.webServer.registerUpgrade({ path: MUX_PATH, handler: (req, socket, head) => gateway.upgrade(req, socket, head) }));
   } catch (error) {
     for (const dispose of disposers.reverse()) dispose();
-    void gateway.close();
+    await gateway.close();
     throw error;
   }
   return async () => {
     for (const dispose of disposers.splice(0).reverse()) dispose();
     await gateway.close();
   };
+}
+function isPromptPart(value) {
+  if (!isRecord(value)) return false;
+  if (value.type === "text") return typeof value.text === "string";
+  return value.type === "image" && typeof value.data === "string" && typeof value.mediaType === "string";
 }
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -8614,7 +9046,9 @@ var inject = [
   "agentPresets",
   "agents",
   "attachments",
-  "apiProxy",
+  "typert",
+  "typertGateway",
+  "credentials",
   "llm",
   "sessionPersistence",
   "sessions",
@@ -8624,13 +9058,13 @@ var inject = [
   "webServer",
   "workspaceRegistry"
 ];
-function apply(ctx, config) {
+async function apply(ctx, config) {
   validateConfig(config);
   const runtime = new ChatroomRuntime(ctx, config);
+  const closeGateway = await registerNativeGateway(ctx, runtime, config);
   const http = new ChatroomHttpController(ctx, runtime, config);
   const log = ctx.logger("deepseek-harness-chatroom");
   ctx.effect(() => {
-    const closeGateway = registerNativeGateway(ctx, runtime, config);
     const unregister = CHATROOM_API_PREFIXES.map((path) => ctx.webServer.register({
       kind: "prefix",
       path,

@@ -4,7 +4,7 @@
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
     <img alt="Version 1.4.4" src="https://img.shields.io/badge/version-1.4.4-4f6bff">
-    <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
+    <img alt="Harness 0.1.2-rc.1" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.2--rc.1-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
   </p>
@@ -18,6 +18,8 @@ Add Group, Solo, and direct-message modes to the native [DeepSeek Harness](https
 <p align="center"><sub>Human-first chat, native Agent responses, rich media, reactions, and live branch previews in one Session.</sub></p>
 
 ## Why this plugin
+
+This local `1.5.0-codex.rc1.1` adaptation is based on upstream 1.4.4 and pinned to official Harness `0.1.2-rc.1`; it is not an upstream release and does not modify DSH source. Shared deployments use a separate `DSH_HOME` and workspace to keep private Sessions and unrelated plugin APIs out of the shared service.
 
 | Native Harness, preserved | Collaboration, added | Identity, ready for deployment |
 | --- | --- | --- |
@@ -64,7 +66,8 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Initializati
 - The native `@` menu lists the Agent and current room members together. Participant identity is attached on the Host before Session admission, so browsers and the model see the same sender.
 - Shared Session rows retain the native sidebar while adding a roomier member-avatar collage. Native Session renames update the durable room title, so the name survives navigation and restarts.
 - Group, Solo, and Direct reuse the room composer layout and interaction model. Their transcript and composer use the full available conversation column instead of the native fixed-width cap.
-- The Session header shows the current identity, online count, and **Group management**. New-message toasts, title unread counts, and opt-in browser notifications work across rooms.
+- The Session header shows the current identity, online count, and **Group management**.
+- **Room AI participants** go beyond the single main Agent: room managers add named AI members (name, role, provider/model/reasoning effort, enable switch) from the session header's **AI members** panel, and each member persists in the plugin's independent `chatroom_agents` storage unit, physically separate from the legacy `chatroom` domain. The native `@` mention menu lists every enabled member with its role and model annotation; mentioning a member routes the message only to that member, which runs on its own durable Session with its selected model; the answer re-enters the shared room stream under the member's own name, and one member's failure never blocks other members or the room. New-message toasts, title unread counts, and opt-in browser notifications work across rooms.
 
 ### Complete native Agent runtime
 
@@ -108,6 +111,11 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Initializati
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.5.0-codex.rc1.1 (local compatibility build)** — Adds room AI participants: managers create per-room AI members with independent provider/model/reasoning routing and enable switches, persisted in a dedicated `chatroom_agents` storage unit. A name mention wakes only that member on its own durable Session and model, the reply re-enters the room stream under the member's own name, and per-member failures stay isolated from the rest of the room.
+- **1.4.4-codex.rc1.4 (local compatibility build)** — Shows the main Agent and the real native child catalog directly in the room header, with continuation buttons, activity, errors and refresh. Children retain their separate native Sessions; this does not turn `@` Session references into peer-Agent dispatch or combine all child replies in the room feed.
+- **1.4.4-codex.rc1.3 (local compatibility build)** — Fixes blank navigation when opening a native child: the UI now asks the existing server lineage authority instead of treating every child as an unowned Solo.
+- **1.4.4-codex.rc1.2 (local compatibility build)** — Adds account-scoped native subagent catalog, continuation, and stop controls; foreign parent/child addresses remain denied.
+- **1.4.4-codex.rc1.1 (local compatibility build)** — Targets DSH 0.1.2-rc.1 without changing or downgrading Harness. Reuses the native Typert RPC/WebSocket mux behind account authorization, migrates Session/UI contracts, and preserves native optimistic-message IDs. The native transport cohort is pinned and fails closed on untested versions.
 - **1.4.4** — authorize native HTTP, WebSocket, and cross-session references on the Host; bind Enterprise WeChat credentials and invitations to structured step admission; deliver files through the actual Agent filesystem; persist input before handing it to the native durable inbox; and dispose borrowed-Agent registrations and CLI children on unload.
 - **1.4.3** — isolate Enterprise WeChat QR credentials per platform account because the official meeting-create operation cannot override its authenticated organizer; create Quick meetings as the initiating user, invite every other conversation participant, keep lifecycle polling on the creating credential, and route Agent operations through the claimed turn speaker while retaining the former shared credential only for pre-upgrade meeting lifecycle records.
 - **1.4.2** — bind every authenticated Solo Session to its creating account, hide unjoined Groups and foreign Solo Sessions from the native sidebar, omit inaccessible default-room state, clear the previously selected transcript before and after account changes, and reject native prompt or slash-command submission before it can bypass room membership or sender identity.

@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
+import type {} from '@deepseek-ai/dsh-client-connection'
 import { ChatroomAuthError, ChatroomAuthRateLimitError } from './auth.js'
 import { automaticAuthRedirect } from './auth-redirect.js'
 import { renderAuthPage } from './auth-page.js'
@@ -13,7 +13,9 @@ import { isChatroomReactionEmoji } from './reactions.js'
 import type {
   ChatroomErrorResponse,
   ChatroomAccount,
+  ChatroomAgentProfilesView,
   ChatroomAutomationOverview,
+  ChatroomManageableRoomsResponse,
   ChatroomPromptContentPart,
   ChatroomPromptRequest,
   ChatroomForwardItem,
@@ -43,7 +45,7 @@ export class ChatroomHttpController {
     private readonly config: Config,
   ) {
     this.log = ctx.logger('deepseek-harness-chatroom')
-    this.configurationApi = toFetchHandler(ctx.apiProxy)
+    this.configurationApi = ctx.connection.createSharedFetchHandler('/api')
   }
 
   /** Dispatch one request under a registered chatroom API prefix. */
@@ -113,6 +115,14 @@ export class ChatroomHttpController {
       }
       if (route.endpoint === '/rooms/manage') {
         await this.handleRoomManagement(request, response)
+        return
+      }
+      if (route.endpoint === '/rooms/agents') {
+        await this.handleRoomAgents(request, response)
+        return
+      }
+      if (route.endpoint === '/rooms/manageable') {
+        await this.handleManageableRooms(request, response)
         return
       }
       if (route.endpoint === '/rooms/session') {
@@ -234,7 +244,15 @@ export class ChatroomHttpController {
         } else {
           account = await this.runtime.auth.synchronizeDshAuthProfile(request.headers, account)
         }
-        json(response, 200, this.sessionPayload(account ?? null, account))
+        const sessionId = new URL(request.url ?? '/', 'http://chatroom.local').searchParams.get('nativeSessionId')
+        json(response, 200, {
+          ...this.sessionPayload(account ?? null, account),
+          ...(sessionId === null ? {} : { nativeSessionAccess: {
+            sessionId,
+            allowed: account !== undefined && sessionId.length <= 256
+              && await this.runtime.canAccessNativeSession(sessionId, account),
+          } }),
+        } satisfies ChatroomSessionResponse)
         return
       }
       json(response, 200, this.sessionPayload(this.runtime.identity(token) ?? null))
@@ -734,6 +752,61 @@ export class ChatroomHttpController {
     throw new ChatroomInputError('群管理操作无效。')
   }
 
+  /** Rooms the current identity may manage AI participants in (settings-page room picker). */
+  private async handleManageableRooms(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== 'GET') {
+      methodNotAllowed(response, 'GET')
+      return
+    }
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    json(response, 200, { rooms: this.runtime.manageableRooms(identity) } satisfies ChatroomManageableRoomsResponse)
+  }
+
+  /** Room AI participant roster (GET) and manager CRUD (POST with an action field). */
+  private async handleRoomAgents(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const identity = await this.requireIdentity(request, response)
+    if (identity === undefined) return
+    if (request.method === 'GET') {
+      const url = new URL(request.url ?? '/', 'http://chatroom.local')
+      const roomId = url.searchParams.get('roomId')
+      if (roomId === null || roomId === '') throw new ChatroomInputError('缺少群聊标识。')
+      json(response, 200, await this.runtime.agentProfilesOverview(roomId, identity) satisfies ChatroomAgentProfilesView)
+      return
+    }
+    if (request.method !== 'POST') {
+      methodNotAllowed(response, 'GET, POST')
+      return
+    }
+    assertSameOrigin(request)
+    const body = await readJson(request, smallRequestLimit(this.config) + 4_096)
+    const roomId = fieldString(body, 'roomId')
+    const action = fieldString(body, 'action')
+    const effort = body['reasoningEffort']
+    if (action === 'delete') {
+      await this.runtime.deleteRoomAgentProfile(roomId, fieldString(body, 'profileId'), identity)
+      json(response, 200, await this.runtime.agentProfilesOverview(roomId, identity) satisfies ChatroomAgentProfilesView)
+      return
+    }
+    if (effort !== undefined && typeof effort !== 'string') throw new ChatroomInputError('字段 reasoningEffort 必须是字符串。')
+    const input = {
+      name: fieldString(body, 'name'),
+      role: fieldString(body, 'role'),
+      provider: fieldString(body, 'provider'),
+      model: fieldString(body, 'model'),
+      ...(typeof effort === 'string' && effort !== '' ? { reasoningEffort: effort } : {}),
+      enabled: fieldBoolean(body, 'enabled'),
+    }
+    if (action === 'create') {
+      await this.runtime.createRoomAgentProfile(roomId, identity, input)
+    } else if (action === 'update') {
+      await this.runtime.updateRoomAgentProfile(roomId, fieldString(body, 'profileId'), identity, input)
+    } else {
+      throw new ChatroomInputError('AI 成员操作无效。')
+    }
+    json(response, 200, await this.runtime.agentProfilesOverview(roomId, identity) satisfies ChatroomAgentProfilesView)
+  }
+
   private async handleRoomSession(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method !== 'POST') {
       methodNotAllowed(response, 'POST')
@@ -924,6 +997,7 @@ export class ChatroomHttpController {
       threadId: fieldString(body, 'threadId'),
       mode: parsed.mode,
       content: parsed.content,
+      ...(parsed.requestId === undefined ? {} : { requestId: parsed.requestId }),
       ...(parsed.reply === undefined ? {} : { reply: parsed.reply }),
     }
     const result = await this.runtime.submitThread(
@@ -932,6 +1006,7 @@ export class ChatroomHttpController {
       prompt.content,
       prompt.mode,
       prompt.reply,
+      prompt.requestId,
     )
     json(response, 200, result)
   }
@@ -946,7 +1021,7 @@ export class ChatroomHttpController {
     if (identity === undefined) return
     const body = await readJson(request, this.runtime.maxPromptRequestBytes)
     const prompt = promptRequest(body, this.config)
-    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode, prompt.reply)
+    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode, prompt.reply, prompt.requestId)
     json(response, 200, result)
   }
 
@@ -1498,7 +1573,8 @@ function promptRequest(body: Record<string, unknown>, config: Config): ChatroomP
     throw new ChatroomInputError('消息内容不能为空。')
   }
   const reply = replyRequest(body.reply)
-  return { roomId, mode, content, ...(reply === undefined ? {} : { reply }) }
+  if (body.requestId !== undefined && (typeof body.requestId !== 'string' || body.requestId.length === 0 || body.requestId.length > 256)) throw new ChatroomInputError('请求编号无效。')
+  return { roomId, mode, content, ...(reply === undefined ? {} : { reply }), ...(body.requestId === undefined ? {} : { requestId: body.requestId }) }
 }
 
 function replyRequest(value: unknown): ChatroomPromptRequest['reply'] {

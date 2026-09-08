@@ -24,6 +24,10 @@ export declare class ChatroomHttpController {
     private handleSearch;
     private handleRoomSelection;
     private handleRoomManagement;
+    /** Rooms the current identity may manage AI participants in (settings-page room picker). */
+    private handleManageableRooms;
+    /** Room AI participant roster (GET) and manager CRUD (POST with an action field). */
+    private handleRoomAgents;
     private handleRoomSession;
     private handleQuickMeeting;
     private handleWecomAuthorization;

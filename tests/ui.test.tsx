@@ -575,6 +575,12 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     threadPreviews: [],
     pendingMessages: [],
     membersOpen: false,
+    agentsOpen: false,
+    agentProfiles: undefined,
+    agentProfilesRoomId: undefined,
+    manageableRooms: [],
+    agentBusy: false,
+    agentError: undefined,
     error: undefined,
     composerRoomId: undefined,
     pendingFiles: [],
@@ -665,6 +671,7 @@ function entry(
 ): JSX.Element {
   return <ChatroomEntry
     useSessions={vi.fn() as never}
+    useSessionPendingInteraction={vi.fn() as never}
     useWorkspaces={vi.fn() as never}
     useChatroom={selector => selector(room)}
     openRoom={vi.fn()}
@@ -675,6 +682,7 @@ function entry(
     resetIdentity={vi.fn(async () => undefined)}
     retry={vi.fn(async () => undefined)}
     closeMembers={vi.fn()}
+    closeAgents={vi.fn()}
     closeThread={vi.fn()}
     setThreadReply={vi.fn()}
     clearThreadReply={vi.fn()}
