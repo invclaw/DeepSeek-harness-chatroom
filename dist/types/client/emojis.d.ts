@@ -1,0 +1,3 @@
+/** Common emoji palette shared by Group, branch, and Direct composers. */
+export declare const CHATROOM_MESSAGE_EMOJIS: readonly ["😀", "😃", "😄", "😁", "😆", "😂", "🤣", "😊", "🥰", "😍", "😘", "😋", "😎", "🤩", "🥳", "🙂", "🤔", "🫡", "🤗", "🤭", "😮", "😴", "😭", "😢", "😡", "🤯", "😱", "🙃", "👍", "👎", "👏", "🙌", "🙏", "🤝", "💪", "👌", "✌️", "🤞", "👋", "👀", "❤️", "🧡", "💛", "💚", "💙", "💜", "💯", "🔥", "✨", "⭐", "🎉", "🎊", "🎁", "🚀", "💡", "✅", "❌", "⚠️", "📌", "📝", "☕", "🍻", "🌹", "🐳"];
+//# sourceMappingURL=emojis.d.ts.map
