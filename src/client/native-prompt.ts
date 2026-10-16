@@ -1,7 +1,8 @@
-import type { IApiClient } from '@deepseek-ai/dsh-client-connection/client'
+import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
 import { identifyPrompt, isSlashCommand } from '../message.js'
 import type { ChatroomPromptContentPart } from '../types.js'
 import {
+  compositionTargetId,
   serializePendingFiles,
   submitRoomPrompt,
   submitThreadPrompt,
@@ -12,11 +13,15 @@ export { identifyPrompt }
 
 /** Route shared room chat through human-first admission while preserving native slash commands. */
 export function installNativePromptIdentity(
-  api: IApiClient,
+  api: ClientRemote,
   store: ChatroomClientStore,
 ): () => void {
-  const original = api.sessions.prompt
-  const wrapped: IApiClient['sessions']['prompt'] = async (payload, signal) => {
+  const namespace = api.session
+  // RC.2 generated methods are configurable accessors with no setter.
+  // Preserve that descriptor so unloading the plugin restores native tracing.
+  const descriptor = Object.getOwnPropertyDescriptor(namespace, 'prompt')
+  const original = namespace.prompt
+  const wrapped: ClientRemote['session']['prompt'] = async (payload, signal) => {
     const sessionId = String(payload.sessionId)
     const slashCommand = isSlashCommand(payload.content as readonly ChatroomPromptContentPart[])
     let target = typeof store.agentTargetForSession === 'function'
@@ -56,7 +61,7 @@ export function installNativePromptIdentity(
     if (typeof store.waitForRoomAutoTrigger === 'function') {
       await store.waitForRoomAutoTrigger(target.room.id)
     }
-    const composition = store.composition(target.room.id)
+    const composition = store.composition(compositionTargetId(target))
     const files = await serializePendingFiles(composition.files)
     const content = [...payload.content as readonly ChatroomPromptContentPart[], ...files]
     if (target.kind === 'thread') {
@@ -75,13 +80,12 @@ export function installNativePromptIdentity(
       }, signal)
     }
     store.completeComposition(composition)
-    return {
-      rpcId: 'chatroom-human-first' as never,
-      result: { ok: true, value: { accepted: true } },
-    }
+    return { ok: true, value: { accepted: true } }
   }
-  api.sessions.prompt = wrapped
+  Object.defineProperty(namespace, 'prompt', { configurable: true, enumerable: descriptor?.enumerable ?? true, writable: true, value: wrapped })
   return () => {
-    if (api.sessions.prompt === wrapped) api.sessions.prompt = original
+    if (namespace.prompt !== wrapped) return
+    if (descriptor === undefined) delete (namespace as Partial<typeof namespace>).prompt
+    else Object.defineProperty(namespace, 'prompt', descriptor)
   }
 }

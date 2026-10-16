@@ -6,7 +6,6 @@ import { ChatroomEntry } from '../src/client/ChatroomEntry.js'
 import { ChatroomSettingsSection } from '../src/client/ChatroomAccountPanels.js'
 import { RoomIdentityAction } from '../src/client/RoomIdentityAction.js'
 import { ChatroomAvatar } from '../src/client/ChatroomAvatar.js'
-import { BRANCH_FRAME_READY, markBranchFrameSessionReady } from '../src/client/branch-frame.js'
 import type { ChatroomView } from '../src/client/store.js'
 
 afterEach(() => {
@@ -309,7 +308,7 @@ describe('native chatroom integration', () => {
     expect(openMembers).toHaveBeenCalledOnce()
   })
 
-  it('renders room management, unread alerts, and an isolated native branch frame', () => {
+  it('renders room management and scoped native branch content with balanced references', async () => {
     const renameRoom = vi.fn(async () => true)
     const setMemberRole = vi.fn(async () => true)
     const addRoomMembers = vi.fn(async () => true)
@@ -341,11 +340,18 @@ describe('native chatroom integration', () => {
         root: { messageId: 'user:1', displayName: 'Bob', text: '主题消息', role: 'human' },
       },
     })
-    const overrides = { renameRoom, setMemberRole, addRoomMembers, setRoomAutoTrigger, closeThread }
+    const releases: ReturnType<typeof vi.fn>[] = []
+    const retainBranch = vi.fn((sessionId: string) => {
+      const release = vi.fn()
+      releases.push(release)
+      return { sessionId, ready: Promise.resolve({}), release } as never
+    })
+    const openBranchSession = vi.fn()
+    const overrides = { renameRoom, setMemberRole, addRoomMembers, setRoomAutoTrigger, closeThread, retainBranch, openBranchSession }
     const rendered = renderEntry(room, overrides)
     expect(screen.getByTestId('chatroom-members')).toBeTruthy()
     expect(screen.getByTestId('chatroom-thread-panel')).toBeTruthy()
-    expect(screen.getByText(/来自 AI 聊天室 · Bob：主题消息/)).toBeTruthy()
+    expect(screen.getByText('AI 聊天室 · Bob 发起')).toBeTruthy()
     expect(screen.getByText('新消息')).toBeTruthy()
     expect(screen.queryByRole('button', { name: '复制邀请链接' })).toBeNull()
     fireEvent.click(screen.getByRole('checkbox', { name: /Carol/ }))
@@ -354,30 +360,11 @@ describe('native chatroom integration', () => {
     expect(addRoomMembers).toHaveBeenCalledWith(['carol-id', 'dave-id'])
     fireEvent.click(screen.getByRole('checkbox', { name: '无需 @AI 自动回复' }))
     expect(setRoomAutoTrigger).toHaveBeenCalledWith(true)
-    const frame = screen.getByTitle('分支回复：主题消息') as HTMLIFrameElement
-    const frameUrl = new URL(frame.src)
-    expect(frameUrl.searchParams.get('dsh-chatroom-thread')).toBe('thread')
-    expect(frameUrl.searchParams.get('dsh-chatroom-thread-session')).toBe('chatroom-thread-v1-thread')
-    expect(frameUrl.searchParams.get('dsh-chatroom-parent-session')).toBe('chatroom-v1-lobby')
-    expect(screen.getByText('正在加载分支…')).toBeTruthy()
-    fireEvent(window, new MessageEvent('message', {
-      origin: globalThis.location.origin,
-      source: frame.contentWindow,
-      data: { type: BRANCH_FRAME_READY, threadId: 'thread' },
-    }))
-    expect(screen.getByText('正在加载分支…')).toBeTruthy()
-
-    const frameDocument = frame.contentDocument!
-    frameDocument.open()
-    frameDocument.write('<!doctype html><html><body><main data-dsh-chatroom-branch-shell><nav></nav><section><header>分支：主题消息</header><textarea></textarea></section><aside></aside></main></body></html>')
-    frameDocument.close()
-    markBranchFrameSessionReady(frameDocument, 'chatroom-thread-v1-thread')
-    fireEvent(window, new MessageEvent('message', {
-      origin: globalThis.location.origin,
-      source: frame.contentWindow,
-      data: { type: BRANCH_FRAME_READY, threadId: 'thread' },
-    }))
-    expect(screen.queryByText('正在加载分支…')).toBeNull()
+    await screen.findByTestId('native-branch-content')
+    expect(retainBranch).toHaveBeenCalledWith('chatroom-thread-v1-thread')
+    expect(document.querySelector('iframe')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '在主视图打开分支' }))
+    expect(openBranchSession).toHaveBeenCalledWith('chatroom-thread-v1-thread')
 
     fireEvent.change(screen.getByRole('textbox', { name: '群聊名称' }), { target: { value: '新群名' } })
     fireEvent.click(screen.getByRole('button', { name: '保存名称' }))
@@ -389,22 +376,16 @@ describe('native chatroom integration', () => {
 
     rendered.rerender(entry({ ...room, thread: undefined }, overrides))
     expect(screen.queryByTestId('chatroom-thread-panel')).toBeNull()
-    expect(screen.queryByTitle('分支回复：主题消息')).toBeNull()
-    rendered.rerender(entry(room, overrides))
-    expect(screen.getByTestId('chatroom-thread-panel').getAttribute('data-open')).toBe('true')
-    expect(screen.getByTitle('分支回复：主题消息')).not.toBe(frame)
-
+    expect(releases[0]).toHaveBeenCalledOnce()
     const nextThread = {
       id: 'thread-2', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread-2', createdAt: 2,
-      root: { messageId: 'assistant:2', displayName: 'DeepSeek', text: '一条较长的 AI 回复', role: 'ai' as const },
+      root: { messageId: 'assistant:2', displayName: 'DeepSeek', text: '另一条主题', role: 'ai' as const },
     }
-    rendered.rerender(entry({ ...room, thread: undefined }, overrides))
     rendered.rerender(entry({ ...room, thread: nextThread }, overrides))
-    const nextFrame = screen.getByTitle('分支回复：一条较长的 AI 回复') as HTMLIFrameElement
-    expect(nextFrame).not.toBe(frame)
-    const nextFrameUrl = new URL(nextFrame.src)
-    expect(nextFrameUrl.searchParams.get('dsh-chatroom-thread')).toBe('thread-2')
-    expect(nextFrameUrl.searchParams.get('dsh-chatroom-thread-session')).toBe('chatroom-thread-v1-thread-2')
+    await screen.findByTestId('native-branch-content')
+    expect(retainBranch).toHaveBeenLastCalledWith(nextThread.sessionId)
+    rendered.unmount()
+    expect(releases[1]).toHaveBeenCalledOnce()
   })
 
   it('lets every room member change the automatic-reply policy', () => {
@@ -424,65 +405,32 @@ describe('native chatroom integration', () => {
     expect(setRoomAutoTrigger).toHaveBeenCalledWith(true)
   })
 
-  it('does not mount a second chatroom shell inside the native branch frame', () => {
-    renderEntry(view({
-      branchFrame: {
-        threadId: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread',
-        parentSessionId: 'chatroom-v1-lobby',
-      },
-    }))
-    expect(document.body.firstElementChild?.firstChild).toBeNull()
+  it('shows a visible error when the native branch cannot load and releases it on close', async () => {
+    const ready = Promise.withResolvers<never>()
+    const release = vi.fn()
+    const retainBranch = vi.fn(() => ({ sessionId: 'branch-session', ready: ready.promise, release }) as never)
+    const rendered = renderEntry(view({ thread: {
+      id: 'thread', roomId: 'lobby', sessionId: 'branch-session', createdAt: 1,
+      root: { messageId: 'assistant:1', displayName: 'DeepSeek', text: '查询成功。\n\n长正文不应重复在标题中。', role: 'ai' },
+    } }), { retainBranch })
+    ready.reject(new Error('Session unavailable'))
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', '分支暂时无法加载，请关闭后重试。')
+    expect(screen.queryByTestId('native-branch-content')).toBeNull()
+    expect(screen.queryByText('长正文不应重复在标题中。')).toBeNull()
+    rendered.unmount()
+    expect(release).toHaveBeenCalledOnce()
   })
 
-  it('uses a compact title and falls back when the gateway refuses the embedded document', () => {
-    const sendThreadMessage = vi.fn(async () => true)
-    const rootText = `查询成功。\n\n**原始输入**：你能查到现在北京有多少实例吗？\n\n\`\`\`sql\nSELECT COUNT(*) FROM instance\n\`\`\`\n\n这里还有一段很长的说明，用于确认抽屉标题不会铺满整个页面。`
-    renderEntry(view({
-      thread: {
-        id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
-        root: { messageId: 'assistant:1', displayName: 'DeepSeek', text: rootText, role: 'ai' },
-      },
-      threadMessages: [{
-        id: 'thread-message', threadId: 'thread', sequence: 1, participantId: 'bob-id',
-        displayName: 'Bob', role: 'human', text: '兼容模式消息', createdAt: 2,
-      }, {
-        id: 'thread-message-2', threadId: 'thread', sequence: 2, participantId: 'bob-id',
-        displayName: 'Bob', role: 'human', text: 'https://example.com/thread', createdAt: 3,
-      }],
-    }), { sendThreadMessage })
-
-    const frame = screen.getByTitle(/^分支回复：查询成功。/) as HTMLIFrameElement
-    expect(frame.title).not.toContain('\n')
-    expect(frame.title).not.toContain('SELECT COUNT')
-    expect([...frame.title].length).toBeLessThan(60)
-    Object.defineProperty(frame, 'contentDocument', { configurable: true, value: null })
-    fireEvent.load(frame)
-
-    expect(screen.getByText('分支无法在当前页面完整显示，请在新标签中打开。')).toBeTruthy()
-    expect(sessionStorage.getItem('dsh-chatroom:branch-frame-compatibility')).toBe('1')
-    expect(screen.getByText('兼容模式消息')).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'https://example.com/thread' })).toBeTruthy()
-    const groupedThreadMessages = [...document.querySelectorAll<HTMLElement>('.dsh-chatroom-thread-message')]
-    expect(groupedThreadMessages.map(message => message.dataset.dshChatroomGroupPosition)).toEqual(['start', 'end'])
-    expect(groupedThreadMessages[1]?.querySelector('.dsh-chatroom-message-actions time')).toBeTruthy()
-    const fullAgent = screen.getByRole('link', { name: '在新标签打开分支' }) as HTMLAnchorElement
-    expect(new URL(fullAgent.href).searchParams.get('dsh-chatroom-thread')).toBe('thread')
-    fireEvent.change(screen.getByPlaceholderText('给分支 AI 发消息'), { target: { value: '你好' } })
-    fireEvent.click(screen.getByRole('button', { name: '发送' }))
-    expect(sendThreadMessage).toHaveBeenCalledWith('你好')
-  })
-
-  it('reuses the compatibility view after an origin rejects a branch frame', () => {
-    sessionStorage.setItem('dsh-chatroom:branch-frame-compatibility', '1')
-    renderEntry(view({
-      thread: {
-        id: 'thread', roomId: 'lobby', sessionId: 'chatroom-thread-v1-thread', createdAt: 1,
-        root: { messageId: 'assistant:1', displayName: 'DeepSeek', text: '后续分支', role: 'ai' },
-      },
-    }))
-
-    expect(screen.queryByTitle('分支回复：后续分支')).toBeNull()
-    expect(screen.getByText('分支无法在当前页面完整显示，请在新标签中打开。')).toBeTruthy()
+  it('keeps the parent selection unchanged while the branch has its own Session scope', async () => {
+    localStorage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: 'chatroom-v1-lobby' }))
+    const SessionProvider = vi.fn(({ session, children }) => <section data-testid="branch-scope" data-session={session.sessionId}>{children}</section>)
+    renderEntry(view({ thread: {
+      id: 'thread', roomId: 'lobby', sessionId: 'branch-session', createdAt: 1,
+      root: { messageId: 'user:1', displayName: 'Bob', text: '主题', role: 'human' },
+    } }), { SessionProvider: SessionProvider as never })
+    await screen.findByTestId('native-branch-content')
+    expect(screen.getByTestId('branch-scope').getAttribute('data-session')).toBe('branch-session')
+    expect(JSON.parse(localStorage.getItem('dsh.sessions.current')!)).toEqual({ sessionId: 'chatroom-v1-lobby' })
   })
 
   it('closes a branch only when the drawer backdrop is pressed', () => {
@@ -577,8 +525,7 @@ function view(patch: Partial<ChatroomView> = {}): ChatroomView {
     membersOpen: false,
     error: undefined,
     composerRoomId: undefined,
-    pendingFiles: [],
-    reply: undefined,
+    compositions: {},
     composerBusy: false,
     composerError: undefined,
     sessionControlBusy: false,
@@ -664,7 +611,14 @@ function entry(
   overrides: Partial<Parameters<typeof ChatroomEntry>[0]> = {},
 ): JSX.Element {
   return <ChatroomEntry
+    SessionProvider={({ children }) => children}
+    renderSlot={() => <div data-testid="native-branch-content">Native branch conversation</div>}
+    retainBranch={vi.fn((sessionId: string) => ({ sessionId, ready: Promise.resolve({}), release: vi.fn() })) as never}
+    openBranchSession={vi.fn()}
+    usePanelInfo={vi.fn() as never}
     useSessions={vi.fn() as never}
+    useSessionStatus={vi.fn() as never}
+    useSessionRetainInfo={vi.fn() as never}
     useWorkspaces={vi.fn() as never}
     useChatroom={selector => selector(room)}
     openRoom={vi.fn()}

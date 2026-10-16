@@ -1,6 +1,7 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { CHATROOM_REACTION_EMOJIS, type ChatroomReactionEmoji } from '../reactions.js'
 import type { ChatroomForwardItem, ChatroomIdentity, ChatroomReaction } from '../types.js'
+import { MessageActionIcon } from './MessageActionIcon.js'
 
 async function writeClipboard(text: string): Promise<boolean> {
   if (navigator.clipboard?.writeText !== undefined) {
@@ -43,7 +44,7 @@ export function ChatroomCopyButton({ text }: { readonly text: string }): JSX.Ele
         globalThis.setTimeout(() => { setCopied(false) }, 1_000)
       })
     }}
-  >{copied ? '✓' : '▣'} <span className="dsh-chatroom-action-label">{copied ? '已复制' : '复制'}</span></button>
+  ><MessageActionIcon name={copied ? 'check' : 'copy'} /><span className="dsh-chatroom-action-label">{copied ? '已复制' : '复制'}</span></button>
 }
 
 export interface ChatroomMessageToolsProps {
@@ -93,7 +94,7 @@ export function ChatroomInlineMessageActions({
   if (copyText === undefined && !canAct && !showTime) return null
   return (
     <div className="dsh-chatroom-message-actions">
-      {tools.onReply !== undefined && <button type="button" aria-label="回复" onClick={tools.onReply}>↩ <span className="dsh-chatroom-action-label">回复</span></button>}
+      {tools.onReply !== undefined && <button type="button" aria-label="回复" onClick={tools.onReply}><MessageActionIcon name="reply" /><span className="dsh-chatroom-action-label">回复</span></button>}
       {copyText !== undefined && <ChatroomCopyButton text={copyText} />}
       {canAct && (
         <button
@@ -101,13 +102,13 @@ export function ChatroomInlineMessageActions({
           aria-label={liked ? '取消点赞' : '点赞'}
           aria-pressed={liked}
           onClick={() => { void tools.toggleReaction(tools.roomId, tools.message.messageId, '👍') }}
-        >👍 <span className="dsh-chatroom-action-label">{liked ? '已赞' : '点赞'}</span></button>
+        ><MessageActionIcon name="like" /><span className="dsh-chatroom-action-label">{liked ? '已赞' : '点赞'}</span></button>
       )}
-      {tools.onBranch !== undefined && <button type="button" aria-label="分支" onClick={tools.onBranch}>⑂ <span className="dsh-chatroom-action-label">分支</span></button>}
-      {canAct && <button type="button" aria-label="转发" onClick={() => { tools.openForward(tools.roomId, tools.message) }}>↗ <span className="dsh-chatroom-action-label">转发</span></button>}
+      {tools.onBranch !== undefined && <button type="button" aria-label="分支" onClick={tools.onBranch}><MessageActionIcon name="branch" /><span className="dsh-chatroom-action-label">分支</span></button>}
+      {canAct && <button type="button" aria-label="转发" onClick={() => { tools.openForward(tools.roomId, tools.message) }}><MessageActionIcon name="forward" /><span className="dsh-chatroom-action-label">转发</span></button>}
       {(canAct || copyText !== undefined || tools.onBranch !== undefined) && (
         <span className="dsh-chatroom-inline-reaction-control">
-          <button type="button" aria-label="更多消息操作" aria-expanded={overflowOpen} onClick={() => { setOverflowOpen(open => !open) }}>•••</button>
+          <button type="button" aria-label="更多消息操作" aria-expanded={overflowOpen} onClick={() => { setOverflowOpen(open => !open) }}><MessageActionIcon name="more" /></button>
           {overflowOpen && (
             <span className="dsh-chatroom-action-overflow" role="menu" aria-label="更多消息操作" onPointerDown={event => { event.stopPropagation() }}>
               {canAct && <span className="dsh-chatroom-inline-reactions" aria-label="贴表情">

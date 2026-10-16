@@ -1,11 +1,13 @@
+import { deferChatroomMessage, hideChatroomMessages, resetChatroomContext, restoreDeferredChatroomMessages } from './model-history.js'
 import { parseSessionReferenceText } from '@deepseek-ai/dsh-session-reference'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { ServerResponse } from 'node:http'
-import { basename } from 'node:path'
+import { basename, isAbsolute } from 'node:path'
+import { referencedImagePaths } from './native-files.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
-import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
+import { agentPresetProjectionDefinition } from '@deepseek-ai/dsh-agent-preset-registry'
 import { AttachmentError, type ImageAttachmentRef, type ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { BlockAssembler, createAssistantMessage, createUserMessage, freezeMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
@@ -329,7 +331,7 @@ export class ChatroomRuntime {
     for (const messageId of this.activeTurnDeferredMessageIds.get(sessionId) ?? []) hidden.add(messageId)
     const state = [...this.states.values()].find(candidate => candidate.record.sessionId === sessionId)
     const resetSeq = state?.record.aiContextResetSeq
-    const events = state?.binding?.agent.session.events
+    const events = state?.binding?.agent.session.snapshotEvents()
     if (resetSeq === undefined || events === undefined) return hidden
     for (const event of events) {
       if (event.seq > resetSeq) break
@@ -486,7 +488,6 @@ export class ChatroomRuntime {
       this.threadStates.set(record.id, newThreadState(record))
     }
     await this.syncArchive()
-    await this.ensureRoom(this.config.roomId)
     await this.backfillMeetingCards()
     this.ready = true
     await this.recoverInputs()
@@ -662,6 +663,37 @@ export class ChatroomRuntime {
     }
   }
 
+  /** File display grants come from visible assistant images, never an arbitrary browser path. */
+  async assertNativeFileAccess(path: string, identity: ChatroomIdentity, signal: AbortSignal): Promise<void> {
+    if (!isAbsolute(path) || /[\u0000-\u001f\u007f]/u.test(path)) throw new ChatroomInputError('图片路径无效。')
+    const denied = () => new ChatroomInputError('图片不存在或你无权访问。')
+    try {
+      const target = await this.ctx.fs.resolve(path, { signal })
+      const root = await this.ctx.fs.resolve(this.config.cwd, { signal })
+      if (!this.ctx.fs.contains(root, target)) throw denied()
+      const ids = new Set([
+        ...[...this.states.values()].map(state => state.record.sessionId),
+        ...[...this.threadStates.values()].map(state => state.record.sessionId),
+        ...this.soloSessionIds(identity),
+        ...(await this.ctx.sessionPersistence.list()).map(item => String(item.header.id)),
+      ])
+      for (const id of ids) {
+        if (!await this.canAccessNativeSession(id, identity)) continue
+        const live = this.ctx.agents.get(SessionId(id))?.session
+        const inspected = live === undefined
+          ? await this.ctx.sessionController.inspect(SessionId(id)).catch(() => undefined) : undefined
+        if (live === undefined && inspected === undefined) continue
+        const events = live?.snapshotEvents() ?? inspected!.events
+        const cwd = live?.header.cwd ?? inspected?.meta.cwd ?? this.config.cwd
+        for (const reference of referencedImagePaths(events, cwd)) {
+          const source = await this.ctx.fs.resolve(reference, { signal }).catch(() => undefined)
+          if (source !== undefined && this.ctx.fs.contains(source, target) && this.ctx.fs.contains(target, source)) return
+        }
+      }
+    } catch { throw denied() }
+    throw denied()
+  }
+
   /** Reserve an opaque native Session id as a private Solo conversation. */
   async reserveSoloSession(identity: ChatroomIdentity): Promise<string> {
     this.assertReady()
@@ -702,7 +734,7 @@ export class ChatroomRuntime {
     return this.requireSoloSessions().get(String(SessionId(sessionId)))?.participantId === identity.participantId
   }
 
-  /** Resolve room and Solo ownership before consulting immutable native parent lineage. */
+  /** Only native subagents inherit access; a fork needs its own registered owner. */
   async canAccessNativeSession(sessionId: string, identity: ChatroomIdentity, visited = new Set<string>()): Promise<boolean> {
     this.assertReady()
     if (!this.config.authEnabled) return true
@@ -714,8 +746,9 @@ export class ChatroomRuntime {
     const solo = this.requireSoloSessions().get(sessionId)
     if (solo !== undefined) return solo.participantId === identity.participantId
     const header = this.ctx.agents.get(SessionId(sessionId))?.session.header
-      ?? (await this.ctx.sessionPersistence.list()).find(header => String(header.id) === sessionId)
-    return header?.parentSession !== undefined && await this.canAccessNativeSession(String(header.parentSession), identity, visited)
+      ?? (await this.ctx.sessionPersistence.list()).find(item => String(item.header.id) === sessionId)?.header
+    return header?.origin === 'subagent' && header.parentSession !== undefined
+      && await this.canAccessNativeSession(String(header.parentSession), identity, visited)
   }
 
   /** Attribute a native fork to its creator before returning the child id to the browser. */
@@ -779,7 +812,7 @@ export class ChatroomRuntime {
     }
     const live = this.ctx.agents.get(SessionId(normalizedSessionId))
     const persisted = live !== undefined || (await this.ctx.sessionPersistence.list())
-      .some(header => String(header.id) === normalizedSessionId)
+      .some(({ header }) => String(header.id) === normalizedSessionId)
     if (!persisted) throw new ChatroomInputError('Harness 会话不存在或尚未就绪。')
     const id = `session-${createHash('sha256').update(normalizedSessionId).digest('base64url').slice(0, 24)}`
     const now = Date.now()
@@ -856,7 +889,7 @@ export class ChatroomRuntime {
       await previous.agent.whenIdle()
       for (const [id, input] of this.requireInputs().entries()) {
         if (input.sessionId !== String(previous.agent.session.id)) continue
-        if (!previous.agent.session.events.some(event => event.type === 'user/message' && String(event.data.id) === id)) {
+        if (!previous.agent.session.snapshotEvents().some(event => event.type === 'user/message' && String(event.data.id) === id)) {
           previous.agent.session.append('user/message', freezeMessage(input.message), { surfaceOp: 'append' })
         }
         await this.commitInput(previous.agent.session, id)
@@ -865,7 +898,8 @@ export class ChatroomRuntime {
       this.broadcastPendingMessages(state)
       await this.aiContextStartWrites.get(roomId)
       this.archiveRoomSession(state, previous.agent.session)
-      const resetSeq = previous.agent.session.events.at(-1)?.seq
+      const resetSeq = previous.agent.session.snapshotEvents().at(-1)?.seq
+      resetChatroomContext(previous.agent.session)
       const record = await this.requireRoomRecords().update(roomId, current => ({
         ...withoutAiContextStart(current),
         ...(resetSeq === undefined ? {} : { aiContextResetSeq: resetSeq }),
@@ -1149,8 +1183,8 @@ export class ChatroomRuntime {
           const deferFromActiveTurn = binding.agent.status === 'running'
           const event = binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
           automaticSourceMessageId = `user:${event.seq}`
-          await this.commitInput(binding.agent.session, String(message.id))
           if (deferFromActiveTurn) this.deferMessageFromActiveTurn(binding.agent, String(message.id))
+          await this.commitInput(binding.agent.session, String(message.id))
         }
       } else if (mode === 'steer') {
         binding.agent.steer(message)
@@ -1313,6 +1347,11 @@ export class ChatroomRuntime {
         ? state.record.sessionId
         : this.requireThreads().get(threadMessage.threadId)?.sessionId
       this.requireArchive().recallMessage(conversationId, normalizedMessageId, identity.participantId, record.createdAt, sessionId)
+      const binding = threadMessage === undefined ? state.binding : this.threadStates.get(threadMessage.threadId)?.binding
+      if (binding !== undefined) {
+        this.applyModelVisibility(binding.agent.session)
+        if (!await this.ctx.sessions.flush(binding.agent.session)) throw new Error('No native Session durability listener')
+      }
       for (const [reactionKey, reaction] of this.requireReactions().entries()) {
         if (reaction.roomId === roomId && reaction.messageId === normalizedMessageId) {
           await this.requireReactions().delete(reactionKey)
@@ -1444,7 +1483,7 @@ export class ChatroomRuntime {
       throw new ChatroomInputError('转发来源消息不完整。')
     }
     const source = await this.forwardSourceBinding(sourceRoomId, item.sourceSessionId)
-    const event = source.agent.session.events.find(candidate => candidate.seq === item.sourceSeq)
+    const event = source.agent.session.snapshotEvents().find(candidate => candidate.seq === item.sourceSeq)
     if (event === undefined) throw new ChatroomInputError('转发来源消息不存在或已变化。')
     const message = event.type === 'user/message'
       ? event.data
@@ -1514,7 +1553,7 @@ export class ChatroomRuntime {
   ): Promise<{ readonly ref: ChatroomImageReference; readonly data: Uint8Array }> {
     this.assertReady()
     const binding = await this.forwardSourceBinding(sourceRoomId, sourceSessionId)
-    const event = binding.agent.session.events.find(candidate => candidate.seq === sourceSeq)
+    const event = binding.agent.session.snapshotEvents().find(candidate => candidate.seq === sourceSeq)
     const message = event?.type === 'user/message'
       ? event.data
       : event?.type === 'assistant/message'
@@ -1877,8 +1916,8 @@ export class ChatroomRuntime {
       if (!aiTriggered) {
         const deferFromActiveTurn = binding.agent.status === 'running'
         binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
-        await this.commitInput(binding.agent.session, String(message.id))
         if (deferFromActiveTurn) this.deferMessageFromActiveTurn(binding.agent, String(message.id))
+        await this.commitInput(binding.agent.session, String(message.id))
       } else if (mode === 'steer') {
         binding.agent.steer(message)
       } else {
@@ -1924,6 +1963,7 @@ export class ChatroomRuntime {
       return
     }
     if (event.type === 'user/message') {
+      if (event.surfaceOp !== 'append') return
       void this.commitInput(session, String(event.data.id)).catch((error: unknown) => {
         this.log.warn('Accepted input remains available for recovery: %s', String(error))
       })
@@ -1931,7 +1971,7 @@ export class ChatroomRuntime {
       if (room !== undefined) this.removePendingMessage(room, String(event.data.id))
       return
     }
-    if (event.type !== 'assistant/message') return
+    if (event.type !== 'assistant/message' || event.surfaceOp !== 'append') return
     if (this.ignoredAssistantMessageIds.delete(String(event.data.message.id))) return
     const text = assistantText(event.data.message.content)
     if (text === '') return
@@ -2467,7 +2507,7 @@ export class ChatroomRuntime {
       throw new ChatroomInputError('目标消息不存在。')
     }
     const binding = await this.ensureRoom(target.room.record.id)
-    const event = binding.agent.session.events.find((candidate) => {
+    const event = binding.agent.session.snapshotEvents().find((candidate) => {
       if (candidate.type === 'user/message') {
         return messageId === `user:${candidate.seq}` || messageId === `steering:${candidate.seq}`
       }
@@ -2510,8 +2550,8 @@ export class ChatroomRuntime {
       ].slice(-20)
     }
     const binding = await this.ensureRoom(target.room.record.id)
-    return binding.agent.session.events.flatMap((event) => {
-      if (event.type !== 'user/message' && event.type !== 'assistant/message') return []
+    return binding.agent.session.snapshotEvents().flatMap((event) => {
+      if ((event.type !== 'user/message' && event.type !== 'assistant/message') || event.surfaceOp !== 'append') return []
       const messageId = event.type === 'assistant/message' ? String(event.data.message.id) : `user:${event.seq}`
       if (recalled.has(messageId) || (event.type === 'user/message' && recalled.has(`steering:${event.seq}`))) return []
       const role = event.type === 'assistant/message' ? 'ai' as const : 'human' as const
@@ -2549,6 +2589,11 @@ export class ChatroomRuntime {
       if (reaction.roomId === target.room.record.id && reaction.messageId === messageId) {
         await this.requireReactions().delete(key)
       }
+    }
+    const binding = target.thread?.binding ?? target.room.binding
+    if (binding !== undefined) {
+      this.applyModelVisibility(binding.agent.session)
+      if (!await this.ctx.sessions.flush(binding.agent.session)) throw new Error('No native Session durability listener')
     }
     this.broadcast(target.room, { type: 'message-recalled', recall: publicRecall(record) })
   }
@@ -2588,6 +2633,7 @@ export class ChatroomRuntime {
     const binding = await this.acquireAgent(sessionId, parentSessionId)
     try {
       await this.attachWorkspace(sessionId)
+      this.applyModelVisibility(binding.agent.session, binding.agent.status === 'idle')
       return binding
     } catch (error) {
       await binding.release()
@@ -2608,12 +2654,12 @@ export class ChatroomRuntime {
       this.augmentChatroomAgentContext(live.ctx, sessionId)
       return borrowAgent(live)
     }
-    const persisted = (await this.ctx.sessionPersistence.list()).some(header => header.id === id)
+    const persisted = (await this.ctx.sessionPersistence.list()).some(({ header }) => header.id === id)
     const model = this.ctx.agentDefaultModel.currentSelection()
     const agentOptions = { provider: model.provider, model: model.model }
     if (persisted) {
-      const inspected = await this.ctx.sessionPersistence.inspect(id)
-      const agentPreset = resolveSessionPreset({ header: inspected.meta, events: inspected.events })
+      const inspected = await this.ctx.sessionController.inspect(id)
+      const agentPreset = inspected.events.reduce(agentPresetProjectionDefinition.apply, agentPresetProjectionDefinition.init(inspected.meta))
         ?? this.config.agentPreset
       try {
         return ownAgent(await this.ctx.agents.resume({
@@ -2656,14 +2702,38 @@ export class ChatroomRuntime {
     this.augmentChatroomAgentContext(agentCtx, sessionId)
   }
 
+  /** Apply tombstones before native commands or compaction can read model history. */
+  async prepareNativeModelSession(sessionId: string): Promise<void> {
+    const room = [...this.states.values()].find(state => state.record.sessionId === sessionId)
+    const thread = [...this.threadStates.values()].find(state => state.record.sessionId === sessionId)
+    const binding = room !== undefined ? await this.ensureRoom(room.record.id)
+      : thread !== undefined ? await this.ensureThread(thread.record.id) : undefined
+    if (binding !== undefined) this.applyModelVisibility(binding.agent.session)
+  }
+
+  private applyModelVisibility(session: Session, idle = false): void {
+    const sessionId = String(session.id)
+    const hidden = new Set(this.recalledMessageIds(sessionId))
+    const resetSeq = [...this.states.values()].find(state => state.record.sessionId === sessionId)?.record.aiContextResetSeq
+    if (resetSeq !== undefined) for (const event of session.snapshotEvents()) {
+      if (event.seq > resetSeq) break
+      const message = session.deriveEventMessage(event)
+      if (message !== null) hidden.add(String(message.id))
+    }
+    hideChatroomMessages(session, hidden)
+    restoreDeferredChatroomMessages(session, this.recalledMessageIds(sessionId), idle)
+  }
+
   private augmentChatroomAgentContext(agentCtx: Context, sessionId: string): void {
     if (this.chatroomAgentContexts.has(agentCtx)) return
     const disposers: Array<() => void> = []
     const dispose = (): void => { for (const release of disposers.splice(0).reverse()) release() }
     try {
       disposers.push(agentCtx.on('agent/pre-step', async (payload, next) => {
+        this.applyModelVisibility(payload.agent.session)
         const decision = await next()
         if (decision.kind !== 'enter') return decision
+        this.applyModelVisibility(payload.agent.session)
         const participants = new Set(decision.messages.map(messageParticipant).filter(id => id !== undefined))
         // A step mixing different people's input cannot authorize a personal-account side effect.
         if (participants.size === 1) this.sessionActors.set(sessionId, [...participants][0]!)
@@ -2815,13 +2885,13 @@ export class ChatroomRuntime {
         this.backfillMeetingCard(message.card, 'direct', message.conversationId, message.createdAt)
       }
     }
-    const persisted = new Set((await this.ctx.sessionPersistence.list()).map(header => String(header.id)))
+    const persisted = new Set((await this.ctx.sessionPersistence.list()).map(({ header }) => String(header.id)))
     let complete = true
     for (const state of this.states.values()) {
-      let events: readonly SessionEvent[] | undefined = state.binding?.agent.session.events
+      let events: readonly SessionEvent[] | undefined = state.binding?.agent.session.snapshotEvents()
       if (events === undefined && persisted.has(state.record.sessionId)) {
         try {
-          events = (await this.ctx.sessionPersistence.inspect(SessionId(state.record.sessionId))).events
+          events = (await this.ctx.sessionController.inspect(SessionId(state.record.sessionId))).events
         } catch (error) {
           complete = false
           this.log.warn('Unable to inspect room %s while recovering meeting cards: %s', state.record.id, String(error))
@@ -2829,7 +2899,7 @@ export class ChatroomRuntime {
       }
       if (events === undefined) continue
       for (const event of events) {
-        if (event.type !== 'user/message' && event.type !== 'assistant/message') continue
+        if ((event.type !== 'user/message' && event.type !== 'assistant/message') || event.surfaceOp !== 'append') continue
         const message = event.type === 'assistant/message' ? event.data.message : event.data
         for (const card of meetingCards(message.content)) {
           this.backfillMeetingCard(card, 'room', state.record.id, event.time)
@@ -2837,10 +2907,10 @@ export class ChatroomRuntime {
       }
     }
     for (const state of this.threadStates.values()) {
-      let events: readonly SessionEvent[] | undefined = state.binding?.agent.session.events
+      let events: readonly SessionEvent[] | undefined = state.binding?.agent.session.snapshotEvents()
       if (events === undefined && persisted.has(state.record.sessionId)) {
         try {
-          events = (await this.ctx.sessionPersistence.inspect(SessionId(state.record.sessionId))).events
+          events = (await this.ctx.sessionController.inspect(SessionId(state.record.sessionId))).events
         } catch (error) {
           complete = false
           this.log.warn('Unable to inspect branch %s while recovering meeting cards: %s', state.record.id, String(error))
@@ -2848,7 +2918,7 @@ export class ChatroomRuntime {
       }
       if (events === undefined) continue
       for (const event of events) {
-        if (event.type !== 'user/message' && event.type !== 'assistant/message') continue
+        if ((event.type !== 'user/message' && event.type !== 'assistant/message') || event.surfaceOp !== 'append') continue
         const message = event.type === 'assistant/message' ? event.data.message : event.data
         for (const card of meetingCards(message.content)) {
           this.backfillMeetingCard(card, 'thread', state.record.id, event.time)
@@ -3005,7 +3075,7 @@ export class ChatroomRuntime {
       content: [{ type: 'text', text: `## 会议总结 · ${meeting.title}\n\n${meeting.summary ?? ''}` }],
       source: { provider: settings.meetingSummaryProvider, model: settings.meetingSummaryModel },
     })
-    binding.agent.session.append('assistant/message', { turn: 0, step: 0, message }, { surfaceOp: 'append' })
+    binding.agent.session.append('assistant/message', { turn: 0, step: 0, message, stream: [] }, { surfaceOp: 'append' })
   }
 
   private canReadMeeting(meeting: ArchivedMeeting, participantId: string): boolean {
@@ -3284,7 +3354,7 @@ export class ChatroomRuntime {
     const existing = this.inputCommits.get(messageId)
     if (existing !== undefined) return existing
     if (this.requireInputs().get(messageId) === undefined) return Promise.resolve()
-    const claimed = (): boolean => session.events.some(event => event.type === 'user/message' && String(event.data.id) === messageId)
+    const claimed = (): boolean => session.snapshotEvents().some(event => event.type === 'user/message' && String(event.data.id) === messageId)
     const claimedBeforeFlush = claimed()
     const commit = this.ctx.sessions.flush(session).then(async durable => {
       if (!durable) throw new Error('No native Session durability listener')
@@ -3303,7 +3373,7 @@ export class ChatroomRuntime {
       const thread = record.threadId === undefined ? undefined : this.requireThreadState(record.threadId)
       const binding = thread === undefined ? await this.ensureRoom(room.record.id) : await this.ensureThread(thread.record.id)
       if (String(binding.agent.session.id) !== record.sessionId) throw new Error('Accepted input refers to a replaced Session')
-      if (binding.agent.session.events.some(event => event.type === 'user/message' && String(event.data.id) === id)) {
+      if (binding.agent.session.snapshotEvents().some(event => event.type === 'user/message' && String(event.data.id) === id)) {
         await this.commitInput(binding.agent.session, id)
         continue
       }
@@ -3321,8 +3391,8 @@ export class ChatroomRuntime {
       else {
         // An interrupted controller decision preserves human chat without repeating an uncertain external operation.
         binding.agent.session.append('user/message', message, { surfaceOp: 'append' })
-        await this.commitInput(binding.agent.session, id)
         if (binding.agent.status === 'running') this.deferMessageFromActiveTurn(binding.agent, id)
+        await this.commitInput(binding.agent.session, id)
       }
     }
   }
@@ -3435,7 +3505,7 @@ export class ChatroomRuntime {
   }
 
   private captureAiContextStart(session: Session, event: SessionEvent): void {
-    if (event.type !== 'user/message') return
+    if (event.type !== 'user/message' || event.surfaceOp !== 'append') return
     const state = [...this.states.values()].find(candidate => candidate.record.sessionId === String(session.id))
     const resetSeq = state?.record.aiContextResetSeq
     if (state === undefined || resetSeq === undefined || state.record.aiContextStartSeq !== undefined
@@ -3568,7 +3638,7 @@ export class ChatroomRuntime {
   }
 
   private archiveRoomSession(state: RoomState, session: Session): void {
-    for (const event of session.events) this.archiveSessionEvent(session, event)
+    for (const event of session.snapshotEvents()) this.archiveSessionEvent(session, event)
     for (const recall of this.recallsForRoom(state.record.id)) {
       this.requireArchive().recallMessage(
         state.record.id,
@@ -3582,7 +3652,7 @@ export class ChatroomRuntime {
 
   private archiveSessionEvent(session: Session, event: SessionEvent): void {
     const room = [...this.states.values()].find(state => state.record.sessionId === String(session.id))
-    if (room === undefined || (event.type !== 'user/message' && event.type !== 'assistant/message')) return
+    if (room === undefined || (event.type !== 'user/message' && event.type !== 'assistant/message') || event.surfaceOp !== 'append') return
     const role = event.type === 'assistant/message' ? 'ai' as const : 'human' as const
     const message = event.type === 'assistant/message' ? event.data.message : event.data
     const firstText = message.content.find((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')?.text
@@ -3616,7 +3686,7 @@ export class ChatroomRuntime {
       : this.ctx.agentDefaultModel.currentSelection()
     const message = createAssistantMessage({ content, source: selection })
     this.ignoredAssistantMessageIds.add(String(message.id))
-    binding.agent.session.append('assistant/message', { turn: 0, step: 0, message }, { surfaceOp: 'append' })
+    binding.agent.session.append('assistant/message', { turn: 0, step: 0, message, stream: [] }, { surfaceOp: 'append' })
   }
 
   private async shouldAutoTrigger(
@@ -3628,7 +3698,7 @@ export class ChatroomRuntime {
     if (room.record.autoTriggerEnabled !== true) return false
     if (addressesAi(content, room.record.aiDisplayName)) return true
     const history = thread === undefined
-      ? recentRoomConversation(binding.agent.session.events, this.hiddenModelMessageIds(room.record.sessionId))
+      ? recentRoomConversation(binding.agent.session.snapshotEvents(), this.hiddenModelMessageIds(room.record.sessionId))
       : recentThreadConversation(
           thread.record,
           this.messagesForThread(thread.record.id).filter(message =>
@@ -3703,7 +3773,7 @@ export class ChatroomRuntime {
           text: `The automatic-response controller selected this chatroom message for an AI response: ${JSON.stringify(promptPreview(content))}\nChatroom pending source: ${sourceMessageId ?? 'none'}\nRespond to that message now. Do not mention this controller notice.`,
         }],
         source: {
-          kind: 'plugin',
+          kind: 'chatroom-control',
           plugin: 'deepseek-harness-chatroom',
           form: 'notice',
           summary: 'Automatic chatroom response',
@@ -3725,12 +3795,16 @@ export class ChatroomRuntime {
   }
 
   private deferMessageFromActiveTurn(agent: Agent, messageId: string): void {
+    deferChatroomMessage(agent.session, messageId)
     const sessionId = String(agent.session.id)
     const deferred = this.activeTurnDeferredMessageIds.get(sessionId) ?? new Set<string>()
     deferred.add(messageId)
     this.activeTurnDeferredMessageIds.set(sessionId, deferred)
     void agent.whenIdle().then(() => {
-      if (agent.status === 'idle') this.activeTurnDeferredMessageIds.delete(sessionId)
+      if (agent.status === 'idle') {
+        restoreDeferredChatroomMessages(agent.session, this.recalledMessageIds(sessionId), true)
+        this.activeTurnDeferredMessageIds.delete(sessionId)
+      }
     }).catch((error: unknown) => {
       this.log.warn('Unable to release deferred chatroom messages for %s: %s', sessionId, String(error))
     })
@@ -3847,7 +3921,7 @@ export class ChatroomRuntime {
     }
     const match = /^(?:user|steering):(\d+)$/u.exec(messageId)
     const sequence = match === null ? undefined : Number(match[1])
-    const event = sequence === undefined ? undefined : state.binding?.agent.session.events.find(candidate =>
+    const event = sequence === undefined ? undefined : state.binding?.agent.session.snapshotEvents().find(candidate =>
       candidate.seq === sequence && candidate.type === 'user/message')
     const text = event?.type === 'user/message'
       ? event.data.content.find((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')?.text
@@ -4033,7 +4107,7 @@ function assertNever(value: never): never {
 
 function recentRoomConversation(events: readonly SessionEvent[], recalledIds: ReadonlySet<string>): readonly string[] {
   return events.flatMap(event => {
-    if (event.type !== 'user/message' && event.type !== 'assistant/message') return []
+    if ((event.type !== 'user/message' && event.type !== 'assistant/message') || event.surfaceOp !== 'append') return []
     const message = event.type === 'assistant/message' ? event.data.message : event.data
     if (recalledIds.has(String(message.id))) return []
     const role = event.type === 'assistant/message' ? 'AI' : '成员'
@@ -4146,7 +4220,7 @@ function normalizeThreadRoot(root: ChatroomThreadRoot): ChatroomThreadRoot {
 function fallbackThreadRootContent(root: ChatroomThreadRoot): ContentBlock[] {
   return [{
     type: 'text',
-    text: `这是群聊分支的主题消息。${root.displayName}：${root.text}`,
+    text: `${root.displayName}：${root.text}`,
   }]
 }
 
@@ -4160,7 +4234,7 @@ function authoritativeThreadRootContent(
   if (item.forward !== undefined) metadata += identifyForwardText(item.forward)
   const blocks: ContentBlock[] = [{
     type: 'text',
-    text: `这是群聊分支的主题消息。${root.displayName}：${metadata}`,
+    text: `${root.displayName}：${metadata}`,
   }]
   for (const part of content) {
     if (part.type === 'text') {

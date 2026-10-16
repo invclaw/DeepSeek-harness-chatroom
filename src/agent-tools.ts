@@ -131,7 +131,7 @@ export function registerChatroomAgentTools(
               { type: 'text', text: result.followupText },
             ],
             source: {
-              kind: 'plugin',
+              kind: 'chatroom-control',
               plugin: 'deepseek-harness-chatroom',
               form: 'notice',
               summary: `Deliver ${result.action} output to the chatroom`,

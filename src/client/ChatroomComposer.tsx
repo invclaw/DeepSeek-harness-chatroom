@@ -4,7 +4,7 @@ import type { ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conver
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatroomReplyReference } from '../types.js'
 import { participantMarker } from '../message.js'
-import type { ChatroomAgentTarget, ChatroomClientStore, ChatroomView } from './store.js'
+import { compositionTargetId, type ChatroomAgentTarget, type ChatroomClientStore, type ChatroomView } from './store.js'
 import { CHATROOM_MESSAGE_EMOJIS } from './emojis.js'
 import { subscribeChatroomDraftRestore } from './draft-restore.js'
 
@@ -36,7 +36,7 @@ interface ChatroomSessionInjected extends ChatroomComposerBaseInjected {
 }
 
 type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomFileInjected
-type ComposerDockProps = PropsRuntime<'conversation.input.dock'> & ChatroomFileInjected & ChatroomQueueInjected
+type ComposerDockProps = PropsRuntime<'conversation.composer.dock'> & ChatroomFileInjected & ChatroomQueueInjected
 type ComposerRightProps = PropsRuntime<'conversation.input.right'> & ChatroomSessionInjected
 type ComposerAttachmentsInjected = ChatroomComposerBaseInjected & Pick<ChatroomFileInjected, 'clearReply'> & {
   nativeAttachmentsView: ComponentType<ComposerAttachmentsProps>
@@ -121,19 +121,21 @@ export function ChatroomPendingFiles({ files, remove, trailing }: {
 
 /** Small file chooser inside the native composer tool row. */
 export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
+  const inputState = props.useInput(snapshot => snapshot)
   const room = props.useChatroom(snapshot => snapshot)
   const target = props.resolveTarget(String(props.sessionId))
   const active = target?.room
   const input = useRef<HTMLInputElement>(null)
   const [emojiOpen, setEmojiOpen] = useState(false)
-  if (active === undefined) return null
+  if (active === undefined || target === undefined) return null
+  const compositionId = compositionTargetId(target)
   return (
     <div className="dsh-chatroom-composer-actions">
       <ChatroomEmojiPicker
         open={emojiOpen}
         toggle={() => { setEmojiOpen(open => !open) }}
         close={() => { setEmojiOpen(false) }}
-        pick={emoji => { props.inputActions.setDraft(`${props.input.draft}${emoji}`) }}
+        pick={emoji => { props.inputActions.setDraft(`${inputState.draft}${emoji}`) }}
       />
       <button
         className="dsh-chatroom-file-button"
@@ -153,7 +155,7 @@ export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
         multiple
         onChange={(event) => {
           const files = event.currentTarget.files
-          if (files !== null) props.addFiles(active.id, [...files])
+          if (files !== null) props.addFiles(compositionId, [...files])
           event.currentTarget.value = ''
         }}
       />
@@ -163,6 +165,7 @@ export function ChatroomFileAction(props: FileActionProps): JSX.Element | null {
 
 /** Native-composer controls for stopping work or rotating the room Session. */
 export function ChatroomSessionControls(props: ComposerRightProps): JSX.Element | null {
+  const sessionState = props.useSession(snapshot => snapshot)
   const room = props.useChatroom(snapshot => snapshot)
   const target = props.resolveTarget(String(props.sessionId))
   if (target === undefined) return null
@@ -171,7 +174,7 @@ export function ChatroomSessionControls(props: ComposerRightProps): JSX.Element 
       {target.kind === 'room' && <>
         <button
           type="button"
-          disabled={!props.session.running || room.sessionControlBusy}
+          disabled={!sessionState.running || room.sessionControlBusy}
           onClick={() => { void props.stopRoomSession(target.room.id) }}
         >■ 停止</button>
         <button
@@ -202,6 +205,8 @@ export function ChatroomSessionControls(props: ComposerRightProps): JSX.Element 
 
 /** Pending file rail above the native composer. */
 export function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | null {
+  const inputState = props.useInput(snapshot => snapshot)
+  const sessionState = props.useSession(snapshot => snapshot)
   const room = props.useChatroom(snapshot => snapshot)
   const target = props.resolveTarget(String(props.sessionId))
   useEffect(() => subscribeChatroomDraftRestore(
@@ -211,15 +216,19 @@ export function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | nu
   if (target === undefined) return null
   const active = target.room
   const pendingIds = new Set((room.pendingMessages ?? []).map(message => message.messageId))
-  const queued = (props.session?.queue ?? []).filter(item =>
-    item.placement === 'queued' && !pendingIds.has(String(item.messageId)))
-  const compositionActive = room.composerRoomId === active.id
-  const hasFiles = compositionActive && room.pendingFiles.length > 0
+  const queued = inputState.queue.filter(item => !pendingIds.has(String(item.id))).map(item => {
+    const text = item.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
+    return { messageId: item.id, text, preview: text || '附件消息' }
+  })
+  const compositionId = compositionTargetId(target)
+  const compositionActive = room.composerRoomId === compositionId
+  const files = room.compositions?.[compositionId]?.files ?? []
+  const hasFiles = files.length > 0
   const resetVisible = target?.kind === 'room'
     && active.aiContextResetSeq !== undefined
     && active.aiContextStartSeq === undefined
   if (queued.length === 0 && !hasFiles && !resetVisible && (!compositionActive || room.composerError === undefined)) return null
-  const canSendFilesOnly = hasFiles && props.input.draft.trim() === '' && props.input.imageIds.length === 0
+  const canSendFilesOnly = hasFiles && inputState.draft.trim() === '' && inputState.attachmentIds.length === 0
   return (
     <div
       className="dsh-chatroom-composer-dock"
@@ -228,7 +237,7 @@ export function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | nu
     >
       {queued.length > 0 && <ChatroomQueuedPromptDock
         queue={queued}
-        running={props.session.running}
+        running={sessionState.running}
         guide={async messageId => await props.updateQueuedPrompt(
           target.kind === 'room' ? { roomId: active.id } : { threadId: target.threadId },
           messageId,
@@ -251,15 +260,15 @@ export function ChatroomComposerDock(props: ComposerDockProps): JSX.Element | nu
       {resetVisible && <ChatroomContextResetDivider />}
       {hasFiles && (
         <ChatroomPendingFiles
-          files={room.pendingFiles}
-          remove={itemId => { props.removeFile(active.id, itemId) }}
+          files={files}
+          remove={itemId => { props.removeFile(compositionId, itemId) }}
           trailing={canSendFilesOnly
             ? (
               <button
                 className="dsh-chatroom-send-files"
                 type="button"
                 disabled={room.composerBusy}
-                onClick={() => { void props.sendFiles(active.id) }}
+                onClick={() => { void props.sendFiles(compositionId) }}
               >
                 {room.composerBusy ? '正在发送…' : '发送'}
               </button>
@@ -335,10 +344,9 @@ export function ChatroomContextResetDivider(): JSX.Element {
 export function ChatroomComposerAttachments(props: ChatroomComposerAttachmentsProps): JSX.Element {
   const room = props.useChatroom(snapshot => snapshot)
   const target = props.resolveTarget(String(props.sessionId))
-  const active = target?.room
-  const activeRoomId = active?.id
+  const activeRoomId = target === undefined ? undefined : compositionTargetId(target)
   const NativeAttachmentsView = props.nativeAttachmentsView
-  const reply = activeRoomId !== undefined && room.composerRoomId === activeRoomId ? room.reply : undefined
+  const reply = activeRoomId === undefined ? undefined : room.compositions?.[activeRoomId]?.reply
   return (
     <>
       {reply !== undefined && activeRoomId !== undefined && (

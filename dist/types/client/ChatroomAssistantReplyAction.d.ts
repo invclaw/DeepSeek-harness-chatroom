@@ -2,7 +2,7 @@ import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots';
 import type { ChatroomForwardItem, ChatroomReplyReference, ChatroomThreadRoot } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 import type { ChatroomView } from './store.js';
-import type { ChatroomAgentTarget } from './store.js';
+import { type ChatroomAgentTarget } from './store.js';
 interface AssistantReplyInjected {
     useChatroom<T>(selector: (snapshot: ChatroomView) => T): T;
     resolveTarget?(sessionId: string): ChatroomAgentTarget | undefined;

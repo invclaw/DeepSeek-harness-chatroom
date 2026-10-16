@@ -528,4 +528,17 @@ export type ChatroomServerEvent = ChatroomSnapshotEvent | ChatroomPresenceEvent 
 export interface ChatroomErrorResponse {
     readonly error: string;
 }
+/** Chatroom control notices remain identifiable in the native durable message log. */
+declare module '@deepseek-ai/dsh-llm' {
+    interface MessageSourceMap {
+        'chatroom-control': {
+            readonly kind: 'chatroom-control';
+            readonly plugin?: string;
+            readonly form: string;
+            readonly summary: string;
+            readonly chatroomParticipantId?: string;
+            readonly deferredMessageSeq?: number;
+        };
+    }
+}
 //# sourceMappingURL=types.d.ts.map

@@ -87,7 +87,7 @@ export function registerWecomAgentTools(
               { type: 'text', text: identifyExternalCardText(card) },
             ],
             source: {
-              kind: 'plugin',
+              kind: 'chatroom-control',
               plugin: 'deepseek-harness-chatroom',
               form: 'notice',
               summary: `Render Enterprise WeChat ${card.kind} card`,

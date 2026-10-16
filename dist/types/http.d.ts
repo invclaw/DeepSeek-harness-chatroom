@@ -7,7 +7,6 @@ export declare class ChatroomHttpController {
     private readonly runtime;
     private readonly config;
     private readonly log;
-    private readonly configurationApi;
     constructor(ctx: Context, runtime: ChatroomRuntime, config: Config);
     /** Dispatch one request under a registered chatroom API prefix. */
     handle(request: IncomingMessage, response: ServerResponse): Promise<void>;
@@ -44,7 +43,6 @@ export declare class ChatroomHttpController {
     private handleImage;
     private handleEvents;
     private handleNotifications;
-    private handleConfiguration;
     private sessionPayload;
     private requireIdentity;
     private requireAccount;

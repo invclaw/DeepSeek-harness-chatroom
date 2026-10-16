@@ -78,8 +78,8 @@ export interface ChatroomComposition {
   readonly reply: ChatroomReplyReference | undefined
 }
 
-/** Query-carried context for the isolated native Harness branch frame. */
-export interface ChatroomBranchFrame {
+/** Query-carried context for opening a native branch as the main conversation. */
+export interface ChatroomBranchLink {
   readonly threadId: string
   readonly sessionId: string
   readonly roomId: string
@@ -91,9 +91,14 @@ export type ChatroomAgentTarget =
   | { readonly kind: 'room'; readonly room: ChatroomInfo }
   | { readonly kind: 'thread'; readonly room: ChatroomInfo; readonly threadId: string }
 
+/** Draft identity stays separate for a group and its simultaneously open branch. */
+export function compositionTargetId(target: ChatroomAgentTarget): string {
+  return target.kind === 'thread' ? target.threadId : target.room.id
+}
+
 /** Browser identity, room directory, selection, and presence around native Harness Sessions. */
 export interface ChatroomView {
-  readonly branchFrame?: ChatroomBranchFrame | undefined
+  readonly branchLink?: ChatroomBranchLink | undefined
   readonly open: boolean
   readonly phase: ChatroomPhase
   readonly connection: ChatroomConnection
@@ -114,8 +119,7 @@ export interface ChatroomView {
   readonly managementError?: string | undefined
   readonly error: string | undefined
   readonly composerRoomId: string | undefined
-  readonly pendingFiles: readonly PendingChatroomFile[]
-  readonly reply: ChatroomReplyReference | undefined
+  readonly compositions: Readonly<Record<string, ChatroomComposition>>
   readonly composerBusy: boolean
   readonly composerError: string | undefined
   readonly sessionControlBusy: boolean
@@ -167,7 +171,7 @@ export interface ChatroomView {
 export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private readonly nativeOwnershipLookups = new Map<string, Promise<boolean>>()
   private snapshot: ChatroomView = {
-    branchFrame: undefined,
+    branchLink: undefined,
     open: false,
     phase: 'loading',
     connection: 'offline',
@@ -194,8 +198,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     managementError: undefined,
     error: undefined,
     composerRoomId: undefined,
-    pendingFiles: [],
-    reply: undefined,
+    compositions: {},
     composerBusy: false,
     composerError: undefined,
     sessionControlBusy: false,
@@ -264,9 +267,9 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
 
   constructor(
     private readonly openSession: (sessionId: string) => boolean = () => false,
-    branchFrame?: ChatroomBranchFrame,
+    branchLink?: ChatroomBranchLink,
   ) {
-    if (branchFrame !== undefined) this.snapshot = { ...this.snapshot, branchFrame }
+    if (branchLink !== undefined) this.snapshot = { ...this.snapshot, branchLink }
   }
 
   /** Current immutable room projection. */
@@ -276,7 +279,8 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   roomForSession(sessionId: string): ChatroomInfo | undefined {
     const direct = this.snapshot.rooms.find(room => room.sessionId === sessionId)
     if (direct !== undefined) return direct
-    const frame = this.snapshot.branchFrame
+    const frame = this.snapshot.branchLink
+    if (this.snapshot.thread?.sessionId === sessionId) return this.snapshot.rooms.find(room => room.id === this.snapshot.thread?.roomId)
     const previewRoomId = this.snapshot.threadPreviews
       .find(preview => preview.thread.sessionId === sessionId)?.thread.roomId
     if (frame?.sessionId === sessionId) {
@@ -295,9 +299,10 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   agentTargetForSession(sessionId: string): ChatroomAgentTarget | undefined {
     const room = this.roomForSession(sessionId)
     if (room === undefined) return undefined
-    const frame = this.snapshot.branchFrame
+    const frame = this.snapshot.branchLink
     if (frame?.sessionId === sessionId) return { kind: 'thread', room, threadId: frame.threadId }
-    const thread = this.snapshot.threadPreviews.find(preview => preview.thread.sessionId === sessionId)?.thread
+    const thread = this.snapshot.thread?.sessionId === sessionId ? this.snapshot.thread
+      : this.snapshot.threadPreviews.find(preview => preview.thread.sessionId === sessionId)?.thread
     if (thread !== undefined) return { kind: 'thread', room, threadId: thread.id }
     if (this.activeNativeSession?.id === sessionId && this.activeNativeSession.parentSessionId !== undefined
       && sessionId.startsWith('chatroom-thread-v1-')) {
@@ -399,24 +404,6 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     }).map(peer => peer.participantId)
   }
 
-  /** Retarget one retained native branch runtime without carrying composer state across threads. */
-  switchBranchFrame(frame: ChatroomBranchFrame): void {
-    const current = this.snapshot.branchFrame
-    if (current?.threadId === frame.threadId
-      && current.sessionId === frame.sessionId
-      && current.roomId === frame.roomId
-      && current.parentSessionId === frame.parentSessionId) return
-    this.compositionRevision += 1
-    this.set({
-      branchFrame: frame,
-      composerRoomId: undefined,
-      pendingFiles: [],
-      reply: undefined,
-      composerBusy: false,
-      composerError: undefined,
-    })
-  }
-
   /** Subscribe to room projection changes. */
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -424,10 +411,10 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   }
 
   /** Resolve the persistent browser identity and shared room directory. */
-  async start(): Promise<void> {
+  async start(initialSession?: ChatroomSessionResponse): Promise<void> {
     this.stopped = false
     if (typeof document !== 'undefined') this.originalTitle = document.title
-    await this.loadSession()
+    await this.loadSession(initialSession)
   }
 
   /** Stop network activity and notification delivery. */
@@ -500,6 +487,10 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
         room: undefined,
         roomEnsureSessionId: undefined,
         identity: undefined,
+        compositions: {},
+        composerRoomId: undefined,
+        composerBusy: false,
+        composerError: undefined,
         auth: {
           enabled: auth.enabled,
           authenticated: false,
@@ -1051,7 +1042,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
       this.set({ open: true })
     }
     if (this.snapshot.room?.id === room.id
-      && (this.eventSource !== undefined || this.snapshot.branchFrame !== undefined)) {
+      && this.eventSource !== undefined) {
       if (this.snapshot.directOpen) this.set({ directOpen: false, directError: undefined })
       return
     }
@@ -1113,46 +1104,27 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     }
   }
 
-  /** Add browser files to the next submission in one shared room. */
+  /** Keep attachments and replies in their own native composer, including embedded branches. */
   addFiles = (roomId: string, files: readonly File[]): void => {
     if (files.length === 0) return
     const current = this.compositionFor(roomId)
     const pending = files.map(file => ({ id: `file-${++this.pendingFileSequence}`, file }))
-    this.compositionRevision += 1
-    this.set({
-      composerRoomId: roomId,
-      pendingFiles: [...current.files, ...pending],
-      reply: current.reply,
-      composerError: undefined,
-    })
+    this.updateComposition(roomId, { files: [...current.files, ...pending], reply: current.reply })
   }
 
-  /** Remove one browser-owned pending file. */
   removeFile = (roomId: string, fileId: string): void => {
-    if (this.snapshot.composerRoomId !== roomId) return
-    const files = this.snapshot.pendingFiles.filter(file => file.id !== fileId)
-    if (files.length === this.snapshot.pendingFiles.length) return
-    this.compositionRevision += 1
-    this.set({ pendingFiles: files, composerError: undefined })
-  }
-
-  /** Address the next room message as a reply to one durable participant message. */
-  setReply = (roomId: string, reply: ChatroomReplyReference): void => {
     const current = this.compositionFor(roomId)
-    this.compositionRevision += 1
-    this.set({
-      composerRoomId: roomId,
-      pendingFiles: current.files,
-      reply,
-      composerError: undefined,
-    })
+    const files = current.files.filter(file => file.id !== fileId)
+    if (files.length !== current.files.length) this.updateComposition(roomId, { files, reply: current.reply })
   }
 
-  /** Cancel the next-message reply without changing pending files. */
+  setReply = (roomId: string, reply: ChatroomReplyReference): void => {
+    this.updateComposition(roomId, { ...this.compositionFor(roomId), reply })
+  }
+
   clearReply = (roomId: string): void => {
-    if (this.snapshot.composerRoomId !== roomId || this.snapshot.reply === undefined) return
-    this.compositionRevision += 1
-    this.set({ reply: undefined, composerError: undefined })
+    const current = this.compositionFor(roomId)
+    if (current.reply !== undefined) this.updateComposition(roomId, { files: current.files, reply: undefined })
   }
 
   /** Toggle one reaction and replace the message summary immediately. */
@@ -1234,26 +1206,14 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   }
 
   /** Capture files and reply metadata for one native prompt submission. */
-  composition = (roomId: string): ChatroomComposition => {
-    const current = this.compositionFor(roomId)
-    return { roomId, revision: this.compositionRevision, files: current.files, reply: current.reply }
-  }
+  composition = (roomId: string): ChatroomComposition => this.compositionFor(roomId)
 
-  /** Clear only the composition that was successfully admitted. */
+  /** Another composer or a newer draft cannot be cleared by an in-flight submission. */
   completeComposition = (composition: ChatroomComposition): void => {
-    if (this.snapshot.composerRoomId !== composition.roomId
-      || this.compositionRevision !== composition.revision) {
-      if (this.snapshot.composerBusy) this.set({ composerBusy: false })
-      return
+    if (this.compositionFor(composition.roomId).revision === composition.revision) {
+      this.updateComposition(composition.roomId, { files: [], reply: undefined })
     }
-    this.compositionRevision += 1
-    this.set({
-      composerRoomId: undefined,
-      pendingFiles: [],
-      reply: undefined,
-      composerBusy: false,
-      composerError: undefined,
-    })
+    if (this.snapshot.composerBusy) this.set({ composerBusy: false })
   }
 
   /** Send selected files without requiring placeholder text in the native composer. */
@@ -1263,10 +1223,11 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.set({ composerBusy: true, composerError: undefined })
     try {
       const content = await serializePendingFiles(composition.files)
-      const frame = this.snapshot.branchFrame
-      if (frame?.roomId === roomId) {
+      const frame = this.snapshot.branchLink
+      const embeddedThread = this.snapshot.thread?.id === roomId ? this.snapshot.thread : undefined
+      if (embeddedThread !== undefined || frame?.threadId === roomId) {
         await submitThreadPrompt({
-          threadId: frame.threadId,
+          threadId: embeddedThread?.id ?? frame!.threadId,
           mode: 'queue',
           content,
           ...(composition.reply === undefined ? {} : { reply: composition.reply }),
@@ -1701,18 +1662,21 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     this.resumeOpen()
   }
 
-  private compositionFor(roomId: string): {
-    files: readonly PendingChatroomFile[]
-    reply: ChatroomReplyReference | undefined
-  } {
-    return this.snapshot.composerRoomId === roomId
-      ? { files: this.snapshot.pendingFiles, reply: this.snapshot.reply }
-      : { files: [], reply: undefined }
+  private compositionFor(roomId: string): ChatroomComposition {
+    return this.snapshot.compositions[roomId] ?? { roomId, revision: 0, files: [], reply: undefined }
   }
 
-  private async loadSession(): Promise<void> {
+  private updateComposition(roomId: string, value: Pick<ChatroomComposition, 'files' | 'reply'>): void {
+    this.set({
+      composerRoomId: roomId,
+      compositions: { ...this.snapshot.compositions, [roomId]: { ...value, roomId, revision: ++this.compositionRevision } },
+      composerError: undefined,
+    })
+  }
+
+  private async loadSession(initialSession?: ChatroomSessionResponse): Promise<void> {
     try {
-      const session = await requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/session`)
+      const session = initialSession ?? await requestJson<ChatroomSessionResponse>(`${CHATROOM_API_PREFIX}/session`)
       if (this.stopped) return
       const auth = sessionAuth(session)
       if (auth.enabled && !auth.authenticated) {
@@ -1727,6 +1691,10 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           room: undefined,
           roomEnsureSessionId: undefined,
           identity: undefined,
+          compositions: {},
+          composerRoomId: undefined,
+          composerBusy: false,
+          composerError: undefined,
           auth,
           online: 0,
           error: undefined,
@@ -1744,6 +1712,10 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
           room: undefined,
           roomEnsureSessionId: undefined,
           identity: undefined,
+          compositions: {},
+          composerRoomId: undefined,
+          composerBusy: false,
+          composerError: undefined,
           auth,
           online: 0,
           error: undefined,
@@ -1769,10 +1741,6 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   private openEvents(room: ChatroomInfo): void {
     this.closeEvents()
     if (this.stopped || this.snapshot.identity === undefined) return
-    if (this.snapshot.branchFrame !== undefined) {
-      this.set({ connection: 'online' })
-      return
-    }
     this.set({ connection: 'connecting' })
     const source = new EventSource(`${CHATROOM_API_PREFIX}/events?roomId=${encodeURIComponent(room.id)}`)
     this.eventSource = source
@@ -1793,8 +1761,7 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
   }
 
   private openNotifications(): void {
-    if (this.stopped || this.snapshot.identity === undefined || this.notificationSource !== undefined
-      || this.snapshot.branchFrame !== undefined) return
+    if (this.stopped || this.snapshot.identity === undefined || this.notificationSource !== undefined) return
     const source = new EventSource(`${CHATROOM_API_PREFIX}/notifications`)
     this.notificationSource = source
     source.onmessage = (event) => {

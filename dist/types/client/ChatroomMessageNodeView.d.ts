@@ -1,10 +1,10 @@
 import { type ComponentType } from 'react';
-import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
+import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client';
 import { type ChatroomAvatarId } from '../avatars.js';
 import type { ChatroomFileReference, ChatroomExternalCard, ChatroomForwardBundle, ChatroomForwardItem, ChatroomIdentity, ChatroomReplyReference, ChatroomRoomAvatar, ChatroomThreadRoot } from '../types.js';
 import type { ChatroomReactionEmoji } from '../reactions.js';
 import type { ChatroomView } from './store.js';
-import type { ChatroomAgentTarget } from './store.js';
+import { type ChatroomAgentTarget } from './store.js';
 type ParticipantNode = ChatNode<'user' | 'steering'>;
 export { identifyChatroomText } from '../message.js';
 interface ChatroomMessageNodeInjected<Kind extends 'user' | 'steering'> {
@@ -23,7 +23,7 @@ export type ChatroomUserMessageNodeViewProps = ChatNodeViewProps<'user'> & Chatr
 /** Props for the native steering-message wrapper. */
 export type ChatroomSteeringMessageNodeViewProps = ChatNodeViewProps<'steering'> & ChatroomMessageNodeInjected<'steering'>;
 /** Participant-specific display projection of one durable native user node. */
-export declare function projectChatroomMessage(node: ParticipantNode, identity: ChatroomIdentity | undefined, knownAvatars?: readonly ChatroomRoomAvatar[]): {
+export declare function projectChatroomMessage(node: ParticipantNode, identity: ChatroomIdentity | undefined, knownAvatars?: readonly ChatroomRoomAvatar[], branch?: boolean): {
     readonly node: ParticipantNode;
     readonly own: boolean;
     readonly displayName?: string;

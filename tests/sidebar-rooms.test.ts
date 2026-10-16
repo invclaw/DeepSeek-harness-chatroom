@@ -251,7 +251,7 @@ describe('native sidebar room rows', () => {
       byId: {
         'ordinary-session': {
           id: 'ordinary-session', displayTitle: '分支：用户自定义标题',
-          running: false, blank: false, updatedAt: 1,
+          running: false, blank: false, retainedBy: {}, updatedAt: 1,
         },
       },
     } as never
@@ -269,7 +269,7 @@ describe('native sidebar room rows', () => {
       byId: {
         'chatroom-thread-v1-renamed': {
           id: 'chatroom-thread-v1-renamed', displayTitle: '发布计划', parentId: 'parent-session',
-          running: false, blank: false, updatedAt: 1,
+          running: false, blank: false, retainedBy: {}, updatedAt: 1,
         },
       },
     } as never
@@ -327,10 +327,10 @@ describe('native sidebar room rows', () => {
     } as unknown as ChatroomView
     const sessionList = {
       byId: {
-        'parent-session': { id: 'parent-session', displayTitle: '项目群', running: false, blank: false, updatedAt: 1 },
+        'parent-session': { id: 'parent-session', displayTitle: '项目群', running: false, blank: false, retainedBy: {}, updatedAt: 1 },
         [branch]: {
           id: branch, displayTitle: '分支：讨论发布计划', parentId: 'parent-session',
-          running: false, blank: false, updatedAt: 2,
+          running: false, blank: false, retainedBy: {}, updatedAt: 2,
         },
       },
     } as never
@@ -340,13 +340,14 @@ describe('native sidebar room rows', () => {
     const branchRow = rows[1]!
     expect(branchRow.dataset.dshChatroomBranchRow).toBe('')
     expect(branchRow.dataset.dshChatroomBranchParentSessionId).toBe('parent-session')
-    expect(branchRow.querySelector('[data-dsh-chatroom-branch-marker]')?.textContent).toBe('↳')
-    expect(branchRow.querySelector('[data-dsh-chatroom-branch-badge]')?.textContent).toBe('分支')
+    expect(branchRow.querySelector('[data-dsh-chatroom-branch-marker] svg')).not.toBeNull()
+    expect(branchRow.querySelector('[data-dsh-chatroom-branch-badge]')).toBeNull()
     expect(branchRow.querySelector('[data-dsh-chatroom-branch-topic]')?.textContent).toBe('讨论发布计划')
-    expect(branchRow.querySelector('[data-dsh-chatroom-branch-parent]')?.textContent).toBe('来自 项目群 · 3 条回复')
+    expect(branchRow.querySelector('[data-dsh-chatroom-branch-reply-count]')?.textContent).toBe('3')
+    expect(branchRow.getAttribute('aria-label')).toContain('来自 项目群')
     expect(branchRow.getAttribute('aria-label')).toBe('分支会话：讨论发布计划，来自 项目群 · 3 条回复')
     expect(rows[0]!.dataset.dshChatroomBranchCount).toBe('1')
-    expect(rows[0]!.querySelector('[data-dsh-chatroom-branch-count]')?.textContent).toBe('分支 1')
+    expect(rows[0]!.querySelector('[data-dsh-chatroom-branch-count]')?.textContent).toBe('1')
     expect(branchRow.querySelector('[data-dsh-chatroom-native-branch-title]')).toBeTruthy()
 
     const observer = new MutationObserver(() => undefined)
@@ -387,7 +388,7 @@ describe('native sidebar room rows', () => {
       ...(sessionId.startsWith('chatroom-thread-v1-a') ? { parentId: 'parent-a' } : {}),
       ...(sessionId.startsWith('chatroom-thread-v1-b') ? { parentId: 'parent-b' } : {}),
       running: false,
-      blank: false,
+      blank: false, retainedBy: {},
       updatedAt: sessionId.startsWith('chatroom-thread-v1-') ? Number(sessionId.at(-1)) : 0,
     }]))
 
@@ -411,8 +412,8 @@ describe('native sidebar room rows', () => {
     const secondControl = controls.find(control => control.dataset.parentSessionId === 'parent-b')!
     expect(firstControl.textContent).toBe('展开其余 2 个分支')
     expect(secondControl.textContent).toBe('展开其余 1 个分支')
-    expect(rows[0]!.querySelector('[data-dsh-chatroom-branch-count]')?.textContent).toBe('分支 4')
-    expect(rows[5]!.querySelector('[data-dsh-chatroom-branch-count]')?.textContent).toBe('分支 3')
+    expect(rows[0]!.querySelector('[data-dsh-chatroom-branch-count]')?.textContent).toBe('4')
+    expect(rows[5]!.querySelector('[data-dsh-chatroom-branch-count]')?.textContent).toBe('3')
     const firstRoomSecondNewest = rows.find(row => row.dataset.dshChatroomBranchSessionId === 'chatroom-thread-v1-a3')!
     const secondRoom = rows.find(row => row.dataset.dshChatroomRoomId === 'room-b')!
     expect(Number(firstRoomSecondNewest.style.order)).toBeLessThan(Number(firstControl.style.order))
@@ -452,21 +453,21 @@ describe('native sidebar room rows', () => {
     const snapshot = { rooms: [room], room, members: [], directPeers: [], directConversations: [] } as unknown as ChatroomView
     const sessionList = { byId: {
       'parent-session': {
-        id: 'parent-session', displayTitle: '项目群', running: false, blank: false, updatedAt: 0,
+        id: 'parent-session', displayTitle: '项目群', running: false, blank: false, retainedBy: {}, updatedAt: 0,
       },
       'chatroom-thread-v1-visible': {
         id: 'chatroom-thread-v1-visible', displayTitle: '分支：可见分支', parentId: 'parent-session',
-        running: false, blank: false, updatedAt: 2,
+        running: false, blank: false, retainedBy: {}, updatedAt: 2,
       },
       'chatroom-thread-v1-stale': {
         id: 'chatroom-thread-v1-stale', displayTitle: '分支：残留记录', parentId: 'parent-session',
-        running: false, blank: false, updatedAt: 1,
+        running: false, blank: false, retainedBy: {}, updatedAt: 1,
       },
     } } as never
 
     reconcileSidebarRoomRows(document, snapshot, 'parent-session' as never, undefined, undefined, undefined, sessionList)
 
-    expect(rows[0]!.querySelector('[data-dsh-chatroom-branch-count]')?.textContent).toBe('分支 1')
+    expect(rows[0]!.querySelector('[data-dsh-chatroom-branch-count]')?.textContent).toBe('1')
     expect(document.querySelectorAll('[data-dsh-chatroom-branch-row]')).toHaveLength(1)
   })
 
@@ -481,7 +482,7 @@ describe('native sidebar room rows', () => {
       byId: {
         'chatroom-thread-v1-release': {
           id: 'chatroom-thread-v1-release', displayTitle: '分支：发布计划', parentId: 'parent-session',
-          running: false, blank: false, updatedAt: 2,
+          running: false, blank: false, retainedBy: {}, updatedAt: 2,
         },
       },
     } as never
@@ -504,7 +505,7 @@ describe('native sidebar room rows', () => {
       byId: {
         'chatroom-thread-v1-missing': {
           id: 'chatroom-thread-v1-missing', displayTitle: '分支：无拖拽 ID', parentId: 'parent-session',
-          running: false, blank: false, updatedAt: 2,
+          running: false, blank: false, retainedBy: {}, updatedAt: 2,
         },
       },
     } as never
@@ -867,7 +868,7 @@ describe('native sidebar room rows', () => {
         displayTitle: rows[index]!.textContent!.trim(),
         ...(sessionId === 'parent-session' ? {} : { parentId: 'parent-session' }),
         running: false,
-        blank: false,
+        blank: false, retainedBy: {},
         updatedAt: index,
       }])),
     }

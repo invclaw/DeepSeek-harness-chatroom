@@ -3,8 +3,8 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.4.4" src="https://img.shields.io/badge/version-1.4.4-4f6bff">
-    <img alt="Harness 0.1.1-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.1.1--rc.2-111827">
+    <img alt="Version 1.4.5" src="https://img.shields.io/badge/version-1.4.5-4f6bff">
+    <img alt="Harness 0.2.0-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.2.0--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
   </p>
@@ -71,7 +71,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Initializati
 - The native sidebar, Conversation/Trajectory tabs, composer, model and permission selectors, reasoning/tool flow, Session log, approvals, questions, slash commands, stop/queue/steer, failures, and retries remain intact.
 - The room composer adds **Stop** and **New session**. Stop cancels the active Agent turn while retaining queued input. New session keeps the room's visible Session and complete transcript, first shows a new-AI-conversation divider above the composer, and then permanently keeps it before the next participant message. The server persists the matching context boundary so later AI requests contain only messages sent after that point. Concurrent requests coalesce into one reset.
 - While an Agent is running, Think and tool rows stay visible. Once the final answer arrives, the preceding process rows collapse into one expandable summary.
-- Persistent branches open in a right-side panel and own independent Harness Sessions. They follow the parent room's human-first reply policy: an explicit `@AI` enters the branch Agent immediately, other messages use the configured decision model when automatic replies are enabled, and otherwise remain human-only messages. Branch Sessions reuse the room's native message wrappers, completed-process folding, emoji/file actions, and Quick meeting action while retaining their own model, permission, trajectory, and stop controls. They also support Markdown, `@` candidates, quotes, reactions, forwarding, and selection without nested chatroom branches. Clicking the backdrop closes the drawer without changing the selected parent Session. Their sidebar rows use a compact marker and parent context instead of a heavy edge stripe, keeping the hierarchy visible without making the branch look like a second room. Each room keeps its two most recently updated branches visible and provides an independent expand/collapse control for older branches; the parent badge reports the same rendered branch total instead of counting stale directory records, while the Group folder count includes top-level rooms only. Gateways that reject embedded documents switch immediately to an inline compatibility view instead of waiting for a timeout, with the complete Agent available in a new tab.
+- Persistent branches open in a right-side panel and own independent Harness Sessions. They follow the parent room's human-first reply policy: an explicit `@AI` enters the branch Agent immediately, other messages use the configured decision model when automatic replies are enabled, and otherwise remain human-only messages. Branch Sessions reuse the room's native message wrappers, completed-process folding, emoji/file actions, and Quick meeting action while retaining their own model, permission, and stop controls. The panel uses the native embedded conversation with its own Session reference in the same runtime; the header opens the branch in the main view for full trajectory and knowledge-source panels. Parent and branch attachments and reply drafts stay independent. They also support Markdown, `@` candidates, quotes, reactions, forwarding, and selection without nested chatroom branches. Clicking the backdrop closes the drawer without changing the selected parent Session. Their sidebar rows use a compact marker and parent context instead of a heavy edge stripe, keeping the hierarchy visible without making the branch look like a second room. Each room keeps its two most recently updated branches visible and provides an independent expand/collapse control for older branches; the parent badge reports the same rendered branch total instead of counting stale directory records, while the Group folder count includes top-level rooms only. Opening or immediately refreshing the panel keeps the parent selected; closing releases the branch reference.
 - Historical images remain durable. For text-only models, only the model request receives deterministic text markers in place of image input; the UI keeps the original media.
 
 ### Messaging and media
@@ -108,6 +108,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Initializati
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.4.5** — migrate to Harness 0.2.0-rc.2; authorize native Remote HTTP and multiplexed streams per account, preserve durable model-history replacements, start the room directory before lazy Agent activation, and refine compact branch rows, native embedded branch conversations with independent drafts, compact sidebar rows, and monochrome message actions.
 - **1.4.4** — authorize native HTTP, WebSocket, and cross-session references on the Host; bind Enterprise WeChat credentials and invitations to structured step admission; deliver files through the actual Agent filesystem; persist input before handing it to the native durable inbox; and dispose borrowed-Agent registrations and CLI children on unload.
 - **1.4.3** — isolate Enterprise WeChat QR credentials per platform account because the official meeting-create operation cannot override its authenticated organizer; create Quick meetings as the initiating user, invite every other conversation participant, keep lifecycle polling on the creating credential, and route Agent operations through the claimed turn speaker while retaining the former shared credential only for pre-upgrade meeting lifecycle records.
 - **1.4.2** — bind every authenticated Solo Session to its creating account, hide unjoined Groups and foreign Solo Sessions from the native sidebar, omit inaccessible default-room state, clear the previously selected transcript before and after account changes, and reject native prompt or slash-command submission before it can bypass room membership or sender identity.
@@ -147,10 +148,12 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Initializati
 
 - Node.js 22.19 or later
 - pnpm 10.33.4
-- DeepSeek Harness 0.1.1-rc.2 is the tested minimum; the durable inbox and native connection APIs require this version.
+- DeepSeek Harness 0.2.0-rc.2 is the compatibility baseline; this release uses its native Remote and Session surface APIs.
 - A working default model selection in the Harness Web profile
 
 ### Regression gates
+
+`node scripts/native-e2e.mjs /absolute/path/to/dsh /path/to/chatroom.tgz` installs the packed plugin into a disposable profile and checks three-account Group/branch/Solo isolation, native lists and WebSocket baselines, membership changes, operator denial, and HTTP/live-stream logout revocation. It uses generated test accounts and makes no model calls.
 
 `pnpm check` runs type checks, observable-behavior tests, and production builds. CI additionally installs Chromium and runs `pnpm test:browser`, which verifies the branch panel's computed light/dark colors, compact Group/Direct message geometry, queue-row layout and native-queue suppression, branch hierarchy, AI branch activity, and the semantic/fallback group/account Settings icon. These browser assertions deliberately use geometry and computed styles instead of screenshot snapshots.
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PropsRuntime, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import { CHATROOM_AVATARS, type ChatroomAvatarId } from '../avatars.js'
 import { authProviderStartLocation } from '../auth-redirect.js'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
@@ -10,6 +10,8 @@ import { ChatroomPanels } from './ChatroomPanels.js'
 import { ChatroomAvatar } from './ChatroomAvatar.js'
 
 interface ChatroomEntryInjected {
+  retainBranch(sessionId: string): import('@deepseek-ai/dsh-api-session-controller/client').SessionReference
+  openBranchSession(sessionId: string): void
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
   openRoom(): void
   closeRoom(): void
@@ -67,12 +69,11 @@ interface ChatroomEntryInjected {
   openSearchResult(result: ChatroomSearchResult): Promise<void>
 }
 
-type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & ChatroomEntryInjected
+type ChatroomEntryProps = PropsRuntime<'shell.overlay'> & PropsRenderSlots<'chatroom.branch'> & ChatroomEntryInjected
 
 /** Authentication and first-identity overlays plus persistent chatroom panels. */
 export function ChatroomEntry(props: ChatroomEntryProps): JSX.Element | null {
   const room = props.useChatroom(snapshot => snapshot)
-  if (room.branchFrame !== undefined) return null
   const panels = <ChatroomPanels room={room} {...props} />
 
   if (!room.open) {

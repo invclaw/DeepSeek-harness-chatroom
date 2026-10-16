@@ -29,7 +29,7 @@ describe('chatroom composer attachments', () => {
       t: (key: string) => key,
       useChatroom: () => ({
         composerRoomId: 'room',
-        reply: { messageId: 'message', displayName: '李岳华', text: 'deepseek你说话啊' },
+        compositions: { room: { reply: { messageId: 'message', displayName: '李岳华', text: 'deepseek你说话啊' } } },
       } as unknown as ChatroomView),
       clearReply,
       resolveTarget: () => ({ kind: 'room', room: { id: 'room' } }),
@@ -50,7 +50,7 @@ describe('chatroom composer attachments', () => {
     const quickMeeting = vi.fn(async () => true)
     const props = {
       sessionId: 'chatroom-v1-lobby',
-      session: { running: true },
+      useSession: (select: (value: { running: boolean }) => unknown) => select({ running: true }),
       useChatroom: (selector: (snapshot: ChatroomView) => unknown) => selector({
         sessionControlBusy: false,
         sessionControlError: undefined,
@@ -84,7 +84,7 @@ describe('chatroom composer attachments', () => {
     } as unknown as ChatroomView)
     const { rerender } = render(<ChatroomFileAction {...{
       sessionId: 'branch-session',
-      input: { draft: '你好', imageIds: [] },
+      useInput: (select: (value: unknown) => unknown) => select({ draft: '你好', attachmentIds: [], queue: [] }),
       inputActions: { setDraft },
       useChatroom,
       resolveTarget: () => target,
@@ -98,7 +98,7 @@ describe('chatroom composer attachments', () => {
 
     rerender(<ChatroomSessionControls {...{
       sessionId: 'branch-session',
-      session: { running: false },
+      useSession: (select: (value: { running: boolean }) => unknown) => select({ running: false }),
       useChatroom,
       resolveTarget: () => target,
       stopRoomSession: vi.fn(),
@@ -115,7 +115,8 @@ describe('chatroom composer attachments', () => {
   it('shows the AI-context divider without replacing the retained room transcript', () => {
     render(<ChatroomComposerDock {...{
       sessionId: 'chatroom-v1-lobby',
-      input: { draft: '', imageIds: [] },
+      useInput: (select: (value: unknown) => unknown) => select({ draft: '', attachmentIds: [], queue: [] }),
+      useSession: (select: (value: unknown) => unknown) => select({ running: false }),
       inputActions: { setDraft: vi.fn() },
       useChatroom: (selector: (snapshot: ChatroomView) => unknown) => selector({
         composerRoomId: undefined, pendingFiles: [], composerError: undefined,
@@ -130,7 +131,8 @@ describe('chatroom composer attachments', () => {
   it('moves the AI-context divider into the transcript after the first new message', () => {
     const { container } = render(<ChatroomComposerDock {...{
       sessionId: 'chatroom-v1-lobby',
-      input: { draft: '', imageIds: [] },
+      useInput: (select: (value: unknown) => unknown) => select({ draft: '', attachmentIds: [], queue: [] }),
+      useSession: (select: (value: unknown) => unknown) => select({ running: false }),
       inputActions: { setDraft: vi.fn() },
       useChatroom: (selector: (snapshot: ChatroomView) => unknown) => selector({
         composerRoomId: undefined, pendingFiles: [], composerError: undefined,
@@ -149,17 +151,13 @@ describe('chatroom composer attachments', () => {
       action === 'edit' ? '@AI 修改后的问题' : '')
     const props = {
       sessionId: 'chatroom-v1-lobby',
-      session: {
-        running: true,
-        queue: [{
-          id: 'queue-row',
-          messageId: 'queued-message',
-          placement: 'queued',
-          text: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：@AI 原问题',
-          preview: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：@AI 原问题',
+      useSession: (select: (value: unknown) => unknown) => select({ running: true }),
+      useInput: (select: (value: unknown) => unknown) => select({
+        draft: '', attachmentIds: [], queue: [{
+          id: 'queued-message',
+          content: [{ type: 'text', text: '\u2063dsh-chatroom:alice-id|whale\u2063Alice：@AI 原问题' }],
         }],
-      },
-      input: { draft: '', imageIds: [] },
+      }),
       inputActions: { setDraft },
       useChatroom: (selector: (snapshot: ChatroomView) => unknown) => selector({
         composerRoomId: undefined, pendingFiles: [], composerError: undefined,
@@ -188,7 +186,8 @@ describe('chatroom composer attachments', () => {
     const setDraft = vi.fn()
     render(<ChatroomComposerDock {...{
       sessionId: 'chatroom-v1-lobby',
-      input: { draft: '', imageIds: [] },
+      useInput: (select: (value: unknown) => unknown) => select({ draft: '', attachmentIds: [], queue: [] }),
+      useSession: (select: (value: unknown) => unknown) => select({ running: false }),
       inputActions: { setDraft },
       useChatroom: (selector: (snapshot: ChatroomView) => unknown) => selector({
         composerRoomId: undefined, pendingFiles: [], pendingMessages: [], composerError: undefined,

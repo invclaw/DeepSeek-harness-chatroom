@@ -117,6 +117,8 @@ export declare class ChatroomRuntime {
     createRoom(title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Authorize native cross-session mentions before their snapshots enter an Agent request. */
     assertPromptReferences(identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[]): Promise<void>;
+    /** File display grants come from visible assistant images, never an arbitrary browser path. */
+    assertNativeFileAccess(path: string, identity: ChatroomIdentity, signal: AbortSignal): Promise<void>;
     /** Reserve an opaque native Session id as a private Solo conversation. */
     reserveSoloSession(identity: ChatroomIdentity): Promise<string>;
     /** Release a failed or abandoned Solo Session reservation owned by the caller. */
@@ -125,7 +127,7 @@ export declare class ChatroomRuntime {
     soloSessionIds(identity: ChatroomIdentity): readonly string[];
     /** Test whether one native Session is an identity-owned Solo conversation. */
     ownsSoloSession(sessionId: string, identity: ChatroomIdentity): boolean;
-    /** Resolve room and Solo ownership before consulting immutable native parent lineage. */
+    /** Only native subagents inherit access; a fork needs its own registered owner. */
     canAccessNativeSession(sessionId: string, identity: ChatroomIdentity, visited?: Set<string>): Promise<boolean>;
     /** Attribute a native fork to its creator before returning the child id to the browser. */
     ownNativeFork(sessionId: string, identity: ChatroomIdentity): Promise<void>;
@@ -272,6 +274,9 @@ export declare class ChatroomRuntime {
     private ensureRoomTitle;
     private acquireAgent;
     private setupAgentContext;
+    /** Apply tombstones before native commands or compaction can read model history. */
+    prepareNativeModelSession(sessionId: string): Promise<void>;
+    private applyModelVisibility;
     private augmentChatroomAgentContext;
     private initiatingIdentity;
     private createMeetingCard;

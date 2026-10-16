@@ -1,9 +1,9 @@
-import type {
-  ISessions,
-  IWorkspaces,
-  SessionId,
-  WorkspaceId,
-} from '@deepseek-ai/dsh-client-runtime/client'
+import type { UiWorkspace } from '@deepseek-ai/dsh-client-ui-workspace/client'
+import { mainSessionId } from './session-selection.js'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { IWorkspaces } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 
 const SESSION_LIST_WAIT_MS = 5_000
 
@@ -20,28 +20,29 @@ export type FreshSessionCreator = (workspaceId: WorkspaceId) => Promise<SessionI
  * @returns disposer restoring the original New Session implementation.
  */
 export function installFreshSessionStart(
+  navigation: UiWorkspace,
   workspaces: IWorkspaces,
   sessions: ISessions,
   createSession: FreshSessionCreator,
 ): () => void {
-  const original = workspaces.startSession
+  const original = navigation.startSession
   const pending = new Set<() => void>()
   let disposed = false
   const startFresh = (workspaceId?: WorkspaceId): void => {
     const workspace = workspaces.list.getSnapshot()
-    const current = sessions.list.getSnapshot().current
+    const current = mainSessionId(sessions.list.getSnapshot())
     const currentWorkspaceId = current === undefined
       ? undefined
       : workspace.items.find(item => item.sessionIds.includes(current))?.workspaceId
-    const target = workspaceId ?? currentWorkspaceId ?? workspace.recentWorkspaceId
+    const target = workspaceId ?? currentWorkspaceId ?? workspace.items[0]?.workspaceId
     if (target === undefined) {
-      sessions.clear()
+      original(workspaceId)
       return
     }
     void createSession(target).then(
       sessionId => {
         if (!disposed) {
-          const cancel = openWhenListed(sessions, sessionId, pending)
+          const cancel = openWhenListed(navigation, sessions, sessionId, pending)
           if (cancel !== undefined) pending.add(cancel)
         }
       },
@@ -50,16 +51,17 @@ export function installFreshSessionStart(
       },
     )
   }
-  workspaces.startSession = startFresh
+  navigation.startSession = startFresh
   return () => {
     disposed = true
     for (const cancel of pending) cancel()
     pending.clear()
-    if (workspaces.startSession === startFresh) workspaces.startSession = original
+    if (navigation.startSession === startFresh) navigation.startSession = original
   }
 }
 
 function openWhenListed(
+  navigation: UiWorkspace,
   sessions: ISessions,
   sessionId: SessionId,
   pending: Set<() => void>,
@@ -77,10 +79,10 @@ function openWhenListed(
   const open = (): void => {
     if (cancelled || sessions.list.getSnapshot().byId[sessionId] === undefined) return
     cancel()
-    sessions.open(sessionId)
+    navigation.openSession(sessionId)
   }
   if (sessions.list.getSnapshot().byId[sessionId] !== undefined) {
-    sessions.open(sessionId)
+    navigation.openSession(sessionId)
     return undefined
   }
   unsubscribe = sessions.list.subscribe(open)
