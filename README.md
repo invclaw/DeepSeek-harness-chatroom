@@ -55,6 +55,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Initializati
 
 ### Shared rooms and human-first AI
 
+- Chatroom panels, folder labels, and attachment cards follow the native light/dark theme. Attachments stay within their message column on narrow screens.
 - The workspace sidebar groups activity into **Group / Solo / Direct**. Shared Rooms appear under Group, native one-person Agent Sessions under Solo, and every available platform account under Direct. Because a category merges every Workspace, the per-Workspace "show more sessions" buttons are expanded and replaced by one show-more control per category whose count matches the folder count.
 - In authenticated deployments, Solo Sessions are owned by the account that creates them. A member sees only joined Groups and owned Solo Sessions; hidden or foreign native Sessions cannot be opened or submitted through the chatroom UI, and an unauthenticated or newly switched account never inherits the previously selected transcript.
 - **New session** keeps the native welcome screen and composer, with Group selected by default in a Group/Solo switch. The first regular Group message creates its Room; Solo remains a native one-person Agent Session.

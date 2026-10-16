@@ -10,6 +10,21 @@ afterEach(() => {
 })
 
 describe('branch surfaces in a real browser', () => {
+  it('keeps dark category labels and file cards readable and attachments inside narrow message columns', () => {
+    document.documentElement.style.colorScheme = 'dark'
+    const style = document.createElement('style')
+    style.textContent = CHATROOM_STYLES
+    document.head.append(style)
+    document.body.innerHTML = `<div data-dsh-chatroom-category-header><button><strong>群聊</strong></button></div>
+      <div style="width:180px"><a class="dsh-chatroom-file-card"><span>↧</span><span class="dsh-chatroom-file-copy"><strong>Long branch attachment filename.txt</strong><small>11 B</small></span></a></div>`
+    const category = requiredElement<HTMLElement>('[data-dsh-chatroom-category-header] strong')
+    const file = requiredElement<HTMLElement>('.dsh-chatroom-file-card')
+    expect(getComputedStyle(category).color).toBe('rgb(249, 250, 251)')
+    expect(getComputedStyle(file).backgroundColor).toBe('rgb(21, 21, 23)')
+    expect(getComputedStyle(file).color).toBe('rgb(249, 250, 251)')
+    expect(file.getBoundingClientRect().width).toBeLessThanOrEqual(180)
+    expect(file.getBoundingClientRect().left).toBeGreaterThanOrEqual(file.parentElement!.getBoundingClientRect().left)
+  })
   it('aligns peer content to its avatar and exposes a single action row on the RC.2 native renderer', () => {
     const style = document.createElement('style')
     style.textContent = `${CHATROOM_STYLES}

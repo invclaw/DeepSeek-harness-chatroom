@@ -1,5 +1,15 @@
 /** Small additive surfaces around the Harness-owned conversation UI. */
 export const CHATROOM_STYLES = `
+/* Keep legacy Chatroom surfaces on the host's current theme, scoped to our UI. */
+:where([class*="dsh-chatroom-"], [data-dsh-chatroom-category-header], [data-dsh-chatroom-category-overflow], [data-dsh-chatroom-branch-overflow], [data-dsh-chatroom-direct-row]) {
+  --bg-primary: var(--dsw-alias-bg-layer-1, light-dark(#fff, #151517));
+  --bg-secondary: var(--dsw-alias-bg-layer-2, light-dark(#f3f4f6, #242426));
+  --text-primary: var(--dsw-alias-label-primary, light-dark(#111827, #f9fafb));
+  --text-secondary: var(--dsw-alias-label-secondary, light-dark(#6b7280, #aeb0b4));
+  --text-tertiary: var(--dsw-alias-label-tertiary, light-dark(#9ca3af, #8e9095));
+  --border-primary: var(--dsw-alias-border-l2, light-dark(#e5e7eb, #343438));
+  --brand-primary: var(--dsw-alias-brand-primary, #4f7cff);
+}
 /* Keep AI and people visually distinct in Harness's native @ menu. */
 [role="listbox"] [data-source="AI 助手"] { color: var(--brand-primary, #4f7cff); font-weight: 600; }
 [role="option"][id^="dsh-slash-option-AI 助手-"] > span:first-child {
@@ -1373,10 +1383,13 @@ html[data-dsh-chatroom-active] [data-dsh-chatroom-native-actions] {
 .dsh-chatroom-thread-panel > header button:hover { background: var(--dsw-alias-interactive-bg-hover, rgb(128 128 128 / 10%)); }
 .dsh-chatroom-thread-panel > header button:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, #4f7cff); outline-offset: 2px; }
 .dsh-chatroom-file-card {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 10px;
   width: min(360px, 78vw);
+  max-width: 100%;
+  min-width: 0;
   margin: 4px 0;
   border: 1px solid var(--border-primary, #e5e7eb);
   border-radius: 14px;
