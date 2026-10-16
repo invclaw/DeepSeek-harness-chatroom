@@ -1,12 +1,14 @@
 import { createServer, request as httpRequest } from 'node:http'
 import { once } from 'node:events'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { WebSocket } from 'ws'
 import { NativeGateway } from '../src/native-gateway.js'
 import type { ChatroomRuntime } from '../src/room.js'
 import type { Config } from '../src/config.js'
 
+const gateways: NativeGateway[] = []
+afterEach(async () => { await Promise.all(gateways.splice(0).map(gateway => gateway.close())) })
 function fixture() {
   let active = true
   const permitted = new Set(['alice-solo', 'shared-room'])
@@ -15,182 +17,222 @@ function fixture() {
     isReady: true,
     auth: { accountForRequest: vi.fn(async (token: string) => token === 'alice-token' && active ? { account } : {}) },
     canAccessNativeSession: vi.fn(async (id: string) => permitted.has(id)),
-    reserveSoloSession: vi.fn(async () => 'alice-solo'),
     ownsSoloSession: vi.fn((id: string) => id === 'alice-solo'),
     ownsSession: vi.fn((id: string) => id === 'shared-room'),
-    assertPromptReferences: vi.fn(),
-    submitNativeSession: vi.fn(async () => true),
-    ownNativeFork: vi.fn(),
+    assertPromptReferences: vi.fn(), ownNativeFork: vi.fn(), prepareNativeModelSession: vi.fn(), assertNativeFileAccess: vi.fn(),
+    reserveSoloSession: vi.fn(async () => 'alice-solo'), submitNativeSession: vi.fn(async () => false),
   } as unknown as ChatroomRuntime
-  const config = {
-    cwd: process.cwd(), authEnabled: true, authCookieName: 'chatroom-auth', authPublicOrigin: '',
-    nativeTrustedHosts: [], settingsAdminParticipantIds: [], sseHeartbeatMs: 15_000,
-  } as unknown as Config
+  const config = { cwd: process.cwd(), authEnabled: true, authCookieName: 'chatroom-auth', authPublicOrigin: '', nativeTrustedHosts: [], settingsAdminParticipantIds: [] } as unknown as Config
   const dispatch = vi.fn(async (request: Request) => {
     const body = await request.clone().json() as { rpcId: string }
     return Response.json({ type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: {} } })
   })
-  const ready = Promise.withResolvers<void>()
-  const available = Promise.withResolvers<void>()
-  const queue: Array<{ rpcId: string; payload: Record<string, unknown> }> = []
-  let notify: () => void = () => available.resolve()
-  const events = async function* (_request: unknown, signal: AbortSignal) {
-    ready.resolve()
+  const queue: unknown[] = []
+  let notify = () => {}
+  const events = vi.fn(async function* (_endpoint: string, _payload: unknown, _uplink: unknown, _peer: unknown, signal: AbortSignal) {
     while (!signal.aborted) {
       if (queue.length === 0) {
         const pending = Promise.withResolvers<void>()
-        notify = () => pending.resolve()
+        notify = pending.resolve
         signal.addEventListener('abort', notify, { once: true })
         try { await pending.promise } finally { signal.removeEventListener('abort', notify) }
       }
-      const frame = queue.shift()
-      if (frame !== undefined) yield frame
+      const value = queue.shift()
+      if (value !== undefined) yield value
     }
-  }
-  const ctx = { apiProxy: { events: { mux: events, host: events } } } as unknown as Context
+  })
+  const ctx = { typertGateway: { wireStream: { open: events, failure: () => ({ code: 'denied', message: 'Access denied', details: {} }) } }, workspaceRegistry: { list: () => [] } } as unknown as Context
   const gateway = new NativeGateway(ctx, runtime, config, dispatch)
-  return { gateway, runtime, dispatch, permitted, ready, revoke: () => { active = false }, push: (frame: (typeof queue)[number]) => { queue.push(frame); notify() } }
+  gateways.push(gateway)
+  return { gateway, runtime, dispatch, permitted, events, account, revoke: () => { active = false }, push: (value: unknown) => { queue.push(value); notify() } }
 }
-
-function rpc(method: string, payload: Record<string, unknown> = {}, token = 'alice-token'): Request {
-  return new Request(`http://127.0.0.1/api/${method}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: `chatroom-auth=${token}` },
-    body: JSON.stringify({ type: 'client-request', rpcId: 'request-1', method, payload }),
-  })
+function rpc(method: string, request: Record<string, unknown> = {}, token = 'alice-token'): Request {
+  if ((method === 'session/page' || method === 'session/follow') && request.sessionId !== undefined) {
+    const { sessionId, ...rest } = request
+    request = { ...rest, address: { kind: 'session', sessionId } }
+  }
+  return new Request(`http://127.0.0.1/api/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: `chatroom-auth=${token}` }, body: JSON.stringify({ type: 'client-request', rpcId: 'request-1', method, payload: { args: { request } } }) })
 }
-
-describe('native account gateway', () => {
-  it.each(['session.list', 'session.history', 'session.prompt', 'settings.describe', 'commands/execute'])('rejects unauthenticated %s before dispatch', async method => {
+describe('native Remote account gateway', () => {
+  it.each(['session/list', 'session/page', 'session/prompt', 'settings/describe', 'commands/execute'])('rejects anonymous %s before dispatch', async method => {
     const f = fixture()
-    try {
-      expect((await f.gateway.fetch(rpc(method, { sessionId: 'alice-solo' }, 'invalid'))).status).toBe(401)
-      expect(f.dispatch).not.toHaveBeenCalled()
-    } finally { await f.gateway.close() }
+    expect((await f.gateway.fetch(rpc(method, {}, 'invalid'))).status).toBe(401)
+    expect(f.dispatch).not.toHaveBeenCalled()
   })
-
-  it.each(['session.history', 'session.attachment', 'session.models', 'session.selectModel', 'session.prompt', 'session.cancel', 'session.fork', 'session.rename', 'session.updateQueue', 'agentPreset.select', 'goal.create', 'workspace.archiveSession'])('denies foreign-session %s', async method => {
+  it.each(['session/page', 'session/projections', 'session/attachment', 'session/models', 'session/selectModel', 'session/prompt', 'session/cancel', 'session/fork', 'session/rename', 'session/updateQueue', 'agentPresets/select', 'workspace/archiveSession'])('denies foreign %s before side effects', async method => {
     const f = fixture()
-    try {
-      expect((await f.gateway.fetch(rpc(method, { sessionId: 'bob-solo' }))).status).toBe(403)
-      expect(f.dispatch).not.toHaveBeenCalled()
-    } finally { await f.gateway.close() }
+    expect((await f.gateway.fetch(rpc(method, { sessionId: 'bob-solo' }))).status).toBe(403)
+    expect(f.dispatch).not.toHaveBeenCalled()
   })
-
-  it('filters native list and search responses before they leave the server', async () => {
+  it('filters both native directory and search results', async () => {
     const f = fixture()
-    f.dispatch.mockImplementation(async () => Response.json({ result: { ok: true, value: { items: [
-      { sessionId: 'bob-solo', snippet: 'private Bob text' }, { sessionId: 'alice-solo', snippet: 'Alice text' },
-    ] } } }))
-    try {
-      for (const method of ['session.list', 'session.search']) {
-        const response = await f.gateway.fetch(rpc(method))
-        expect(JSON.stringify(await response.json())).not.toContain('Bob')
-      }
-    } finally { await f.gateway.close() }
-  })
-
-  it('uses authenticated room admission for native prompts and pins Solo creation cwd', async () => {
-    const f = fixture()
-    try {
-      expect((await f.gateway.fetch(rpc('session.prompt', { sessionId: 'shared-room', mode: 'queue', content: [{ type: 'text', text: '@DeepSeek hello' }] }))).status).toBe(200)
-      expect(f.runtime.submitNativeSession).toHaveBeenCalledWith('shared-room', expect.objectContaining({ participantId: 'alice' }), [{ type: 'text', text: '@DeepSeek hello' }], 'queue')
-      expect(f.dispatch).not.toHaveBeenCalled()
-      expect((await f.gateway.fetch(rpc('session.create', { sessionId: 'bob-solo' }))).status).toBe(403)
-      await f.gateway.fetch(rpc('session.create', { sessionId: 'alice-solo' }))
-      expect(await f.dispatch.mock.calls[0]![0].clone().json()).toMatchObject({ payload: { cwd: process.cwd() } })
-    } finally { await f.gateway.close() }
-  })
-
-  it('assigns native startup sessions to the caller after validating creation parameters', async () => {
-    const f = fixture()
-    try {
-      expect((await f.gateway.fetch(rpc('session.create', { cwd: '/private/foreign' }))).status).toBe(403)
-      expect((await f.gateway.fetch(rpc('session.create', { agentPreset: 5 }))).status).toBe(400)
-      expect(f.runtime.reserveSoloSession).not.toHaveBeenCalled()
-      expect((await f.gateway.fetch(rpc('session.create'))).status).toBe(200)
-      expect(f.runtime.reserveSoloSession).toHaveBeenCalledWith(expect.objectContaining({ participantId: 'alice' }))
-      expect(await f.dispatch.mock.calls[0]![0].clone().json()).toMatchObject({ payload: { sessionId: 'alice-solo', cwd: process.cwd() } })
-    } finally { await f.gateway.close() }
-  })
-
-  it('authorizes pinned Remote agentId fields and filters cross-session reference candidates', async () => {
-    const f = fixture()
-    try {
-      expect((await f.gateway.fetch(rpc('commands/list', { args: { agentId: 'alice-solo' } }))).status).toBe(200)
-      expect((await f.gateway.fetch(rpc('commands/list', { args: { agentId: 'bob-solo', sessionId: 'alice-solo' } }))).status).toBe(403)
-      f.dispatch.mockResolvedValueOnce(Response.json({ result: { ok: true, value: [{ sessionId: 'bob-solo', label: 'private' }, { sessionId: 'shared-room', label: 'shared' }] } }))
-      const response = await f.gateway.fetch(rpc('sessionReferenceResolver/candidates', { args: { agentId: 'alice-solo', query: '' } }))
-      expect(await response.json()).toMatchObject({ result: { value: [{ sessionId: 'shared-room' }] } })
-    } finally { await f.gateway.close() }
-  })
-
-  it('denies unscoped Remote, cross-account descendant, forged approval, and cross-site requests', async () => {
-    const f = fixture()
-    try {
-      for (const [method, payload] of [
-        ['dynamicCordisRunner/unknown', { args: {} }],
-        ['commands/execute', { args: { agentId: 'bob-solo', line: '/help' } }],
-        ['subagent.history', { parentSessionId: 'shared-room', childSessionId: 'bob-solo' }],
-        ['respond', {}],
-      ] as const) expect((await f.gateway.fetch(rpc(method, payload))).status).toBe(403)
-      const request = rpc('session.list')
-      request.headers.set('Origin', 'https://attacker.example')
-      expect((await f.gateway.fetch(request)).status).toBe(403)
-      expect(f.dispatch).not.toHaveBeenCalled()
-    } finally { await f.gateway.close() }
-  })
-
-  it('closes an authenticated HTTP request even when its body never completes', async () => {
-    const f = fixture()
-    const server = createServer((req, res) => { void f.gateway.handle(req, res) })
-    server.listen(0, '127.0.0.1')
-    await once(server, 'listening')
-    const address = server.address()
-    if (address === null || typeof address === 'string') throw new Error('Missing port')
-    const request = httpRequest(`http://127.0.0.1:${address.port}/api/session.list`, { method: 'POST', headers: { Cookie: 'chatroom-auth=alice-token', 'Content-Length': 100 } })
-    request.on('error', () => { /* Closing the carrier resets the unfinished client request. */ })
-    request.flushHeaders()
-    try {
-      await vi.waitFor(() => expect(f.runtime.auth.accountForRequest).toHaveBeenCalled())
-      await f.gateway.close()
-      expect(f.dispatch).not.toHaveBeenCalled()
-    } finally {
-      request.destroy()
-      await f.gateway.close()
-      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    f.dispatch.mockImplementation(async () => Response.json({ result: { ok: true, value: { items: [ { sessionId: 'bob-solo', snippet: 'private Bob text' }, { sessionId: 'alice-solo', snippet: 'Alice text' } ], hasMore: true } } }))
+    for (const method of ['session/list', 'session/search']) {
+      const response = await f.gateway.fetch(rpc(method))
+      const output = JSON.stringify(await response.json())
+      expect(output).not.toContain('Bob')
+      expect(output).toContain('Alice')
     }
   })
-
-  it('filters real WebSocket frames, guards approval responses, and closes a revoked login', async () => {
+  it.each(['settings/describe', 'credentials/set', 'dynamicCordisRunner/inventory', 'directoryPicker/list', 'workspace/create', 'terminal/open', 'unknown/execute'])('denies member operator endpoint %s', async method => {
+    const f = fixture()
+    expect((await f.gateway.fetch(rpc(method))).status).toBe(403)
+    expect(f.dispatch).not.toHaveBeenCalled()
+  })
+  it('allows an authorized administrator to use native settings', async () => {
+    const f = fixture()
+    f.account.role = 'super-admin'
+    expect((await f.gateway.fetch(rpc('settings/describe'))).status).toBe(200)
+    expect(f.dispatch).toHaveBeenCalledOnce()
+  })
+  it('requires a reserved native Session and checks move anchors', async () => {
+    const f = fixture()
+    expect((await f.gateway.fetch(rpc('session/create', { sessionId: 'bob-solo' }))).status).toBe(403)
+    expect((await f.gateway.fetch(rpc('session/create', { sessionId: 'alice-solo' }))).status).toBe(200)
+    expect((await f.gateway.fetch(rpc('workspace/insertSessionBefore', { sessionId: 'alice-solo', beforeSessionId: 'bob-solo' }))).status).toBe(403)
+  })
+  it('creates native drafts in the configured workspace with an owned reservation', async () => {
+    const f = fixture()
+    expect((await f.gateway.fetch(rpc('session/create'))).status).toBe(200)
+    const request = f.dispatch.mock.calls[0]![0]
+    expect((await request.json()).payload.args.request).toEqual({ sessionId: 'alice-solo', cwd: process.cwd() })
+    expect((await f.gateway.fetch(rpc('session/create', { cwd: '/' }))).status).toBe(403)
+    expect(f.dispatch).toHaveBeenCalledOnce()
+  })
+  it('routes group prompts through participant-aware intake', async () => {
+    const f = fixture()
+    vi.mocked(f.runtime.submitNativeSession).mockResolvedValue(true)
+    const response = await f.gateway.fetch(rpc('session/prompt', { sessionId: 'shared-room', mode: 'queue', content: [{ type: 'text', text: 'human discussion' }] }))
+    expect((await response.json()).result.value.accepted).toBe(true)
+    expect(f.runtime.submitNativeSession).toHaveBeenCalledWith('shared-room', f.account, [{ type: 'text', text: 'human discussion' }], 'queue')
+    expect(f.dispatch).not.toHaveBeenCalled()
+  })
+  it('keeps empty groups visible while preserving reusable personal drafts', async () => {
+    const f = fixture()
+    f.dispatch.mockImplementation(async () => Response.json({ result: { ok: true, value: { items: ['alice-solo', 'shared-room'].map(sessionId => ({ sessionId, blank: true, projections: { kind: 'cached', asOfSeq: 0, values: { sessionListMetadata: { blank: true, lastPromptAt: null } } } })) } } }))
+    const response = await f.gateway.fetch(rpc('session/list'))
+    const items = (await response.json()).result.value.items
+    expect(items.find((item: { sessionId: string }) => item.sessionId === 'shared-room')).toMatchObject({ blank: false, projections: { values: { sessionListMetadata: { blank: false } } } })
+    expect(items.find((item: { sessionId: string }) => item.sessionId === 'alice-solo').blank).toBe(true)
+  })
+  it('filters reference candidates even when the native result is an array', async () => {
+    const f = fixture()
+    f.dispatch.mockImplementation(async () => Response.json({ result: { ok: true, value: [{ sessionId: 'bob-solo', title: 'Bob secret' }, { sessionId: 'alice-solo', title: 'Alice' }] } }))
+    const response = await f.gateway.fetch(rpc('sessionReferenceResolver/candidates', { agentId: 'alice-solo' }))
+    expect((await response.json()).result.value).toEqual([{ sessionId: 'alice-solo', title: 'Alice' }])
+  })
+  it.each(['GET', 'HEAD'])('serves authorized native Markdown images with %s', async method => {
+    const f = fixture()
+    f.dispatch.mockImplementation(async request => new Response(request.method === 'HEAD' ? null : 'image', { headers: { 'Content-Type': 'image/png' } }))
+    const response = await f.gateway.fetch(new Request('http://127.0.0.1/api/file?path=%2Fworkspace%2Fchart.png', { method, headers: { Cookie: 'chatroom-auth=alice-token' } }))
+    expect(response.status).toBe(200)
+    expect(f.runtime.assertNativeFileAccess).toHaveBeenCalledWith('/workspace/chart.png', f.account, expect.any(AbortSignal))
+    expect(await response.text()).toBe(method === 'HEAD' ? '' : 'image')
+    expect((await f.gateway.fetch(new Request('http://127.0.0.1/api/file?path=/etc/passwd'))).status).toBe(401)
+    expect(f.dispatch).toHaveBeenCalledOnce()
+  })
+  it('authorizes binary uploads before touching the body', async () => {
+    const f = fixture()
+    const request = new Request('http://127.0.0.1/api/session/uploadFileBinary?sessionId=bob-solo', { method: 'POST', headers: { Cookie: 'chatroom-auth=alice-token' }, body: new Uint8Array([1, 2]) })
+    expect((await f.gateway.fetch(request)).status).toBe(403)
+    expect(f.dispatch).not.toHaveBeenCalled()
+  })
+  it('rejects a foreign upload at the HTTP boundary before its body arrives', async () => {
     const f = fixture()
     const server = createServer((req, res) => { void f.gateway.handle(req, res) })
-    server.on('upgrade', (req, socket, head) => { void f.gateway.upgrade(req, socket, head, 'mux') })
     server.listen(0, '127.0.0.1')
     await once(server, 'listening')
-    const address = server.address()
-    if (address === null || typeof address === 'string') throw new Error('Missing port')
-    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/events.mux`, { headers: { Cookie: 'chatroom-auth=alice-token' } })
-    const seen: string[] = []
-    socket.on('message', value => seen.push(String(value)))
+    const address = server.address() as { port: number }
+    const upload = httpRequest({ hostname: '127.0.0.1', port: address.port, method: 'POST', path: '/api/session/uploadFileBinary?sessionId=bob-solo', headers: { Cookie: 'chatroom-auth=alice-token', 'Content-Length': 1000000 } })
+    try {
+      const response = once(upload, 'response')
+      upload.flushHeaders()
+      const [result] = await response
+      expect(result.statusCode).toBe(403)
+      result.resume()
+      expect(f.dispatch).not.toHaveBeenCalled()
+    } finally { upload.destroy(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) }
+  })
+  it('protects the native dotted export endpoint and prevents descendant traversal', async () => {
+    const f = fixture()
+    for (const query of ['sessionId=bob-solo', 'sessionId=alice-solo&includeDescendants=true']) {
+      expect((await f.gateway.fetch(new Request(`http://127.0.0.1/api/session.export?${query}`, { headers: { Cookie: 'chatroom-auth=alice-token' } }))).status).toBe(403)
+    }
+    expect(f.dispatch).not.toHaveBeenCalled()
+  })
+  it('authorizes native history addresses, including both identities of a subagent address', async () => {
+    const f = fixture()
+    expect((await f.gateway.fetch(rpc('session/page', { address: { kind: 'session', sessionId: 'alice-solo' }, throughSeq: 0 }))).status).toBe(200)
+    for (const [parentSessionId, childSessionId] of [['alice-solo', 'bob-solo'], ['bob-solo', 'alice-solo']]) {
+      expect((await f.gateway.fetch(rpc('session/page', { address: { kind: 'subagent', parentSessionId, childSessionId, mode: 'one-shot' }, throughSeq: 0 }))).status).toBe(403)
+    }
+    expect(f.dispatch).toHaveBeenCalledOnce()
+  })
+  it('rejects cross-origin requests and unrelated event results', async () => {
+    const f = fixture()
+    const request = rpc('session/list')
+    request.headers.set('origin', 'https://evil.example')
+    expect((await f.gateway.fetch(request)).status).toBe(403)
+    expect((await f.gateway.fetch(rpc('$events/result', { clientId: 'other-client', eventId: 'other-event' }))).status).toBe(403)
+  })
+  it('accepts a delivered native interaction once and releases denied deliveries', async () => {
+    const f = fixture()
+    const server = createServer()
+    server.on('upgrade', (req, socket, head) => { void f.gateway.upgrade(req, socket, head) })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const { port } = server.address() as { port: number }
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/remote.mux`, { headers: { Cookie: 'chatroom-auth=alice-token' } })
+    const resultRequest = (eventId: string) => new Request('http://127.0.0.1/api/$events/result', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: 'chatroom-auth=alice-token' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'result', method: '$events/result',
+        payload: { args: { clientId: 'client', eventId, outcome: { kind: 'return', value: true } } } }),
+    })
     try {
       await once(socket, 'open')
-      await f.ready.promise
-      f.push({ rpcId: 'foreign', payload: { type: 'session/subscribed', sessionId: 'bob-solo', lastSeq: 9 } })
-      f.push({ rpcId: 'owned-approval', payload: { type: 'approval/requested', sessionId: 'alice-solo', approvalId: 'approval-1', toolName: 'bash' } })
-      await vi.waitFor(() => expect(seen).toHaveLength(1))
-      expect(seen[0]).toContain('owned-approval')
-      expect(seen.join()).not.toContain('bob-solo')
-      const response = new Request('http://127.0.0.1/api/respond', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: 'chatroom-auth=alice-token' }, body: JSON.stringify({ type: 'client-response', rpcId: 'owned-approval', result: { ok: true, value: {} } }) })
-      expect((await f.gateway.fetch(response)).status).toBe(200)
+      socket.send(JSON.stringify({ type: 'open', streamId: 'events', endpoint: '$events', payload: { args: {} } }))
+      await vi.waitFor(() => expect(f.events).toHaveBeenCalledOnce())
+      let received = once(socket, 'message')
+      f.push({ type: 'ready', clientId: 'client', host: {} })
+      await received
+      received = once(socket, 'message')
+      f.push({ type: 'waterfall', eventId: 'approval', agentId: 'alice-solo', event: 'permission/request', args: [] })
+      await received
+      expect((await f.gateway.fetch(resultRequest('approval'))).status).toBe(200)
+      expect((await f.gateway.fetch(resultRequest('approval'))).status).toBe(403)
+      f.dispatch.mockClear()
+      f.push({ type: 'waterfall', eventId: 'foreign', agentId: 'bob-solo', event: 'permission/request', args: [] })
+      await vi.waitFor(() => expect(f.dispatch).toHaveBeenCalledOnce())
+      expect((await f.dispatch.mock.calls[0]![0].json()).payload).toEqual({ args: {
+        clientId: 'client', eventId: 'foreign', outcome: { kind: 'next' },
+      } })
+      expect((await f.gateway.fetch(resultRequest('foreign'))).status).toBe(403)
+    } finally { socket.terminate(); await new Promise<void>(resolve => server.close(() => resolve())) }
+  })
+  it('filters actual WS control baselines and revokes delivery after logout', async () => {
+    const f = fixture()
+    const server = createServer()
+    server.on('upgrade', (req, socket, head) => { void f.gateway.upgrade(req, socket, head) })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address() as { port: number }
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/remote.mux`, { headers: { Cookie: 'chatroom-auth=alice-token' } })
+    try {
+      await once(socket, 'open')
+      socket.send(JSON.stringify({ type: 'open', streamId: 'control', endpoint: 'session/control', payload: { args: {} } }))
+      await vi.waitFor(() => expect(f.events).toHaveBeenCalledOnce())
+      const first = once(socket, 'message')
+      f.push({ type: 'baseline', value: { projections: { 'alice-solo': { asOfSeq: 0, values: {} }, 'bob-solo': { secret: 'Bob' } } } })
+      const [message] = await first
+      expect(String(message)).toContain('alice-solo')
+      expect(String(message)).not.toContain('Bob')
+      expect(String(message)).not.toContain('bob-solo')
       f.revoke()
-      const closed = once(socket, 'close')
-      f.push({ rpcId: 'after-revoke', payload: { type: 'session/subscribed', sessionId: 'alice-solo', lastSeq: 10 } })
-      await closed
-      expect(seen).toHaveLength(1)
-    } finally {
-      socket.terminate()
-      await f.gateway.close()
-      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
-    }
+      const denied = once(socket, 'message')
+      f.push({ type: 'projection', sessionId: 'alice-solo', key: 'inbox', value: 'late private data', seq: 1 })
+      const [error] = await denied
+      expect(JSON.parse(String(error)).type).toBe('error')
+      expect(String(error)).not.toContain('late private data')
+    } finally { socket.terminate(); await new Promise<void>(resolve => server.close(() => resolve())) }
   })
 })

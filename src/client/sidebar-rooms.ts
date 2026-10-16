@@ -1,3 +1,4 @@
+import { mainSessionId } from './session-selection.js'
 import { chatroomAvatar } from '../avatars.js'
 import type {
   ChatroomDirectConversation,
@@ -5,12 +6,8 @@ import type {
   ChatroomInfo,
   ChatroomRoomAvatar,
 } from '../types.js'
-import type {
-  ISessions,
-  SessionId,
-  SessionListState,
-  SessionSummary,
-} from '@deepseek-ai/dsh-client-runtime/client'
+import type { ISessions, SessionListState, SessionSummary } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ChatroomClientStore, ChatroomView } from './store.js'
 
 const ROOM_ROW_SELECTOR = 'div[role="treeitem"][aria-selected]'
@@ -25,9 +22,7 @@ const BRANCH_ROW_ATTRIBUTE = 'data-dsh-chatroom-branch-row'
 const BRANCH_MARKER_ATTRIBUTE = 'data-dsh-chatroom-branch-marker'
 const BRANCH_SURFACE_ATTRIBUTE = 'data-dsh-chatroom-branch-surface'
 const BRANCH_HEADING_ATTRIBUTE = 'data-dsh-chatroom-branch-heading'
-const BRANCH_BADGE_ATTRIBUTE = 'data-dsh-chatroom-branch-badge'
 const BRANCH_TOPIC_ATTRIBUTE = 'data-dsh-chatroom-branch-topic'
-const BRANCH_PARENT_ATTRIBUTE = 'data-dsh-chatroom-branch-parent'
 const BRANCH_REPLIES_ATTRIBUTE = 'data-dsh-chatroom-branch-replies'
 const BRANCH_NATIVE_TITLE_ATTRIBUTE = 'data-dsh-chatroom-native-branch-title'
 const BRANCH_COUNT_ATTRIBUTE = 'data-dsh-chatroom-branch-count'
@@ -100,7 +95,7 @@ export function installSidebarRoomRows(store: ChatroomClientStore, sessions: ISe
     reconcileSidebarRoomRows(
       document,
       snapshot,
-      list.current,
+      mainSessionId(list),
       store.setRoomPinned,
       store.openDirect,
       store.closeDirect,
@@ -577,7 +572,7 @@ function decorateBranchRow(row: HTMLElement, facts: BranchRowFacts): void {
     marker = row.ownerDocument.createElement('span')
     marker.setAttribute(BRANCH_MARKER_ATTRIBUTE, '')
     marker.setAttribute('aria-hidden', 'true')
-    marker.textContent = '↳'
+    marker.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true"><circle cx="4" cy="3" r="1.5"/><circle cx="12" cy="4" r="1.5"/><circle cx="4" cy="13" r="1.5"/><path d="M4 4.5v7M4 9c5 0 8-1 8-3.5"/></svg>'
   }
   let surface = row.querySelector<HTMLElement>(`:scope > [${BRANCH_SURFACE_ATTRIBUTE}]`)
   if (surface === null) {
@@ -590,17 +585,18 @@ function decorateBranchRow(row: HTMLElement, facts: BranchRowFacts): void {
     surface.replaceChildren()
     const heading = row.ownerDocument.createElement('span')
     heading.setAttribute(BRANCH_HEADING_ATTRIBUTE, '')
-    const badge = row.ownerDocument.createElement('span')
-    badge.setAttribute(BRANCH_BADGE_ATTRIBUTE, '')
-    badge.textContent = '分支'
     const topic = row.ownerDocument.createElement('span')
     topic.setAttribute(BRANCH_TOPIC_ATTRIBUTE, '')
     topic.textContent = facts.topic
-    heading.append(badge, topic)
-    const parent = row.ownerDocument.createElement('span')
-    parent.setAttribute(BRANCH_PARENT_ATTRIBUTE, '')
-    parent.textContent = `${parentLabel}${replyLabel}`
-    surface.append(heading, parent)
+    heading.append(topic)
+    surface.append(heading)
+    if (facts.replyCount !== undefined && facts.replyCount > 0) {
+      const replies = row.ownerDocument.createElement('span')
+      replies.setAttribute('data-dsh-chatroom-branch-reply-count', '')
+      replies.textContent = String(facts.replyCount)
+      replies.title = `${facts.replyCount} 条回复`
+      surface.append(replies)
+    }
     surface.dataset.signature = signature
   }
   if (titleElement !== undefined) {
@@ -627,7 +623,7 @@ function decorateBranchParent(row: HTMLElement, roomTitle: string, count: number
     if (titleElement === undefined) row.append(indicator)
     else titleElement.after(indicator)
   }
-  const label = `分支 ${count}`
+  const label = String(count)
   // Avoid replacing the text node on every observer pass; the sidebar observer
   // watches child-list mutations and would otherwise schedule itself forever.
   if (indicator.textContent !== label) indicator.textContent = label

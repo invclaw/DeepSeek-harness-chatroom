@@ -1,5 +1,6 @@
 import { memo, useLayoutEffect, useRef, type ComponentType, type ReactNode } from 'react'
-import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
+
 import { fallbackAvatarId, type ChatroomAvatarId } from '../avatars.js'
 import type {
   ChatroomFileReference,
@@ -22,7 +23,7 @@ import {
 import { ChatroomThreadActivity } from './ChatroomThreadActivity.js'
 import { ChatroomMarkdown } from './ChatroomMarkdown.js'
 import type { ChatroomView } from './store.js'
-import type { ChatroomAgentTarget } from './store.js'
+import { compositionTargetId, type ChatroomAgentTarget } from './store.js'
 import { ChatroomAvatar } from './ChatroomAvatar.js'
 import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
 import { ChatroomContextResetDivider } from './ChatroomComposer.js'
@@ -61,6 +62,7 @@ export function projectChatroomMessage(
   node: ParticipantNode,
   identity: ChatroomIdentity | undefined,
   knownAvatars: readonly ChatroomRoomAvatar[] = [],
+  branch = false,
 ): {
   readonly node: ParticipantNode
   readonly own: boolean
@@ -94,6 +96,11 @@ export function projectChatroomMessage(
     let visibleText = block.text
     if (!identityProjected) {
       identityProjected = true
+      // Old branch roots include this transport preamble before their author name.
+      // Keep durable history intact and remove it only in the branch projection.
+      if (branch && visibleText.startsWith('这是群聊分支的主题消息。')) {
+        visibleText = visibleText.slice('这是群聊分支的主题消息。'.length)
+      }
       const marker = participantMarker(visibleText)
       visibleText = marker === undefined ? visibleText : visibleText.slice(marker.length)
       const namePrefix = /^([^：]{1,80})：/.exec(visibleText)
@@ -164,7 +171,7 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
   if (sessionTarget === undefined) {
     return <NativeView {...props} />
   }
-  const projectionBase = projectChatroomMessage(props.node, room.identity)
+  const projectionBase = projectChatroomMessage(props.node, room.identity, [], sessionTarget.kind === 'thread')
   const projection = {
     ...projectionBase,
     ...(room.members.find(member => member.participantId === projectionBase.participantId)?.avatarUrl === undefined
@@ -180,7 +187,7 @@ export const ChatroomUserMessageNodeView = memo(function ChatroomUserMessageNode
   const message = messageTarget(String(props.sessionId), props.node, projection)
   const reply = replyTarget(message)
   const threadRoot = threadRootTarget(message)
-  const onReply = room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, reply) }
+  const onReply = room.identity === undefined ? undefined : () => { props.setReply(compositionTargetId(sessionTarget), reply) }
   const onThread = room.identity === undefined || sessionTarget.kind === 'thread'
     ? undefined
     : () => { void props.openThread(activeRoom.id, threadRoot) }
@@ -212,7 +219,7 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
   if (sessionTarget === undefined) {
     return <NativeView {...props} />
   }
-  const projectionBase = projectChatroomMessage(props.node, room.identity)
+  const projectionBase = projectChatroomMessage(props.node, room.identity, [], sessionTarget.kind === 'thread')
   const projection = {
     ...projectionBase,
     ...(room.members.find(member => member.participantId === projectionBase.participantId)?.avatarUrl === undefined
@@ -228,7 +235,7 @@ export const ChatroomSteeringMessageNodeView = memo(function ChatroomSteeringMes
   const message = messageTarget(String(props.sessionId), props.node, projection)
   const reply = replyTarget(message)
   const threadRoot = threadRootTarget(message)
-  const onReply = room.identity === undefined ? undefined : () => { props.setReply(activeRoom.id, reply) }
+  const onReply = room.identity === undefined ? undefined : () => { props.setReply(compositionTargetId(sessionTarget), reply) }
   const onThread = room.identity === undefined || sessionTarget.kind === 'thread'
     ? undefined
     : () => { void props.openThread(activeRoom.id, threadRoot) }

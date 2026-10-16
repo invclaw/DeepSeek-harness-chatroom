@@ -10,6 +10,26 @@ afterEach(() => {
 })
 
 describe('branch surfaces in a real browser', () => {
+  it('aligns peer content to its avatar and exposes a single action row on the RC.2 native renderer', () => {
+    const style = document.createElement('style')
+    style.textContent = `${CHATROOM_STYLES}
+      .native-user { display: flex; flex-direction: column; align-items: flex-end; }
+      .native-stack { display: flex; flex-direction: column; align-items: flex-end; }
+      .native-bubble { padding: 10px 16px; }
+    `
+    document.head.append(style)
+    document.body.innerHTML = `<div style="width: 600px" class="dsh-chatroom-participant-message" data-dsh-chatroom-own="false" data-dsh-chatroom-actions-visible="true">
+      <span class="dsh-chatroom-avatar">A</span>
+      <div class="dsh-chatroom-message-column"><div class="dsh-chatroom-display-name">Alice</div>
+        <div class="dsh-chatroom-native-message"><div class="native-user"><div class="native-stack"><div class="native-bubble">Branch context</div></div><div data-clock="start"><time>10:00</time><button>Native copy</button></div></div></div>
+        <div class="dsh-chatroom-message-actions"><button>Reply</button><time>10:00</time></div>
+      </div></div>`
+    const column = requiredElement<HTMLElement>('.dsh-chatroom-message-column').getBoundingClientRect()
+    const bubble = requiredElement<HTMLElement>('.native-bubble').getBoundingClientRect()
+    expect(bubble.left).toBe(column.left)
+    expect(getComputedStyle(requiredElement('[data-clock]')).display).toBe('none')
+    expect(requiredElement<HTMLElement>('.dsh-chatroom-message-actions').getBoundingClientRect().height).toBeGreaterThan(0)
+  })
   it.each([
     {
       scheme: 'dark',
@@ -33,10 +53,9 @@ describe('branch surfaces in a real browser', () => {
 
     const panel = requiredElement<HTMLElement>('.dsh-chatroom-thread-panel')
     const header = requiredElement<HTMLElement>('.dsh-chatroom-thread-panel > header')
-    const frame = requiredElement<HTMLElement>('.dsh-chatroom-thread-frame')
-    const status = requiredElement<HTMLElement>('.dsh-chatroom-thread-frame-status')
-    const error = requiredElement<HTMLElement>('.dsh-chatroom-thread-frame-error')
-    const compatibility = requiredElement<HTMLElement>('.dsh-chatroom-thread-compatibility-notice')
+    const frame = requiredElement<HTMLElement>('.dsh-chatroom-thread-native')
+    const status = requiredElement<HTMLElement>('.dsh-chatroom-thread-status')
+    const error = requiredElement<HTMLElement>('.dsh-chatroom-thread-error')
     const activity = requiredElement<HTMLElement>('.dsh-chatroom-thread-activity')
 
     expect(getComputedStyle(document.documentElement).getPropertyValue('--bg-primary')).toBe('')
@@ -47,7 +66,6 @@ describe('branch surfaces in a real browser', () => {
     expect(getComputedStyle(status).backgroundColor).toBe(panelBackground)
     expect(getComputedStyle(status).color).toBe(secondaryText)
     expect(getComputedStyle(error).color).toBe(secondaryText)
-    expect(getComputedStyle(compatibility).color).toBe(secondaryText)
     expect(getComputedStyle(activity).color).toBe(secondaryText)
     expect(getComputedStyle(activity).backgroundColor).not.toBe('rgb(255, 255, 255)')
   })
@@ -96,13 +114,19 @@ describe('branch surfaces in a real browser', () => {
     }
   })
 
-  it('keeps branch markers close to the parent and removes the parent edge stripe', () => {
+  it('shows compact branches with a clear tree hierarchy and one-line titles', () => {
     mountSidebarFixture()
 
     const parent = requiredElement<HTMLElement>('[data-dsh-chatroom-has-branches]')
     const branch = requiredElement<HTMLElement>('[data-dsh-chatroom-branch-row]')
 
-    expect(getComputedStyle(branch).marginLeft).toBe('18px')
+    expect(branch.getBoundingClientRect().left).toBeGreaterThan(parent.getBoundingClientRect().left + 24)
+    expect(branch.getBoundingClientRect().height).toBeLessThanOrEqual(36)
+    const topic = requiredElement<HTMLElement>('[data-dsh-chatroom-branch-topic]')
+    expect(getComputedStyle(topic).textOverflow).toBe('ellipsis')
+    expect(topic.getBoundingClientRect().height).toBeLessThanOrEqual(20)
+    expect(branch.getBoundingClientRect().right).toBeLessThanOrEqual(parent.getBoundingClientRect().right)
+    expect(getComputedStyle(branch).borderTopWidth).toBe('0px')
     expect(getComputedStyle(parent).boxShadow).toBe('none')
   })
 
@@ -226,10 +250,9 @@ function mountFixture(scheme: string, markNativeActions = true): void {
     </main>
     <aside class="dsh-chatroom-thread-panel">
       <header><div><strong>分支回复</strong><small>主题消息</small></div><button type="button">×</button></header>
-      <div class="dsh-chatroom-thread-frame"></div>
-      <div class="dsh-chatroom-thread-frame-status"><strong>正在加载分支</strong><small>初始化中</small></div>
-      <div class="dsh-chatroom-thread-frame-error">无法加载分支</div>
-      <div class="dsh-chatroom-thread-compatibility-notice"><span>兼容模式</span><span><button>重试</button></span></div>
+      <div class="dsh-chatroom-thread-native"></div>
+      <div class="dsh-chatroom-thread-status"><strong>正在加载分支</strong><small>初始化中</small></div>
+      <div class="dsh-chatroom-thread-error">无法加载分支</div>
     </aside>
   `
 }
@@ -237,7 +260,7 @@ function mountFixture(scheme: string, markNativeActions = true): void {
 function mountSidebarFixture(): void {
   const style = document.createElement('style')
   style.textContent = `${CHATROOM_STYLES}
-    [role="tree"] { width: 640px; }
+    [role="tree"] { width: 280px; }
     [role="treeitem"] { display: flex; align-items: center; }
     [data-dsh-chatroom-has-branches] { box-shadow: inset 2px 0 0 rgb(79 124 255); }
   `
@@ -249,7 +272,7 @@ function mountSidebarFixture(): void {
       </div>
       <div role="treeitem" data-dsh-chatroom-branch-row aria-selected="false">
         <span data-dsh-chatroom-branch-marker>↳</span>
-        <span data-dsh-chatroom-branch-surface><span>分支</span></span>
+        <span data-dsh-chatroom-branch-surface><span data-dsh-chatroom-branch-heading><span data-dsh-chatroom-branch-topic>关于群聊升级后插件兼容和知识来源的长标题讨论</span></span><span data-dsh-chatroom-branch-reply-count>3</span></span>
       </div>
     </div>
   `

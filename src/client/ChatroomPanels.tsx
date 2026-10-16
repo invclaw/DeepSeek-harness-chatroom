@@ -1,33 +1,21 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { chatroomAvatar, fallbackAvatarId } from '../avatars.js'
+import { useEffect, useState } from 'react'
+import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+import type { SessionReference } from '@deepseek-ai/dsh-api-session-controller/client'
+import type {} from './NativeBranchContent.js'
 import type {
   ChatroomForwardItem,
   ChatroomNotification,
   ChatroomReplyReference,
   ChatroomSearchResult,
   ChatroomThread,
-  ChatroomThreadMessage,
 } from '../types.js'
 import type { ChatroomReactionEmoji } from '../reactions.js'
-import {
-  BRANCH_FRAME_READY,
-  branchFrameDocumentReady,
-  branchFrameTarget,
-  branchFrameUrl,
-  prepareBranchFrameSelection,
-  restoreParentSessionSelection,
-  switchBranchFrame,
-} from './branch-frame.js'
 import { ChatroomAccountPanels, type ChatroomAccountPanelProps } from './ChatroomAccountPanels.js'
 import { ChatroomAvatarView } from './ChatroomAvatarView.js'
-import { ChatroomMarkdown } from './ChatroomMarkdown.js'
-import { ChatroomExternalCardView } from './ChatroomExternalCard.js'
-import { ChatroomDocumentLinkCards, ChatroomLinkedText } from './ChatroomLinkedText.js'
-import { chatroomMessageActionGroup, chatroomMessageGroupPosition, type ChatroomMessageGroupPosition } from './message-grouping.js'
-import { type ChatroomMessageToolsProps } from './ChatroomMessageTools.js'
-import { ChatroomMessageFrame } from './ChatroomMessageFrame.js'
 
-interface ChatroomPanelsProps extends ChatroomAccountPanelProps {
+interface ChatroomPanelsProps extends ChatroomAccountPanelProps, PropsRenderSlots<'chatroom.branch'> {
+  retainBranch(sessionId: string): SessionReference
+  openBranchSession(sessionId: string): void
   closeMembers(): void
   renameRoom?(title: string): Promise<boolean>
   setMemberRole?(participantId: string, role: 'admin' | 'member'): Promise<boolean>
@@ -50,9 +38,6 @@ interface ChatroomPanelsProps extends ChatroomAccountPanelProps {
   searchAll(query: string): Promise<void>
   openSearchResult(result: ChatroomSearchResult): Promise<void>
 }
-
-let branchFrameInstance = 0
-const BRANCH_FRAME_COMPATIBILITY_KEY = 'dsh-chatroom:branch-frame-compatibility'
 
 /** Persistent member management, branch conversation, and in-page alerts. */
 export function ChatroomPanels(props: ChatroomPanelsProps): JSX.Element {
@@ -329,419 +314,44 @@ function ThreadPanel(props: ChatroomPanelsProps & {
   readonly thread: ChatroomThread
   readonly open: boolean
 }): JSX.Element {
-  const { thread } = props
-  const parentSessionId = props.room.room?.sessionId
-  const frameRef = useRef<HTMLIFrameElement>(null)
-  const [frameInstance] = useState(() => ++branchFrameInstance)
-  const [attempt, setAttempt] = useState(0)
-  const [preparedAttempt, setPreparedAttempt] = useState(-1)
-  const [ready, setReady] = useState(false)
-  const [compatibilityMode, setCompatibilityMode] = useState(branchFrameCompatibilityPreferred)
-  useLayoutEffect(() => {
-    if (parentSessionId === undefined) return
-    if (compatibilityMode) {
-      restoreParentSessionSelection(parentSessionId)
-      return
-    }
-    prepareBranchFrameSelection(thread.sessionId)
-    setPreparedAttempt(attempt)
-    const fallback = globalThis.setTimeout(() => {
-      restoreParentSessionSelection(parentSessionId)
-    }, 30_000)
-    return () => {
-      globalThis.clearTimeout(fallback)
-      restoreParentSessionSelection(parentSessionId)
-    }
-  }, [attempt, compatibilityMode, parentSessionId, thread.sessionId])
+  const { thread, SessionProvider, renderSlot, retainBranch } = props
+  const [reference, setReference] = useState<SessionReference>()
+  const [error, setError] = useState<string>()
   useEffect(() => {
-    if (props.open || parentSessionId === undefined) return
-    restoreParentSessionSelection(parentSessionId)
-  }, [parentSessionId, props.open])
+    const selected = retainBranch(thread.sessionId)
+    let active = true
+    setReference(selected)
+    setError(undefined)
+    void selected.ready.catch(() => { if (active) setError('分支暂时无法加载，请关闭后重试。') })
+    return () => { active = false; selected.release() }
+  }, [retainBranch, thread.sessionId])
   useEffect(() => {
-    if (!props.open) return
     const close = (event: KeyboardEvent) => { if (event.key === 'Escape') props.closeThread() }
     document.addEventListener('keydown', close)
     return () => { document.removeEventListener('keydown', close) }
-  }, [props.closeThread, props.open])
-  useEffect(() => {
-    if (compatibilityMode) return
-    setReady(false)
-    let settled = false
-    let poll: ReturnType<typeof globalThis.setInterval>
-    let timer: ReturnType<typeof globalThis.setTimeout>
-    const probe = () => {
-      if (settled) return
-      const frameWindow = frameRef.current?.contentWindow
-      if (frameWindow !== null && frameWindow !== undefined && parentSessionId !== undefined) {
-        switchBranchFrame(frameWindow, branchFrameTarget(thread, parentSessionId))
-      }
-      try {
-        const document = frameRef.current?.contentDocument
-        if (document === null || document === undefined
-          || !branchFrameDocumentReady(document, thread.sessionId, thread.root.text)) return
-      } catch {
-        // An incomplete same-origin iframe can withhold its document; the visible timeout owns recovery.
-        return
-      }
-      settled = true
-      globalThis.clearInterval(poll)
-      globalThis.clearTimeout(timer)
-      setReady(true)
-    }
-    const receive = (event: MessageEvent) => {
-      if (event.origin !== globalThis.location.origin || event.source !== frameRef.current?.contentWindow) return
-      if (!isBranchReadyMessage(event.data, thread.id)) return
-      probe()
-    }
-    globalThis.addEventListener('message', receive)
-    poll = globalThis.setInterval(probe, 150)
-    timer = globalThis.setTimeout(() => {
-      if (settled) return
-      globalThis.clearInterval(poll)
-      if (parentSessionId !== undefined) restoreParentSessionSelection(parentSessionId)
-      rememberBlockedBranchFrame()
-      setCompatibilityMode(true)
-    }, 8_000)
-    probe()
-    return () => {
-      settled = true
-      globalThis.removeEventListener('message', receive)
-      globalThis.clearInterval(poll)
-      globalThis.clearTimeout(timer)
-    }
-  }, [attempt, compatibilityMode, parentSessionId, thread.id, thread.root.text, thread.sessionId])
-  const summary = branchSummary(thread.root.text)
-  const frameUrl = parentSessionId === undefined
-    ? undefined
-    : branchFrameUrl(thread, parentSessionId, `${frameInstance}:${attempt}`)
-  return (
-    <div
-      className="dsh-chatroom-thread-layer"
-      data-testid="chatroom-thread-layer"
-      onPointerDown={event => { if (event.target === event.currentTarget) props.closeThread() }}
-    >
-    <aside
-      className="dsh-chatroom-thread-panel"
-      data-testid="chatroom-thread-panel"
-      data-open={props.open}
-      aria-hidden={!props.open}
-      aria-label="分支回复"
-      onPointerDown={event => { event.stopPropagation() }}
-    >
+  }, [props.closeThread])
+  return <div className="dsh-chatroom-thread-layer" data-testid="chatroom-thread-layer"
+    onPointerDown={event => { if (event.target === event.currentTarget) props.closeThread() }}>
+    <aside className="dsh-chatroom-thread-panel" data-testid="chatroom-thread-panel" data-open={props.open} aria-label="分支回复">
       <header>
-        <div><strong>分支回复</strong><small>来自 {props.room.room?.title ?? '群聊'} · {thread.root.displayName}：{summary}</small></div>
-        <button aria-label="关闭分支" type="button" onClick={props.closeThread}>×</button>
+        <div><strong>分支回复</strong><small>{props.room.room?.title ?? '群聊'} · {thread.root.displayName} 发起</small></div>
+        <span className="dsh-chatroom-thread-header-actions">
+        <button aria-label="在主视图打开分支" title="在主视图打开，查看轨迹与知识来源" type="button" onClick={() => { props.openBranchSession(thread.sessionId) }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 4h6v6m0-6-9 9" /><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" /></svg>
+        </button>
+        <button aria-label="关闭分支" type="button" onClick={props.closeThread}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg>
+        </button>
+        </span>
       </header>
-      {parentSessionId === undefined
-        ? <div className="dsh-chatroom-thread-frame-error">无法确定父群聊会话。</div>
-        : compatibilityMode
-          ? <ThreadCompatibilityPanel
-            {...props}
-            thread={thread}
-            frameUrl={frameUrl!}
-            retry={() => {
-              forgetBlockedBranchFrame()
-              setCompatibilityMode(false)
-              setAttempt(value => value + 1)
-            }}
-          />
-          : <div className="dsh-chatroom-thread-frame-shell">
-            {preparedAttempt === attempt && <iframe
-              className="dsh-chatroom-thread-frame"
-              key={`${frameInstance}:${attempt}`}
-              ref={frameRef}
-              title={`分支回复：${summary}`}
-              src={frameUrl}
-              onLoad={() => {
-                try {
-                  if (frameRef.current?.contentDocument !== null) return
-                } catch {
-                  // The browser can reject an embedded document before exposing its content.
-                }
-                restoreParentSessionSelection(parentSessionId)
-                rememberBlockedBranchFrame()
-                setCompatibilityMode(true)
-              }}
-            />}
-            {!ready && <div className="dsh-chatroom-thread-frame-status" role="status">
-              <span>{attempt === 0 ? '正在加载分支…' : '正在重新加载分支…'}</span>
-              <small>正在打开分支。</small>
-            </div>}
-          </div>}
-      {props.room.threadError !== undefined && <div className="dsh-chatroom-error" role="alert">{props.room.threadError}</div>}
+      <div className="dsh-chatroom-thread-native" data-dsh-chatroom-branch-session={thread.sessionId}>
+        {error !== undefined ? <div className="dsh-chatroom-thread-error" role="alert">{error}</div>
+          : reference?.sessionId === thread.sessionId
+            ? <SessionProvider session={reference}>{renderSlot('chatroom.branch', {})}</SessionProvider>
+            : <div className="dsh-chatroom-thread-status" role="status">正在加载分支…</div>}
+      </div>
     </aside>
-    </div>
-  )
-}
-
-function ThreadCompatibilityPanel(props: ChatroomPanelsProps & {
-  readonly thread: ChatroomThread
-  readonly frameUrl: string
-  retry(): void
-}): JSX.Element {
-  const [text, setText] = useState('')
-  const [mention, setMention] = useState<ThreadMention | undefined>()
-  const [mentionIndex, setMentionIndex] = useState(0)
-  const endRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const mentionCandidates = useMemo(() => {
-    const aiNames = [...new Set(['AI', props.room.room?.aiDisplayName].filter((name): name is string => name !== undefined))]
-    return [
-      ...aiNames.map(name => ({ name, description: '当前分支的 AI 助手', ai: true })),
-      ...props.room.members
-        .filter(member => member.participantId !== props.room.identity?.participantId)
-        .map(member => ({ name: member.displayName, description: member.online ? '在线成员' : '群成员', ai: false })),
-    ].filter((candidate, index, all) => all.findIndex(item => item.name === candidate.name) === index)
-  }, [props.room.identity?.participantId, props.room.members, props.room.room?.aiDisplayName])
-  const visibleMentions = mention === undefined
-    ? []
-    : mentionCandidates.filter(candidate => candidate.name.toLocaleLowerCase().includes(mention.query.toLocaleLowerCase()))
-  useEffect(() => {
-    if (typeof endRef.current?.scrollIntoView === 'function') endRef.current.scrollIntoView({ block: 'end' })
-  }, [props.room.threadMessages.length])
-  useEffect(() => { setMentionIndex(0) }, [mention?.query])
-
-  const updateMention = (value: string, cursor: number): void => {
-    setMention(activeThreadMention(value, cursor))
-  }
-  const pickMention = (name: string): void => {
-    if (mention === undefined) return
-    const cursor = textareaRef.current?.selectionStart ?? text.length
-    const next = `${text.slice(0, mention.start)}@${name} ${text.slice(cursor)}`
-    const nextCursor = mention.start + name.length + 2
-    setText(next)
-    setMention(undefined)
-    queueMicrotask(() => {
-      textareaRef.current?.focus()
-      textareaRef.current?.setSelectionRange(nextCursor, nextCursor)
-    })
-  }
-  return <div className="dsh-chatroom-thread-compatibility">
-    <div className="dsh-chatroom-thread-compatibility-notice" role="status">
-      <span>分支无法在当前页面完整显示，请在新标签中打开。</span>
-      <span><a href={props.frameUrl} target="_blank" rel="noreferrer">在新标签打开分支</a><button type="button" onClick={props.retry}>重试</button></span>
-    </div>
-    <div className="dsh-chatroom-thread-root">
-      <strong>{props.thread.root.displayName}</strong>
-      <div>{props.thread.root.role === 'ai'
-        ? <ChatroomMarkdown text={props.thread.root.text} />
-        : props.thread.root.text}</div>
-    </div>
-    <div className="dsh-chatroom-thread-messages">
-      {props.room.threadMessages.length === 0 && <p className="dsh-chatroom-thread-empty">从这里开始与分支 AI 对话；回复只会进入当前分支。</p>}
-      {props.room.threadMessages.map((message, index, messages) => <ThreadMessage
-        key={message.id}
-        message={message}
-        roomId={props.thread.roomId}
-        props={props}
-        groupPosition={chatroomMessageGroupPosition(
-          messages,
-          index,
-          item => `${item.role}:${item.participantId}`,
-          item => item.createdAt,
-        )}
-        actionGroup={chatroomMessageActionGroup(
-          messages,
-          index,
-          item => `${item.role}:${item.participantId}`,
-          item => item.createdAt,
-        )}
-      />)}
-      <div ref={endRef} />
-    </div>
-    <form className="dsh-chatroom-thread-composer" onSubmit={(event) => {
-      event.preventDefault()
-      const submitted = text.trim()
-      if (submitted === '') return
-      void props.sendThreadMessage(submitted).then((sent) => { if (sent) setText('') })
-    }}>
-      {props.room.threadReply !== undefined && <div className="dsh-chatroom-thread-composer-reply">
-        <span><strong>回复 {props.room.threadReply.displayName}</strong>{props.room.threadReply.text}</span>
-        <button type="button" aria-label="取消引用" onClick={props.clearThreadReply}>×</button>
-      </div>}
-      <textarea
-        ref={textareaRef}
-        rows={3}
-        placeholder="给分支 AI 发消息"
-        value={text}
-        aria-expanded={visibleMentions.length > 0}
-        aria-controls="dsh-chatroom-thread-mentions"
-        onChange={event => {
-          setText(event.target.value)
-          updateMention(event.target.value, event.target.selectionStart)
-        }}
-        onClick={event => { updateMention(event.currentTarget.value, event.currentTarget.selectionStart) }}
-        onKeyDown={event => {
-          if (visibleMentions.length > 0) {
-            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-              event.preventDefault()
-              const direction = event.key === 'ArrowDown' ? 1 : -1
-              setMentionIndex(current => (current + direction + visibleMentions.length) % visibleMentions.length)
-              return
-            }
-            if (event.key === 'Escape') {
-              event.preventDefault()
-              setMention(undefined)
-              return
-            }
-            if (event.key === 'Tab') {
-              event.preventDefault()
-              pickMention(visibleMentions[mentionIndex]?.name ?? visibleMentions[0]!.name)
-              return
-            }
-          }
-          if (event.key !== 'Enter' || event.shiftKey) return
-          if (visibleMentions.length > 0 && mention?.query === '') {
-            event.preventDefault()
-            pickMention(visibleMentions[mentionIndex]?.name ?? visibleMentions[0]!.name)
-            return
-          }
-          event.preventDefault()
-          event.currentTarget.form?.requestSubmit()
-        }}
-      />
-      {visibleMentions.length > 0 && <div className="dsh-chatroom-thread-mentions" id="dsh-chatroom-thread-mentions" role="listbox" aria-label="提及成员">
-        {visibleMentions.map((candidate, index) => <button
-          type="button"
-          role="option"
-          aria-label={candidate.name}
-          aria-selected={index === mentionIndex}
-          data-active={index === mentionIndex}
-          key={candidate.name}
-          onMouseDown={event => { event.preventDefault() }}
-          onClick={() => { pickMention(candidate.name) }}
-        ><i>{candidate.ai ? '✦' : '●'}</i><span><strong>{candidate.name}</strong><small>{candidate.description}</small></span></button>)}
-      </div>}
-      <button type="submit" disabled={props.room.threadBusy || text.trim() === ''}>发送</button>
-    </form>
   </div>
-}
-
-function ThreadMessage({
-  message,
-  roomId,
-  props,
-  groupPosition,
-  actionGroup,
-}: {
-  readonly message: ChatroomThreadMessage
-  readonly roomId: string
-  readonly props: ChatroomPanelsProps
-  readonly groupPosition: ChatroomMessageGroupPosition
-  readonly actionGroup: string
-}): JSX.Element {
-  const own = message.participantId === props.room.identity?.participantId
-  const knownMember = props.room.members.find(member => member.participantId === message.participantId)
-  const avatarId = knownMember?.avatarId ?? message.avatarId ?? fallbackAvatarId(message.participantId)
-  const avatarUrl = knownMember?.avatarUrl ?? message.avatarUrl
-  const avatar = message.role === 'ai' ? { id: 'ai', emoji: '✦' } : chatroomAvatar(avatarId, message.participantId)
-  const target = threadMessageTarget(message)
-  const onReply = props.room.identity === undefined ? undefined : () => { props.setThreadReply(target) }
-  const tools: ChatroomMessageToolsProps = {
-    roomId,
-    message: { ...target, role: message.role, createdAt: message.createdAt },
-    reactions: props.room.reactions,
-    identity: props.room.identity,
-    selecting: props.room.selectionRoomId === roomId,
-    selected: props.room.selectionRoomId === roomId
-      && props.room.selectedMessages.some(item => item.messageId === message.id),
-    recalled: props.room.recalls.some(item => item.messageId === message.id),
-    canRecall: own && message.role === 'human',
-    copyText: message.text,
-    onReply,
-    toggleReaction: props.toggleReaction,
-    openForward: props.openForward,
-    toggleSelection: props.toggleMessageSelection,
-    recallMessage: props.recallMessage,
-  }
-  return <ChatroomMessageFrame
-    className="dsh-chatroom-thread-message"
-    own={own}
-    role={message.role}
-    groupPosition={groupPosition}
-    actionGroup={actionGroup}
-    avatar={message.role === 'ai'
-      ? <span className="dsh-chatroom-member-avatar" data-avatar={avatar.id} aria-hidden>{avatar.emoji}</span>
-      : <ChatroomAvatarView
-          className="dsh-chatroom-member-avatar"
-          participantId={message.participantId}
-          avatarId={avatarId}
-          {...(avatarUrl === undefined ? {} : { avatarUrl })}
-        />}
-    displayName={message.displayName}
-    reply={message.reply}
-    tools={tools}
-    body={<div className="dsh-chatroom-thread-message-body">
-      {tools.recalled
-        ? <div className="dsh-chatroom-recalled-message">消息已撤回</div>
-        : message.role === 'ai'
-          ? <ChatroomMarkdown text={message.text} />
-          : <ChatroomLinkedText className="dsh-chatroom-thread-literal-text" text={message.text} />}
-      {!tools.recalled && message.card !== undefined && <ChatroomExternalCardView card={message.card} />}
-      {!tools.recalled && <ChatroomDocumentLinkCards text={message.text} existingUrls={message.card?.url === undefined ? [] : [message.card.url]} />}
-    </div>}
-  />
-}
-
-function threadMessageTarget(message: ChatroomThreadMessage): ChatroomReplyReference {
-  return {
-    messageId: message.id,
-    displayName: message.displayName,
-    text: branchSummary(message.text, 120),
-  }
-}
-
-interface ThreadMention {
-  readonly start: number
-  readonly query: string
-}
-
-function activeThreadMention(text: string, cursor: number): ThreadMention | undefined {
-  const prefix = text.slice(0, cursor)
-  const match = /(?:^|\s)@([^\s@]*)$/u.exec(prefix)
-  if (match === null) return undefined
-  return { start: prefix.length - match[1]!.length - 1, query: match[1]! }
-}
-
-function branchSummary(text: string, limit = 48): string {
-  const normalized = text
-    .replace(/```[\s\S]*?```/gu, ' ')
-    .replace(/[`*_#>|\[\]]/gu, '')
-    .replace(/\s+/gu, ' ')
-    .trim()
-  const characters = [...normalized]
-  if (characters.length === 0) return '分支消息'
-  return characters.length <= limit ? normalized : `${characters.slice(0, limit).join('')}…`
-}
-
-function branchFrameCompatibilityPreferred(): boolean {
-  try {
-    return globalThis.sessionStorage?.getItem(BRANCH_FRAME_COMPATIBILITY_KEY) === '1'
-  } catch {
-    return false
-  }
-}
-
-function rememberBlockedBranchFrame(): void {
-  try {
-    globalThis.sessionStorage?.setItem(BRANCH_FRAME_COMPATIBILITY_KEY, '1')
-  } catch {
-    // Storage can be unavailable in isolated browser contexts; the current panel still falls back.
-  }
-}
-
-function forgetBlockedBranchFrame(): void {
-  try {
-    globalThis.sessionStorage?.removeItem(BRANCH_FRAME_COMPATIBILITY_KEY)
-  } catch {
-    // Storage can be unavailable in isolated browser contexts; retry still applies to the current panel.
-  }
-}
-
-function isBranchReadyMessage(value: unknown, threadId: string): boolean {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const message = value as { type?: unknown; threadId?: unknown }
-  return message.type === BRANCH_FRAME_READY && message.threadId === threadId
 }
 
 function formatRelative(time: number): string {

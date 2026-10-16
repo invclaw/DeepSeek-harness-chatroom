@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
 import { ChatroomAuthError, ChatroomAuthRateLimitError } from './auth.js'
 import { automaticAuthRedirect } from './auth-redirect.js'
 import { renderAuthPage } from './auth-page.js'
@@ -35,7 +34,6 @@ import type {
 /** HTTP/SSE adapter for the browser client. */
 export class ChatroomHttpController {
   private readonly log
-  private readonly configurationApi
 
   constructor(
     ctx: Context,
@@ -43,7 +41,6 @@ export class ChatroomHttpController {
     private readonly config: Config,
   ) {
     this.log = ctx.logger('deepseek-harness-chatroom')
-    this.configurationApi = toFetchHandler(ctx.apiProxy)
   }
 
   /** Dispatch one request under a registered chatroom API prefix. */
@@ -193,10 +190,6 @@ export class ChatroomHttpController {
       }
       if (route.endpoint === '/notifications' && request.method === 'GET') {
         await this.handleNotifications(request, response)
-        return
-      }
-      if (route.endpoint.startsWith('/configuration/')) {
-        await this.handleConfiguration(request, response, route.endpoint.slice('/configuration/'.length))
         return
       }
       json(response, 404, { error: '接口不存在。' } satisfies ChatroomErrorResponse)
@@ -1155,41 +1148,6 @@ export class ChatroomHttpController {
       if (revalidate !== undefined) clearInterval(revalidate)
       unsubscribe()
     })
-  }
-
-  private async handleConfiguration(
-    request: IncomingMessage,
-    response: ServerResponse,
-    method: string,
-  ): Promise<void> {
-    if (request.method !== 'POST') {
-      methodNotAllowed(response, 'POST')
-      return
-    }
-    if (!isRemoteConfigurationMethod(method)) {
-      json(response, 404, { error: '远程配置接口不存在。' } satisfies ChatroomErrorResponse)
-      return
-    }
-    assertSameOrigin(request)
-    const identity = await this.requireIdentity(request, response)
-    if (identity === undefined) return
-    const account = this.config.authEnabled ? await this.requestAccount(request, response) : undefined
-    if (account?.role !== 'super-admin' && !canManageRemoteSettings(this.config, identity.participantId)) {
-      json(response, 403, { error: '当前聊天室身份没有模型设置管理权限。' } satisfies ChatroomErrorResponse)
-      return
-    }
-    const body = await readJson(request, this.config.maxSettingsRequestBytes)
-    const controller = new AbortController()
-    request.once('aborted', () => controller.abort())
-    const upstream = await this.configurationApi.fetch(new Request(`http://chatroom.local/api/${method}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    }))
-    const payload = await upstream.json()
-    if (method === 'settings.describe') hideHostDocumentCapability(payload)
-    json(response, upstream.status, payload)
   }
 
   private sessionPayload(

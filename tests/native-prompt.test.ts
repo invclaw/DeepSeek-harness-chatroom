@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { IApiClient } from '@deepseek-ai/dsh-client-connection/client'
+import type { ClientRemote as IApiClient } from '@deepseek-ai/dsh-api-remotes/client'
 import { installNativePromptIdentity, identifyPrompt } from '../src/client/native-prompt.js'
 import type { ChatroomClientStore } from '../src/client/store.js'
 
@@ -8,6 +8,20 @@ afterEach(() => {
 })
 
 describe('native prompt admission', () => {
+  it('wraps and restores RC.2 accessor methods without interrupting client installation', async () => {
+    const original = vi.fn(async () => ({ ok: true, value: { accepted: true } }))
+    const namespace = {}
+    const getter = () => original
+    Object.defineProperty(namespace, 'prompt', { configurable: true, enumerable: true, get: getter })
+    const api = { session: namespace } as unknown as IApiClient
+    const store = { roomForSession: () => undefined, canPromptNativeSession: () => true, getSnapshot: () => ({ auth: { enabled: false } }) } as unknown as ChatroomClientStore
+    const restore = installNativePromptIdentity(api, store)
+    await api.session.prompt({ sessionId: 'solo' as never, requestId: 'request' as never, mode: 'queue', content: [{ type: 'text', text: 'hello' }] })
+    expect(original).toHaveBeenCalledOnce()
+    restore()
+    expect(Object.getOwnPropertyDescriptor(namespace, 'prompt')?.get).toBe(getter)
+    expect(api.session.prompt).toBe(original)
+  })
   it('prefixes text while preserving native image blocks', () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const image = { type: 'image' as const, mediaType: 'image/png' as const, data: 'AA==', name: 'test.png' }
@@ -31,7 +45,7 @@ describe('native prompt admission', () => {
       aiTriggered: false,
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
-    const api = { sessions: { prompt: original } } as unknown as IApiClient
+    const api = { session: { prompt: original } } as unknown as IApiClient
     const room = { id: 'room', sessionId: 'room-session' }
     const store = {
       roomForSession: (sessionId: string) => sessionId === room.sessionId ? room : undefined,
@@ -42,7 +56,8 @@ describe('native prompt admission', () => {
     } as unknown as ChatroomClientStore
     const restore = installNativePromptIdentity(api, store)
 
-    await api.sessions.prompt({
+    await api.session.prompt({
+      requestId: 'request-test' as never,
       sessionId: 'room-session' as never,
       mode: 'queue',
       content: [{ type: 'text', text: '人类消息' }],
@@ -57,7 +72,8 @@ describe('native prompt admission', () => {
     expect(original).not.toHaveBeenCalled()
     expect(store.completeComposition).toHaveBeenCalledOnce()
 
-    await api.sessions.prompt({
+    await api.session.prompt({
+      requestId: 'request-test' as never,
       sessionId: 'room-session' as never,
       mode: 'queue',
       content: [{ type: 'text', text: '/new' }],
@@ -66,7 +82,8 @@ describe('native prompt admission', () => {
       content: [{ type: 'text', text: '/new' }],
     }), undefined)
 
-    await api.sessions.prompt({
+    await api.session.prompt({
+      requestId: 'request-test' as never,
       sessionId: 'ordinary-session' as never,
       mode: 'queue',
       content: [{ type: 'text', text: '原样' }],
@@ -76,12 +93,12 @@ describe('native prompt admission', () => {
     }), undefined)
 
     restore()
-    expect(api.sessions.prompt).toBe(original)
+    expect(api.session.prompt).toBe(original)
   })
 
   it('blocks hidden native Sessions before normal or slash-command submission', async () => {
     const original = vi.fn()
-    const api = { sessions: { prompt: original } } as unknown as IApiClient
+    const api = { session: { prompt: original } } as unknown as IApiClient
     const store = {
       agentTargetForSession: () => undefined,
       newSessionMode: () => undefined,
@@ -92,12 +109,14 @@ describe('native prompt admission', () => {
     } as unknown as ChatroomClientStore
     installNativePromptIdentity(api, store)
 
-    await expect(api.sessions.prompt({
+    await expect(api.session.prompt({
+      requestId: 'request-test' as never,
       sessionId: 'another-users-session' as never,
       mode: 'queue',
       content: [{ type: 'text', text: '不能匿名发进群聊' }],
     })).rejects.toThrow('会话不存在或你无权访问')
-    await expect(api.sessions.prompt({
+    await expect(api.session.prompt({
+      requestId: 'request-test' as never,
       sessionId: 'another-users-session' as never,
       mode: 'queue',
       content: [{ type: 'text', text: '/new' }],
@@ -115,7 +134,7 @@ describe('native prompt admission', () => {
       aiTriggered: true,
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
-    const api = { sessions: { prompt: original } } as unknown as IApiClient
+    const api = { session: { prompt: original } } as unknown as IApiClient
     const room = { id: 'room', sessionId: 'room-session' }
     const waitForRoomAutoTrigger = vi.fn(async () => undefined)
     const store = {
@@ -141,12 +160,14 @@ describe('native prompt admission', () => {
     } as unknown as ChatroomClientStore
     installNativePromptIdentity(api, store)
 
-    await api.sessions.prompt({
+    await api.session.prompt({
+      requestId: 'request-test' as never,
       sessionId: 'branch-session' as never,
       mode: 'steer',
       content: [{ type: 'text', text: '@AI 继续' }],
     })
-    await api.sessions.prompt({
+    await api.session.prompt({
+      requestId: 'request-test' as never,
       sessionId: 'branch-session' as never,
       mode: 'queue',
       content: [{ type: 'text', text: '再发一条' }],
@@ -187,7 +208,7 @@ describe('native prompt admission', () => {
       accepted: true, aiTriggered: false,
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
-    const api = { sessions: { prompt: original } } as unknown as IApiClient
+    const api = { session: { prompt: original } } as unknown as IApiClient
     const room = { id: 'new-room', sessionId: 'new-session' }
     const addRoomMembers = vi.fn(async () => true)
     const store = {
@@ -206,7 +227,8 @@ describe('native prompt admission', () => {
     } as unknown as ChatroomClientStore
     installNativePromptIdentity(api, store)
 
-    await api.sessions.prompt({
+    await api.session.prompt({
+      requestId: 'request-test' as never,
       sessionId: 'new-session' as never,
       mode: 'queue',
       content: [{ type: 'text', text: '@Bob 大家开始吧' }],
@@ -229,7 +251,7 @@ describe('native prompt admission', () => {
       })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const api = { sessions: { prompt: original } } as unknown as IApiClient
+    const api = { session: { prompt: original } } as unknown as IApiClient
     const room = { id: 'room', sessionId: 'room-session' }
     const store = {
       roomForSession: () => room,
@@ -241,7 +263,8 @@ describe('native prompt admission', () => {
     } as unknown as ChatroomClientStore
     installNativePromptIdentity(api, store)
 
-    await api.sessions.prompt({
+    await api.session.prompt({
+      requestId: 'request-test' as never,
       sessionId: 'room-session' as never,
       mode: 'queue',
       content: [{ type: 'text', text: 'DeepSeek你说话啊' }],

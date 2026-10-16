@@ -10,21 +10,21 @@ interface NewGroupSetupInjected {
   chooseNewSessionMode(sessionId: string, mode: 'group' | 'solo'): Promise<boolean>
 }
 
-type NewGroupSetupDockProps = PropsRuntime<'conversation.input.dock'> & NewGroupSetupInjected
+type NewGroupSetupDockProps = PropsRuntime<'conversation.composer.dock'> & NewGroupSetupInjected
 
 /** Native blank-Session choice between a shared room and one-person Agent work. */
 export function NewGroupSetupDock(props: NewGroupSetupDockProps): JSX.Element | null {
   const view = props.useChatroom(snapshot => snapshot)
   const mode = props.newSessionMode(String(props.sessionId))
   const [nativeHeroBody, setNativeHeroBody] = useState<HTMLElement>()
-  const blank = props.session.composerPhase === 'blank' && props.session.nodes.length === 0
+  const blank = props.useSession(snapshot => snapshot.blank)
 
   useEffect(() => {
     if (blank && mode === undefined) props.registerNewSession(String(props.sessionId))
   }, [blank, mode, props.registerNewSession, props.sessionId])
 
   useEffect(() => {
-    if (!blank || view.branchFrame !== undefined) return
+    if (!blank) return
     const headlineText = [...document.querySelectorAll<HTMLElement>('span')]
       .find(element => element.textContent?.trim() === '探索未至之境')
     const headline = headlineText?.parentElement
@@ -41,7 +41,7 @@ export function NewGroupSetupDock(props: NewGroupSetupDockProps): JSX.Element | 
       stack.removeAttribute('data-dsh-chatroom-new-session-hero')
       body.removeAttribute('data-dsh-chatroom-new-session-switch-host')
     }
-  }, [blank, props.sessionId, view.branchFrame])
+  }, [blank, props.sessionId])
 
   useEffect(() => {
     if (!blank || nativeHeroBody === undefined || mode === undefined) return
@@ -67,7 +67,7 @@ export function NewGroupSetupDock(props: NewGroupSetupDockProps): JSX.Element | 
     }
   }, [blank, mode, nativeHeroBody])
 
-  if (!blank || view.branchFrame !== undefined || mode === undefined) return null
+  if (!blank || mode === undefined) return null
   const activeMode = mode === 'solo' ? 'solo' : 'group'
   const chooser = (
     <div className="dsh-chatroom-new-mode-switch" data-mode={activeMode} role="group" aria-label="新会话模式">

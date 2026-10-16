@@ -1,129 +1,73 @@
-/** Model-request compatibility helpers for shared chatroom Sessions. */
+/** Durable model-history edits; native DSH owns image and tool-request projection. */
+import { createDeveloperMessage } from '@deepseek-ai/dsh-llm'
+import type { Session, SessionSeq } from '@deepseek-ai/dsh-session'
 
-import { freezeMessage } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
+/** Replace hidden surface messages without deleting their append-origin transcript. */
+export function hideChatroomMessages(session: Session, hiddenIds: ReadonlySet<string>): void {
+  if (hiddenIds.size === 0) return
+  const events = session.snapshotEvents()
+  const hidden = session.surface.nodes.filter(seq => {
+    const event = events[seq]!
+    const original = deferredOriginal(events, event)
+    const message = session.deriveEventMessage(original ?? event)
+    return message !== null && hiddenIds.has(String(message.id))
+  })
+  for (const seq of hidden) replaceSurface(session, [seq])
+}
 
-const OMITTED_IMAGE_TEXT = '[历史图片已保留在群聊中，但未发送给当前文本模型。]'
-
-/** Replace image blocks with a deterministic text marker while preserving every message id and source. */
-export function textCompatibleMessages(messages: readonly Message[]): Message[] {
-  return messages.map((message) => {
-    const content = textCompatibleContent(message.content)
-    return content === message.content ? message : freezeMessage({ ...message, content })
+/** Hide passive chat until the current AI turn ends, preserving its transcript position. */
+export function deferChatroomMessage(session: Session, messageId: string): void {
+  const original = session.snapshotEvents().find(event => event.type === 'user/message'
+    && event.surfaceOp === 'append' && String(event.data.id) === messageId)
+  if (original === undefined || !session.surface.nodes.includes(original.seq)) return
+  const turn = session.snapshotEvents().findLast(event => event.type === 'turn/start')
+  const message = createDeveloperMessage({ content: [], source: {
+    kind: 'chatroom-control', form: 'deferred', summary: 'Chat deferred until the current AI turn ends',
+    deferredMessageSeq: original.seq,
+  } })
+  session.append('developer/message', { turn: turn?.type === 'turn/start' ? turn.data.turn : 0, step: 0, message }, {
+    surfaceOp: { op: 'replace', startSeq: original.seq, endSeq: original.seq },
+    sourceEventSeqs: [original.seq],
   })
 }
 
-/** Whether any message, including a tool result, contains an image block. */
-export function messagesContainImages(messages: readonly Message[]): boolean {
-  return messages.some(message => contentContainsImages(message.content))
-}
-
-/** Remove recalled messages by their stable model ids while preserving the remaining immutable values. */
-export function visibleMessages(messages: readonly Message[], recalledIds: ReadonlySet<string>): Message[] {
-  if (recalledIds.size === 0) return [...messages]
-  return messages.filter(message => !recalledIds.has(String(message.id)))
-}
-
-/** Restore provider-required tool-call/result adjacency in Sessions written by older plugin builds. */
-export function protocolCompatibleMessages(messages: readonly Message[]): Message[] {
-  const compatible: Message[] = []
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index]!
-    const calls = message.content.filter((block): block is Extract<ContentBlock, { type: 'tool-call' }> =>
-      block.type === 'tool-call')
-    if (message.role !== 'assistant' || calls.length === 0) {
-      compatible.push(message)
+/** Restore only live placeholders: recalled/reset/compacted chat must never reappear. */
+export function restoreDeferredChatroomMessages(session: Session, hiddenIds: ReadonlySet<string>, idle = false): void {
+  const events = session.snapshotEvents()
+  if (!events.some(event => deferredOriginal(events, event) !== undefined)) return
+  for (const seq of [...session.surface.nodes]) {
+    const event = events[seq]!
+    const original = deferredOriginal(events, event)
+    if (event.type !== 'developer/message' || original?.type !== 'user/message') continue
+    if (!idle && !events.some(candidate => candidate.seq > seq && candidate.type === 'turn/end'
+      && candidate.data.turn === event.data.turn)) continue
+    if (hiddenIds.has(String(original.data.id))) {
+      replaceSurface(session, [seq])
       continue
     }
-
-    const pending = new Set(calls.map(call => String(call.id)))
-    const results: Message[] = []
-    const deferred: Message[] = []
-    let cursor = index + 1
-    while (cursor < messages.length && pending.size > 0) {
-      const candidate = messages[cursor]!
-      const resultIds = candidate.content.flatMap(block => block.type === 'tool-result'
-        ? [String(block.toolCallId)]
-        : [])
-      if (resultIds.some(id => pending.has(id))) {
-        results.push(candidate)
-        for (const id of resultIds) pending.delete(id)
-        cursor += 1
-        continue
-      }
-      if (startsNewProviderExchange(candidate)) break
-      deferred.push(candidate)
-      cursor += 1
-    }
-
-    const content = message.content.filter(block => block.type !== 'tool-call' || !pending.has(String(block.id)))
-    if (content.length > 0) {
-      compatible.push(content.length === message.content.length
-        ? message
-        : freezeMessage({ ...message, content }))
-    }
-    compatible.push(...results, ...deferred)
-    index = cursor - 1
+    session.append('user/message', original.data, {
+      surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [original.seq, seq],
+    })
   }
-  return compatible
 }
 
-/** Build a lazy stream that removes chat-history images only when the selected model is text-only. */
-export function textCompatibleStream(
-  options: GenerateOptions,
-  next: () => AsyncIterable<StreamChunk>,
-  ownsSession: (sessionId: string) => boolean,
-  recalledMessageIds: (sessionId: string) => ReadonlySet<string>,
-  resolveModelInfo: (provider: string, model: string, signal?: AbortSignal) => Promise<{ readonly inputModalities?: readonly string[] }>,
-  stream: (options: GenerateOptions) => AsyncIterable<StreamChunk>,
-): AsyncIterable<StreamChunk> {
-  if (options.sessionId === undefined || !ownsSession(String(options.sessionId))) return next()
-  const messages = protocolCompatibleMessages(
-    visibleMessages(options.messages, recalledMessageIds(String(options.sessionId))),
-  )
-  const messagesChanged = messages.length !== options.messages.length
-    || messages.some((message, index) => message !== options.messages[index])
-  const requestMessages = messagesChanged ? messages : options.messages
-  const hasImages = messagesContainImages(requestMessages)
-  if (!messagesChanged && !hasImages) return next()
-
-  return (async function*(): AsyncGenerator<StreamChunk> {
-    if (!hasImages) {
-      yield* stream({ ...options, messages: requestMessages })
-      return
-    }
-    const model = await resolveModelInfo(options.provider, options.model, options.signal)
-    if (model.inputModalities === undefined || model.inputModalities.includes('image')) {
-      if (!messagesChanged) yield* next()
-      else yield* stream({ ...options, messages: requestMessages })
-      return
-    }
-    yield* stream({ ...options, messages: textCompatibleMessages(requestMessages) })
-  })()
+function deferredOriginal(events: ReturnType<Session['snapshotEvents']>, event: ReturnType<Session['snapshotEvents']>[number]) {
+  if (event.type !== 'developer/message') return undefined
+  const source = event.data.message.source
+  if (source.kind !== 'chatroom-control' || source.form !== 'deferred' || source.deferredMessageSeq === undefined) return undefined
+  return events[source.deferredMessageSeq]
 }
 
-function textCompatibleContent(content: ContentBlock[]): ContentBlock[] {
-  let changed = false
-  const compatible = content.map((block): ContentBlock => {
-    if (block.type === 'image') {
-      changed = true
-      return { type: 'text', text: OMITTED_IMAGE_TEXT }
-    }
-    if (block.type !== 'tool-result') return block
-    const nested = textCompatibleContent(block.content)
-    if (nested === block.content) return block
-    changed = true
-    return { ...block, content: nested }
+/** A new AI conversation retains the complete native human transcript. */
+export function resetChatroomContext(session: Session): void {
+  replaceSurface(session, [...session.surface.nodes])
+}
+
+function replaceSurface(session: Session, nodes: SessionSeq[]): void {
+  if (nodes.length === 0) return
+  const message = createDeveloperMessage({ content: [], source: { kind: 'chatroom-control', form: 'notice', summary: 'Chatroom model context updated' } })
+  session.append('developer/message', { turn: 0, step: 0, message }, {
+    surfaceOp: { op: 'replace', startSeq: nodes[0]!, endSeq: nodes.at(-1)! },
+    sourceEventSeqs: nodes,
   })
-  return changed ? compatible : content
-}
-
-function contentContainsImages(content: readonly ContentBlock[]): boolean {
-  return content.some(block => block.type === 'image'
-    || (block.type === 'tool-result' && contentContainsImages(block.content)))
-}
-
-function startsNewProviderExchange(message: Message): boolean {
-  if (message.role === 'assistant') return message.content.some(block => block.type === 'tool-call')
-  return message.source.kind === 'user'
 }

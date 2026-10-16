@@ -1,146 +1,62 @@
-import { describe, expect, it, vi } from 'vitest'
-import {
-  CallId,
-  createAssistantMessage,
-  createToolResultMessage,
-  createUserMessage,
-  type GenerateOptions,
-  type StreamChunk,
-} from '@deepseek-ai/dsh-llm'
-import {
-  messagesContainImages,
-  protocolCompatibleMessages,
-  textCompatibleMessages,
-  textCompatibleStream,
-  visibleMessages,
-} from '../src/model-history.js'
+import { describe, expect, it } from 'vitest'
+import { createUserMessage, createAssistantMessage } from '@deepseek-ai/dsh-llm'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { deferChatroomMessage, hideChatroomMessages, resetChatroomContext, restoreDeferredChatroomMessages } from '../src/model-history.js'
 
-function request(): GenerateOptions {
-  return {
-    provider: 'deepseek',
-    model: 'deepseek-v4-flash',
-    sessionId: 'chatroom-v1-lobby' as never,
-    messages: [createUserMessage({
-      content: [
-        { type: 'text', text: '看这张图' },
-        { type: 'image', attachment: { attachmentId: 'image-1' as never, mediaType: 'image/png', bytes: 12, width: 1, height: 1 } },
-      ],
-      source: { kind: 'user' },
-    })],
-  }
-}
-
-describe('chatroom model history compatibility', () => {
-  it('preserves message identity while replacing images with a readable marker', () => {
-    const original = request().messages
-    const compatible = textCompatibleMessages(original)
-
-    expect(messagesContainImages(original)).toBe(true)
-    expect(messagesContainImages(compatible)).toBe(false)
-    expect(compatible[0]?.id).toBe(original[0]?.id)
-    expect(compatible[0]?.content).toEqual([
-      { type: 'text', text: '看这张图' },
-      { type: 'text', text: '[历史图片已保留在群聊中，但未发送给当前文本模型。]' },
-    ])
+describe('durable native chatroom model visibility', () => {
+  it('defers passive chat through replay and restores its original position after the turn', () => {
+    const session = Session.create(SessionId('deferred'))
+    session.append('turn/start', { turn: 1 })
+    const message = createUserMessage({ content: [{ type: 'text', text: 'chat during AI reply' }], source: { kind: 'user' } })
+    session.append('user/message', message, { surfaceOp: 'append' })
+    deferChatroomMessage(session, String(message.id))
+    restoreDeferredChatroomMessages(session, new Set())
+    expect(session.deriveMessages()).toEqual([])
+    const replay = Session.create(SessionId('replayed-deferred'), session.snapshotEvents())
+    replay.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    restoreDeferredChatroomMessages(replay, new Set())
+    expect(replay.deriveMessages()).toEqual([message])
+    expect(replay.snapshotEvents().filter(event => event.type === 'user/message' && event.surfaceOp === 'append')).toHaveLength(1)
+    expect(Session.create(SessionId('restored'), replay.snapshotEvents()).deriveMessages()).toEqual([message])
+    const count = replay.seq
+    restoreDeferredChatroomMessages(replay, new Set(), true)
+    expect(replay.seq).toBe(count)
   })
-
-  it('redispatches only owned text-model requests with sanitized history', async () => {
-    const downstream = vi.fn(async function*(_options: GenerateOptions): AsyncGenerator<StreamChunk> {
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    })
-    const next = vi.fn(() => downstream(request()))
-    const resolve = vi.fn(async () => ({ inputModalities: ['text'] }))
-    const chunks: StreamChunk[] = []
-
-    for await (const chunk of textCompatibleStream(
-      request(), next, id => id === 'chatroom-v1-lobby', () => new Set(), resolve, downstream,
-    )) chunks.push(chunk)
-
-    expect(next).not.toHaveBeenCalled()
-    expect(resolve).toHaveBeenCalledWith('deepseek', 'deepseek-v4-flash', undefined)
-    expect(messagesContainImages(downstream.mock.calls[0]![0].messages)).toBe(false)
-    expect(chunks).toEqual([{ type: 'finish', reason: { kind: 'stop' } }])
+  it.each(['recall', 'reset'] as const)('does not revive deferred chat after %s', mode => {
+    const session = Session.create(SessionId('no-revive'))
+    const message = createUserMessage({ content: [{ type: 'text', text: 'hidden chat' }], source: { kind: 'user' } })
+    session.append('user/message', message, { surfaceOp: 'append' })
+    deferChatroomMessage(session, String(message.id))
+    if (mode === 'recall') hideChatroomMessages(session, new Set([String(message.id)]))
+    else resetChatroomContext(session)
+    restoreDeferredChatroomMessages(session, new Set(), true)
+    expect(session.deriveMessages()).toEqual([])
   })
-
-  it('leaves image-capable and non-chatroom requests on their original stream', async () => {
-    const finish = { type: 'finish' as const, reason: { kind: 'stop' as const } }
-    const next = vi.fn(async function*(): AsyncGenerator<StreamChunk> { yield finish })
-    const stream = vi.fn(async function*(): AsyncGenerator<StreamChunk> { yield finish })
-    const resolve = vi.fn(async () => ({ inputModalities: ['text', 'image'] }))
-
-    for await (const _chunk of textCompatibleStream(request(), next, () => true, () => new Set(), resolve, stream)) { /* drain */ }
-    for await (const _chunk of textCompatibleStream(request(), next, () => false, () => new Set(), resolve, stream)) { /* drain */ }
-
-    expect(next).toHaveBeenCalledTimes(2)
-    expect(stream).not.toHaveBeenCalled()
+  it('retains append-origin messages while resetting model context across replay', () => {
+    const session = Session.create(SessionId('reset'))
+    session.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'old human discussion' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    const message = createAssistantMessage({ content: [{ type: 'text', text: 'old assistant answer' }], source: { provider: 'test', model: 'test' } })
+    session.append('assistant/message', { turn: 0, step: 0, message, stream: [] }, { surfaceOp: 'append' })
+    resetChatroomContext(session)
+    expect(session.deriveMessages()).toEqual([])
+    expect(session.snapshotEvents().filter(event => event.surfaceOp === 'append')).toHaveLength(2)
+    const replay = Session.create(SessionId('replay'), session.snapshotEvents())
+    expect(replay.deriveMessages()).toEqual([])
+    replay.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'new discussion' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    expect(JSON.stringify(replay.deriveMessages())).toContain('new discussion')
+    expect(JSON.stringify(replay.deriveMessages())).not.toContain('old human discussion')
   })
-
-  it('removes recalled model messages before dispatch', async () => {
-    const options = request()
-    const recalledId = String(options.messages[0]!.id)
-    expect(visibleMessages(options.messages, new Set([recalledId]))).toEqual([])
-    const next = vi.fn(async function*(): AsyncGenerator<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } })
-    const stream = vi.fn(async function*(_options: GenerateOptions): AsyncGenerator<StreamChunk> {
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    })
-
-    for await (const _chunk of textCompatibleStream(
-      options,
-      next,
-      () => true,
-      () => new Set([recalledId]),
-      async () => ({ inputModalities: ['text'] }),
-      stream,
-    )) { /* drain */ }
-
-    expect(next).not.toHaveBeenCalled()
-    expect(stream.mock.calls[0]![0].messages).toEqual([])
-  })
-
-  it('moves an older chatroom assistant insertion after its matching tool result', async () => {
-    const callId = CallId('call-chatroom-action')
-    const toolCall = createAssistantMessage({
-      content: [{ type: 'tool-call', id: callId, name: 'chatroom_action', arguments: '{}' }],
-      source: { provider: 'deepseek', model: 'deepseek-v4-flash' },
-    })
-    const inserted = createAssistantMessage({
-      content: [{ type: 'text', text: 'Agent 群聊工具验收通过' }],
-      source: { provider: 'deepseek', model: 'deepseek-v4-flash' },
-    })
-    const result = createToolResultMessage({
-      callId,
-      content: [{ type: 'text', text: '消息已发送到当前会话。' }],
-      isError: false,
-    })
-    const human = createUserMessage({ content: [{ type: 'text', text: '继续' }], source: { kind: 'user' } })
-
-    expect(protocolCompatibleMessages([toolCall, inserted, result, human])).toEqual([
-      toolCall, result, inserted, human,
-    ])
-
-    const options = { ...request(), messages: [toolCall, inserted, result, human] }
-    const next = vi.fn(async function*(): AsyncGenerator<StreamChunk> {
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    })
-    const stream = vi.fn(async function*(_options: GenerateOptions): AsyncGenerator<StreamChunk> {
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    })
-    for await (const _chunk of textCompatibleStream(
-      options, next, () => true, () => new Set(), async () => ({ inputModalities: ['text'] }), stream,
-    )) { /* drain */ }
-
-    expect(next).not.toHaveBeenCalled()
-    expect(stream.mock.calls[0]![0].messages).toEqual([toolCall, result, inserted, human])
-  })
-
-  it('removes unresolved historical tool calls at the next human exchange', () => {
-    const callId = CallId('call-without-result')
-    const toolCall = createAssistantMessage({
-      content: [{ type: 'tool-call', id: callId, name: 'chatroom_action', arguments: '{}' }],
-      source: { provider: 'deepseek', model: 'deepseek-v4-flash' },
-    })
-    const human = createUserMessage({ content: [{ type: 'text', text: '重试' }], source: { kind: 'user' } })
-
-    expect(protocolCompatibleMessages([toolCall, human])).toEqual([human])
+  it('removes only the recalled message from future requests and stays idempotent', () => {
+    const session = Session.create(SessionId('recall'))
+    const recalled = createUserMessage({ content: [{ type: 'text', text: 'recalled secret' }], source: { kind: 'user' } })
+    session.append('user/message', recalled, { surfaceOp: 'append' })
+    session.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'retained message' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    hideChatroomMessages(session, new Set([String(recalled.id)]))
+    const count = session.seq
+    hideChatroomMessages(session, new Set([String(recalled.id)]))
+    expect(session.seq).toBe(count)
+    expect(JSON.stringify(session.deriveMessages())).not.toContain('recalled secret')
+    expect(JSON.stringify(session.deriveMessages())).toContain('retained message')
+    expect(JSON.stringify(session.snapshotEvents())).toContain('recalled secret')
   })
 })

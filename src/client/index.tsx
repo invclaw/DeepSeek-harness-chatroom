@@ -1,13 +1,23 @@
+import { bootstrapChatroom } from './bootstrap.js'
+import { CHATROOM_API_PREFIX } from '../routes.js'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
+import { mainSessionId } from './session-selection.js'
 /** Browser half of the AI chatroom plugin. */
 
 import type { ComponentType } from 'react'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
-import type { ClientContext, ISessions, IWorkspaces, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
-import type { ChatNodeViewProps, ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { IWorkspaces } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type { ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { chatroomAvatar } from '../avatars.js'
+import { NativeBranchContent } from './NativeBranchContent.js'
 import { ChatroomEntry } from './ChatroomEntry.js'
 import { ChatroomSettingsSection } from './ChatroomAccountPanels.js'
 import { ChatroomAssistantReplyAction } from './ChatroomAssistantReplyAction.js'
@@ -21,37 +31,37 @@ import { installNativePromptIdentity } from './native-prompt.js'
 import { installNativeMentionAvatarImages } from './mention-avatars.js'
 import { installFreshSessionStart } from './fresh-session.js'
 import { NewGroupSetupDock } from './NewGroupSetupDock.js'
-import { installRemoteConfigurationApi } from './remote-configuration.js'
 import { RoomIdentityAction } from './RoomIdentityAction.js'
 import { installSidebarRoomRows } from './sidebar-rooms.js'
 import { registerChatroomSettingsNavIcon } from './settings-nav-icon.js'
 import { ChatroomClientStore, newGroupMentionName } from './store.js'
 import { CHATROOM_STYLES } from './styles.js'
-import {
-  branchFrameSwitchFromMessage,
-  branchFrameFromLocation,
-  invitedRoomFromLocation,
-  clearBranchFrameReady,
-  notifyBranchFrameReady,
-  restoreParentSessionSelection,
-  sameBranchFrame,
-  stageBranchFrameSession,
-} from './branch-frame.js'
+import { branchLinkFromLocation, invitedRoomFromLocation } from './branch-link.js'
 
-const roomServices = ['connection', 'inputTriggers', 'sessions', 'settingsScope', 'slots', 'workspaces']
+const roomServices = ['connection', 'inputTriggers', 'sessions', 'slots', 'workspaces', 'uiWorkspace', 'remote', 'remote.session']
 export const inject: string[] = []
 
 /** Supplied by the build adapter from the pinned native client factory. */
 declare const nativeConnection: { apply(ctx: ClientContext): void }
 
 /** Start the native browser connection before installing its chatroom consumers. */
-export function apply(ctx: ClientContext): void {
+export async function apply(ctx: ClientContext): Promise<void> {
+  const session = await bootstrapChatroom()
+  if (session.auth?.enabled && !session.auth.authenticated) {
+    const returnTo = `${location.pathname}${location.search}`
+    location.replace(`${CHATROOM_API_PREFIX}/auth/page?returnTo=${encodeURIComponent(returnTo)}`)
+    return
+  }
   ctx.plugin({ name: 'chatroom-native-connection', apply: nativeConnection.apply })
-  ctx.inject(roomServices, roomCtx => installChatroom(roomCtx))
+  let initialSession: typeof session | undefined = session
+  ctx.inject(roomServices, roomCtx => {
+    installChatroom(roomCtx, initialSession)
+    initialSession = undefined
+  })
 }
 
 /** Add room identity and navigation around the existing Harness conversation UI. */
-function installChatroom(ctx: ClientContext): void {
+function installChatroom(ctx: ClientContext, initialSession?: Awaited<ReturnType<typeof bootstrapChatroom>>): void {
   const connection = ctx.get('connection') as ConnectionHandle | undefined
   if (connection === undefined) throw new Error('chatroom: client connection service unavailable')
   const sessions = ctx.get('sessions') as ISessions | undefined
@@ -60,28 +70,24 @@ function installChatroom(ctx: ClientContext): void {
   if (workspaces === undefined) throw new Error('chatroom: client workspaces service unavailable')
   const inputTriggers = ctx.get('inputTriggers') as InputTriggerServiceContract | undefined
   if (inputTriggers === undefined) throw new Error('chatroom: input trigger service unavailable')
-  const branchFrame = typeof location === 'undefined' ? undefined : branchFrameFromLocation(location)
+  const branchLink = typeof location === 'undefined' ? undefined : branchLinkFromLocation(location)
   const store = new ChatroomClientStore((rawSessionId) => {
     const sessionId = rawSessionId as SessionId
     const list = sessions.list.getSnapshot()
-    if (list.current === sessionId) return true
+    if (mainSessionId(list) === sessionId) return true
     if (list.byId[sessionId] === undefined) return false
-    sessions.open(sessionId)
+    ctx.uiWorkspace.openSession(sessionId)
     return true
-  }, branchFrame)
-  ctx.effect(() => installFreshSessionStart(workspaces, sessions, async (workspaceId) => {
+  }, branchLink)
+  ctx.effect(() => installFreshSessionStart(ctx.uiWorkspace, workspaces, sessions, async (workspaceId) => {
     const snapshot = store.getSnapshot()
     if (snapshot.phase === 'loading') throw new Error('chatroom identity is still loading')
     const reservedSessionId = snapshot.auth.enabled ? await store.reserveSoloSession() : undefined
     try {
-      const response = await connection.api.sessions.create({
+      const sessionId = await sessions.create({
         workspaceId,
         ...(reservedSessionId === undefined ? {} : { sessionId: reservedSessionId as SessionId }),
       })
-      if (!response.result.ok) {
-        throw new Error(`new shared session failed: ${response.result.error.code}: ${response.result.error.message}`)
-      }
-      const sessionId = response.result.value.sessionId
       if (reservedSessionId !== undefined && String(sessionId) !== reservedSessionId) {
         throw new Error('native Session id does not match its Solo reservation')
       }
@@ -94,65 +100,28 @@ function installChatroom(ctx: ClientContext): void {
   }), 'chatroom: distinct native New Session')
   ctx.effect(() => {
     document.documentElement.setAttribute('data-dsh-chatroom-installed', '')
-    if (branchFrame !== undefined) document.documentElement.setAttribute('data-dsh-chatroom-branch-frame', '')
-    const markBranchShell = () => {
-      if (branchFrame === undefined) return
-      document.querySelector('[data-shell-overlay]')?.parentElement?.setAttribute('data-dsh-chatroom-branch-shell', '')
-    }
-    const shellObserver = branchFrame === undefined ? undefined : new MutationObserver(markBranchShell)
-    shellObserver?.observe(document.body, { childList: true, subtree: true })
-    markBranchShell()
     const style = document.createElement('style')
     style.dataset.dshChatroomStyles = ''
     style.textContent = CHATROOM_STYLES
     document.head.append(style)
-    const restoreConfiguration = installRemoteConfigurationApi(connection)
-    const restoreSettingsMirror = activateRemoteSettingsMirror(ctx.get('settingsScope'))
-    const restorePrompt = installNativePromptIdentity(connection.api, store)
+    const restorePrompt = installNativePromptIdentity(ctx.remote, store)
     const restoreSidebarRoomRows = installSidebarRoomRows(store, sessions)
     const restoreMentionAvatars = installNativeMentionAvatarImages(store)
-    let activeBranchFrame = branchFrame
-    let branchStaged = false
-    const stageBranch = () => {
-      const frame = activeBranchFrame
-      if (frame === undefined || branchStaged) return
-      const list = sessions.list.getSnapshot()
-      const staged = stageBranchFrameSession(frame, {
-        current: list.current === undefined ? undefined : String(list.current),
-        byId: list.byId,
-      }, sessionId => { sessions.open(sessionId as SessionId) })
-      if (!staged) return
-      branchStaged = true
-      restoreParentSessionSelection(frame.parentSessionId)
-      notifyBranchFrameReady(frame)
-    }
-    const receiveBranchSwitch = (event: MessageEvent) => {
-      if (branchFrame === undefined
-        || event.origin !== globalThis.location.origin
-        || event.source !== globalThis.parent) return
-      const next = branchFrameSwitchFromMessage(event.data)
-      if (next === undefined) return
-      if (activeBranchFrame !== undefined && sameBranchFrame(activeBranchFrame, next)) {
-        stageBranch()
-        return
-      }
-      activeBranchFrame = next
-      branchStaged = false
-      clearBranchFrameReady()
-      store.switchBranchFrame(next)
-      stageBranch()
-    }
-    globalThis.addEventListener('message', receiveBranchSwitch)
+    let branchOpened = false
     const syncSession = () => {
-      stageBranch()
       store.resumeOpen()
       const list = sessions.list.getSnapshot()
-      const current = list.current
+      if (!branchOpened && branchLink !== undefined && list.byId[branchLink.sessionId as SessionId] !== undefined) {
+        branchOpened = true
+        ctx.uiWorkspace.openSession(branchLink.sessionId as SessionId)
+        return
+      }
+      const current = mainSessionId(list)
       const summary = current === undefined ? undefined : list.byId[current]
       store.activateSession(
         current === undefined ? undefined : String(current),
         summary?.displayTitle ?? '新会话',
-        branchFrame === undefined && summary?.origin !== 'subagent',
+        summary?.origin !== 'subagent',
         summary?.parentId === undefined ? undefined : String(summary.parentId),
       )
       const snapshot = store.getSnapshot()
@@ -160,11 +129,11 @@ function installChatroom(ctx: ClientContext): void {
         && (snapshot.phase !== 'ready'
           || store.roomForSession(String(current)) === undefined
             && !store.canPromptNativeSession(String(current)))) {
-        if (snapshot.phase !== 'ready') sessions.clear()
+        if (snapshot.phase !== 'ready') ctx.uiWorkspace.startSession()
         else void store.resolveNativeOwnership(String(current)).then(allowed => {
-          if (sessions.list.getSnapshot().current !== current) return
+          if (mainSessionId(sessions.list.getSnapshot()) !== current) return
           if (allowed) syncSession()
-          else sessions.clear()
+          else ctx.uiWorkspace.startSession()
         })
         return
       }
@@ -182,29 +151,21 @@ function installChatroom(ctx: ClientContext): void {
       synchronizedPhase = phase
       syncSession()
     })
-    void store.start().then(async () => {
+    void store.start(initialSession).then(async () => {
       syncSession()
       if (typeof location === 'undefined') return
-      const invitedRoomId = invitedRoomFromLocation(location, branchFrame)
+      const invitedRoomId = invitedRoomFromLocation(location, branchLink)
       if (invitedRoomId !== undefined) await store.selectRoom(invitedRoomId)
     })
     return () => {
       unsubscribeSessions()
       unsubscribeSessionGuard()
-      globalThis.removeEventListener('message', receiveBranchSwitch)
       restorePrompt()
       restoreMentionAvatars()
       restoreSidebarRoomRows()
-      restoreSettingsMirror()
-      restoreConfiguration()
       store.stop()
       style.remove()
-      shellObserver?.disconnect()
       document.documentElement.removeAttribute('data-dsh-chatroom-installed')
-      if (branchFrame !== undefined) {
-        clearBranchFrameReady()
-        document.documentElement.removeAttribute('data-dsh-chatroom-branch-frame')
-      }
     }
   }, 'chatroom: browser state and styles')
 
@@ -215,10 +176,13 @@ function installChatroom(ctx: ClientContext): void {
 
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',
+    children: { 'chatroom.branch': { kind: 'single', scope: 'session' } },
     id: 'chatroom',
     order: 0,
     inject: () => ({
       hooks: { chatroom: store },
+      retainBranch: (sessionId: string) => sessions.retain(sessionId as SessionId, { source: 'chatroomBranch' }),
+      openBranchSession: (sessionId: string) => { ctx.uiWorkspace.openSession(sessionId as SessionId); store.closeThread() },
       openRoom: store.openRoom,
       closeRoom: store.closeRoom,
       join: store.join,
@@ -275,6 +239,7 @@ function installChatroom(ctx: ClientContext): void {
       openSearchResult: store.openSearchResult,
     }),
   }, ChatroomEntry))
+  ctx.slots.inject('chatroom.branch', () => ctx.slots.register({ name: 'chatroom.branch' }, NativeBranchContent))
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
@@ -354,8 +319,8 @@ function installChatroom(ctx: ClientContext): void {
     }),
   }, ChatroomSessionControls))
 
-  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
-    name: 'conversation.input.dock',
+  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+    name: 'conversation.composer.dock',
     id: 'chatroom-group-setup',
     order: -30,
     inject: () => ({
@@ -366,8 +331,8 @@ function installChatroom(ctx: ClientContext): void {
     }),
   }, NewGroupSetupDock))
 
-  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
-    name: 'conversation.input.dock',
+  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+    name: 'conversation.composer.dock',
     id: 'chatroom-composition',
     order: -20,
     inject: () => ({
@@ -424,7 +389,7 @@ function installChatroom(ctx: ClientContext): void {
       name: 'conversation.chat.node',
       key: 'assistant-step',
       priority: -10,
-      locale: 'conversation',
+      locale: 'chat',
       inject: () => ({
         hooks: { chatroom: store },
         nativeMessageView,
@@ -450,7 +415,7 @@ function installChatroom(ctx: ClientContext): void {
       name: 'conversation.chat.node',
       key: 'user',
       priority: -10,
-      locale: 'conversation',
+      locale: 'chat',
       inject: () => chatroomMessageInjection(store, nativeMessageView),
     }, ChatroomUserMessageNodeView),
   ))
@@ -465,43 +430,10 @@ function installChatroom(ctx: ClientContext): void {
       name: 'conversation.chat.node',
       key: 'steering',
       priority: -10,
-      locale: 'conversation',
+      locale: 'chat',
       inject: () => chatroomMessageInjection(store, nativeMessageView),
     }, ChatroomSteeringMessageNodeView),
   ))
-}
-
-interface RemoteSettingsMirror {
-  persistence: 'host' | 'memory'
-  load(): Promise<void>
-}
-
-interface SettingsScopeWithDescribe {
-  describe(): RemoteSettingsMirror
-}
-
-/** Let RC8's shared settings mirror use the authenticated plugin carrier in a remote browser. */
-export function activateRemoteSettingsMirror(settingsScope: unknown): () => void {
-  if (!hasSettingsDescribe(settingsScope)) return () => undefined
-  const mirror = settingsScope.describe()
-  if (!isRemoteSettingsMirror(mirror) || mirror.persistence !== 'memory') return () => undefined
-  mirror.persistence = 'host'
-  void mirror.load()
-  return () => {
-    if (mirror.persistence === 'host') mirror.persistence = 'memory'
-  }
-}
-
-function hasSettingsDescribe(value: unknown): value is SettingsScopeWithDescribe {
-  return value !== null && typeof value === 'object'
-    && typeof (value as Record<string, unknown>).describe === 'function'
-}
-
-function isRemoteSettingsMirror(value: unknown): value is RemoteSettingsMirror {
-  return value !== null && typeof value === 'object'
-    && ((value as Record<string, unknown>).persistence === 'host'
-      || (value as Record<string, unknown>).persistence === 'memory')
-    && typeof (value as Record<string, unknown>).load === 'function'
 }
 
 /** Mount one wrapper only after its native renderer exists, independent of client-plugin load order. */
@@ -562,7 +494,8 @@ export function createChatroomAiSource(store: ChatroomClientStore): InputTrigger
       if (room === undefined && !newGroup) return []
       const candidates = [{
         name: aiMentionMenuName(room?.aiDisplayName ?? 'DeepSeek'),
-        icon: '✦',
+        icon: () => <span aria-hidden>✦</span>,
+        key: 'chatroom-ai',
         description: room === undefined ? '创建群聊后立即回复' : '提及后回复',
       }]
       const needle = query.toLocaleLowerCase()
@@ -602,14 +535,16 @@ export function createChatroomMemberSource(store: ChatroomClientStore): InputTri
           .filter(peer => peer.participantId !== snapshot.identity?.participantId)
           .map(peer => ({
             name: newGroupMentionName(peer, snapshot.directPeers),
-            icon: chatroomAvatar(peer.avatarId, peer.participantId).emoji,
+            key: peer.participantId,
+            icon: () => <span aria-hidden>{chatroomAvatar(peer.avatarId, peer.participantId).emoji}</span>,
             description: `创建群聊时自动邀请 · @${peer.username}`,
           }))
         : snapshot.members
           .filter(member => member.participantId !== snapshot.identity?.participantId)
           .map(member => ({
             name: member.displayName,
-            icon: chatroomAvatar(member.avatarId, member.participantId).emoji,
+            key: member.participantId,
+            icon: () => <span aria-hidden>{chatroomAvatar(member.avatarId, member.participantId).emoji}</span>,
             description: member.online ? '在线成员' : '群成员',
           }))
       const needle = query.toLocaleLowerCase()

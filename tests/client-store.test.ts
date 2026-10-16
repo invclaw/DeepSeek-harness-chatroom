@@ -191,51 +191,54 @@ describe('ChatroomClientStore', () => {
     expect(openSession).toHaveBeenCalledWith(room.sessionId)
   })
 
-  it('retargets a retained branch runtime without carrying composer state across threads', async () => {
+  it('uses the authenticated bootstrap directory without another startup round trip', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', fetcher)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const store = new ChatroomClientStore()
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()
-    const first = {
-      threadId: 'thread-1', sessionId: 'chatroom-thread-v1-thread-1', roomId: room.id,
-      parentSessionId: room.sessionId,
-    }
-    const second = { ...first, threadId: 'thread-2', sessionId: 'chatroom-thread-v1-thread-2' }
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(identity, [room]))))
-    vi.stubGlobal('EventSource', FakeEventSource)
-    const store = new ChatroomClientStore(() => true, first)
-    await store.start()
-    store.addFiles(room.id, [{ name: 'note.txt' } as File])
-    store.setReply(room.id, { messageId: 'user:1', displayName: 'Bob', text: '旧分支引用' })
-
-    store.switchBranchFrame(second)
-
-    expect(store.getSnapshot()).toMatchObject({
-      branchFrame: second,
-      composerRoomId: undefined,
-      pendingFiles: [],
-      reply: undefined,
-      composerBusy: false,
-      composerError: undefined,
-    })
-    expect(store.agentTargetForSession(second.sessionId)).toEqual({ kind: 'thread', room, threadId: 'thread-2' })
-    expect(store.agentTargetForSession(first.sessionId)).toBeUndefined()
+    await store.start({ ...sessionResponse(identity, [room]), auth: { enabled: false, authenticated: true, providers: [], allowSelfRegistration: true, bootstrapRequired: false }, room })
+    expect(store.getSnapshot()).toMatchObject({ phase: 'ready', identity, rooms: [room] })
+    expect(fetcher).not.toHaveBeenCalled()
+    store.stop()
   })
 
-  it('does not duplicate long-lived room streams inside an isolated branch frame', async () => {
+  it('keeps parent and embedded-branch drafts independent through admission and later edits', () => {
+    const store = new ChatroomClientStore()
+    const groupFile = { name: 'group.txt' } as File
+    const branchFile = { name: 'branch.txt' } as File
+    const groupReply = { messageId: 'group-message', displayName: 'Alice', text: 'group quote' }
+    const branchReply = { messageId: 'branch-message', displayName: 'Bob', text: 'branch quote' }
+    store.addFiles('lobby', [groupFile])
+    store.setReply('lobby', groupReply)
+    const admitted = store.composition('lobby')
+    store.addFiles('thread', [branchFile])
+    store.setReply('thread', branchReply)
+    expect(store.composition('lobby')).toMatchObject({ files: [{ file: groupFile }], reply: groupReply })
+    expect(store.composition('thread')).toMatchObject({ files: [{ file: branchFile }], reply: branchReply })
+    store.completeComposition(admitted)
+    expect(store.composition('lobby').files).toEqual([])
+    expect(store.composition('thread')).toMatchObject({ files: [{ file: branchFile }], reply: branchReply })
+    const pending = store.composition('thread')
+    store.addFiles('thread', [{ name: 'new.txt' } as File])
+    store.completeComposition(pending)
+    expect(store.composition('thread').files).toHaveLength(2)
+    store.clearReply('thread')
+    expect(store.composition('thread').reply).toBeUndefined()
+    expect(store.composition('thread').files).toHaveLength(2)
+  })
+
+  it('recognizes a native branch deep link without creating a second runtime', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()
-    const frame = {
-      threadId: 'thread-1', sessionId: 'chatroom-thread-v1-thread-1', roomId: room.id,
-      parentSessionId: room.sessionId,
-    }
+    const link = { threadId: 'thread-1', sessionId: 'chatroom-thread-v1-thread-1', roomId: room.id, parentSessionId: room.sessionId }
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(sessionResponse(identity, [room]))))
     vi.stubGlobal('EventSource', FakeEventSource)
-    const store = new ChatroomClientStore(() => true, frame)
-
+    const store = new ChatroomClientStore(() => true, link)
     await store.start()
-    store.activateSession(frame.sessionId, '分支：主题', false, room.sessionId)
-
-    expect(FakeEventSource.instances).toEqual([])
-    expect(store.getSnapshot()).toMatchObject({ room, connection: 'online' })
+    expect(store.agentTargetForSession(link.sessionId)).toEqual({ kind: 'thread', room, threadId: link.threadId })
+    expect(store.agentTargetForSession(room.sessionId)).toEqual({ kind: 'room', room })
   })
 
   it('recognizes a branch Session opened directly from the native sidebar', async () => {
@@ -542,7 +545,8 @@ describe('ChatroomClientStore', () => {
     expect(body.content).toEqual([{
       type: 'file', name: 'note.txt', mediaType: 'text/plain', data: 'aGVsbG8=',
     }])
-    expect(store.getSnapshot()).toMatchObject({ pendingFiles: [], composerBusy: false, composerError: undefined })
+    expect(store.composition('lobby')).toMatchObject({ files: [], reply: undefined })
+    expect(store.getSnapshot()).toMatchObject({ composerBusy: false, composerError: undefined })
   })
 
   it('classifies images natively and synchronizes reactions and merged forwarding', async () => {

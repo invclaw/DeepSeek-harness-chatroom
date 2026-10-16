@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 import type { Context } from '@deepseek-ai/cordis';
-import { type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
+import { type Session, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session';
 import { ChatroomAuth } from './auth.js';
 import { type ChatroomAgentAction, type ChatroomAgentActionInput } from './agent-tools.js';
 import type { Config } from './config.js';
@@ -44,6 +44,7 @@ export declare class ChatroomRuntime {
     private readonly chatroomAgentContexts;
     private readonly wecom;
     private readonly sessionActors;
+    private readonly nativeImagePaths;
     private meetingPollTimer;
     private meetingPoll;
     private readonly shutdown;
@@ -117,6 +118,9 @@ export declare class ChatroomRuntime {
     createRoom(title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     /** Authorize native cross-session mentions before their snapshots enter an Agent request. */
     assertPromptReferences(identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[]): Promise<void>;
+    /** File display grants come from visible assistant images, never an arbitrary browser path. */
+    assertNativeFileAccess(path: string, identity: ChatroomIdentity, signal: AbortSignal): Promise<void>;
+    private nativeSessionImagePaths;
     /** Reserve an opaque native Session id as a private Solo conversation. */
     reserveSoloSession(identity: ChatroomIdentity): Promise<string>;
     /** Release a failed or abandoned Solo Session reservation owned by the caller. */
@@ -125,8 +129,8 @@ export declare class ChatroomRuntime {
     soloSessionIds(identity: ChatroomIdentity): readonly string[];
     /** Test whether one native Session is an identity-owned Solo conversation. */
     ownsSoloSession(sessionId: string, identity: ChatroomIdentity): boolean;
-    /** Resolve room and Solo ownership before consulting immutable native parent lineage. */
-    canAccessNativeSession(sessionId: string, identity: ChatroomIdentity, visited?: Set<string>): Promise<boolean>;
+    /** Only native subagents inherit access; a fork needs its own registered owner. */
+    canAccessNativeSession(sessionId: string, identity: ChatroomIdentity, visited?: Set<string>, persistedHeaders?: ReadonlyMap<string, SessionHeader>): Promise<boolean>;
     /** Attribute a native fork to its creator before returning the child id to the browser. */
     ownNativeFork(sessionId: string, identity: ChatroomIdentity): Promise<void>;
     /** Admit native group input through the same authenticated path as the chatroom composer. */
@@ -272,6 +276,9 @@ export declare class ChatroomRuntime {
     private ensureRoomTitle;
     private acquireAgent;
     private setupAgentContext;
+    /** Apply tombstones before native commands or compaction can read model history. */
+    prepareNativeModelSession(sessionId: string): Promise<void>;
+    private applyModelVisibility;
     private augmentChatroomAgentContext;
     private initiatingIdentity;
     private createMeetingCard;

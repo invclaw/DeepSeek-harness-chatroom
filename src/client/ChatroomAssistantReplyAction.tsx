@@ -1,3 +1,4 @@
+import type { AssistantMessageNode } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { useEffect, useRef } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
@@ -17,7 +18,7 @@ import {
 } from './ChatroomMessageTools.js'
 import { ChatroomThreadActivity } from './ChatroomThreadActivity.js'
 import type { ChatroomView } from './store.js'
-import type { ChatroomAgentTarget } from './store.js'
+import { compositionTargetId, type ChatroomAgentTarget } from './store.js'
 
 interface AssistantReplyInjected {
   useChatroom<T>(selector: (snapshot: ChatroomView) => T): T
@@ -39,7 +40,7 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
   const target = props.resolveTarget?.(String(props.sessionId))
     ?? (directRoom === undefined ? undefined : { kind: 'room' as const, room: directRoom })
   const room = target?.room
-  const assistant = props.useSession(snapshot => snapshot.nodes.find(node =>
+  const assistant = props.useChat(snapshot => snapshot.legacy.nodes.find((node): node is AssistantMessageNode =>
     node.kind === 'assistant' && node.messageId === props.messageId))
   const rootRef = useRef<HTMLDivElement>(null)
   const menu = useChatroomMessageMenu()
@@ -47,7 +48,7 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
     && view.selectedMessages.some(item => item.messageId === String(props.messageId))
   const selecting = view.selectionRoomId === room?.id
   useEffect(() => {
-    const root = rootRef.current?.closest<HTMLElement>('[data-time-hover-root]')
+    const root = rootRef.current?.closest<HTMLElement>('[data-turn-tail], [data-dsh-chatroom-standalone-assistant]')
     if (root === null || root === undefined || room === undefined) return
     let nativeActions = rootRef.current?.parentElement
     while (nativeActions !== null && nativeActions !== undefined
@@ -107,7 +108,7 @@ export function ChatroomAssistantReplyAction(props: AssistantReplyProps): JSX.El
     recalled: false,
     canRecall: false,
     copyText: text || 'AI 回复',
-    onReply: () => { props.setReply(room.id, reply) },
+    onReply: () => { props.setReply(target === undefined ? room.id : compositionTargetId(target), reply) },
     onBranch: target?.kind === 'thread' ? undefined : () => { void props.openThread(room.id, threadRoot) },
     toggleReaction: props.toggleReaction,
     openForward: props.openForward,

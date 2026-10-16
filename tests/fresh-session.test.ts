@@ -1,12 +1,9 @@
+import type { UiWorkspace } from '@deepseek-ai/dsh-client-ui-workspace/client'
 import { describe, expect, it, vi } from 'vitest'
-import type {
-  ISessions,
-  IWorkspaces,
-  SessionId,
-  SessionListState,
-  WorkspaceId,
-  WorkspaceListState,
-} from '@deepseek-ai/dsh-client-runtime/client'
+import type { ISessions, SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { IWorkspaces, WorkspaceSnapshot as WorkspaceListState } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import { installFreshSessionStart } from '../src/client/fresh-session.js'
 
 describe('native New Session override', () => {
@@ -28,21 +25,22 @@ describe('native New Session override', () => {
       open,
     } as unknown as ISessions
     const createSession = vi.fn(async () => created)
-    const restore = installFreshSessionStart(workspaces, sessions, createSession)
+    const navigation = { startSession: original, openSession: 'open' in sessions ? sessions.open : vi.fn() } as unknown as UiWorkspace
+    const restore = installFreshSessionStart(navigation, workspaces, sessions, createSession)
 
-    workspaces.startSession()
+    navigation.startSession()
     await vi.waitFor(() => { expect(createSession).toHaveBeenCalledWith(workspaceId) })
     expect(original).not.toHaveBeenCalled()
     expect(open).not.toHaveBeenCalled()
 
     sessionState.byId[created] = {
-      id: created, displayTitle: '新会话', running: false, blank: true, updatedAt: 2,
+      id: created, displayTitle: '新会话', running: false, blank: true, updatedAt: 2, retainedBy: {},
     }
     for (const listener of sessionListeners) listener()
     expect(open).toHaveBeenCalledWith(created)
 
     restore()
-    expect(workspaces.startSession).toBe(original)
+    expect(navigation.startSession).toBe(original)
   })
 
   it('keeps the native empty-Workspace behavior', () => {
@@ -56,10 +54,11 @@ describe('native New Session override', () => {
       list: snapshot(sessionList(undefined)),
       clear,
     } as unknown as ISessions
-    const restore = installFreshSessionStart(workspaces, sessions, vi.fn())
+    const navigation = { startSession: original, openSession: 'open' in sessions ? sessions.open : vi.fn() } as unknown as UiWorkspace
+    const restore = installFreshSessionStart(navigation, workspaces, sessions, vi.fn())
 
-    workspaces.startSession()
-    expect(clear).toHaveBeenCalledOnce()
+    navigation.startSession()
+    expect(original).toHaveBeenCalledOnce()
     restore()
   })
 })
@@ -78,13 +77,10 @@ function sessionList(current: SessionId | undefined): SessionListState {
   return {
     ids: current === undefined ? [] : [current],
     byId: current === undefined ? {} : {
-      [current]: { id: current, displayTitle: '旧分支', running: false, blank: true, updatedAt: 1 },
+      [current]: { id: current, displayTitle: '旧分支', running: false, blank: true, updatedAt: 1, retainedBy: { mainView: 1 } },
     },
-    current,
     phase: 'ready',
-    subagentsByParent: {},
-    jobsBySession: {},
-    currentAddress: undefined,
+    projectionsBySession: {},
   }
 }
 
@@ -102,10 +98,10 @@ function workspaceList(
       updatedAt: '2026-08-24T00:00:00.000Z',
     }],
     archivedSessionIds: [],
+    pinnedSessionIds: [],
     state: 'idle',
     phase: 'ready',
     error: null,
-    baselinesReady: true,
-    recentWorkspaceId: workspaceId,
+
   }
 }

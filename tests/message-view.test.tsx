@@ -2,7 +2,8 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
+
 import {
   ChatroomUserMessageNodeView,
   identifyChatroomText,
@@ -24,6 +25,13 @@ afterEach(() => {
 })
 
 describe('participant-specific native message projection', () => {
+  it('projects a historical branch root without treating its transport preamble as the author', () => {
+    const node = userNode('这是群聊分支的主题消息。Alice：主题消息')
+    const branch = projectChatroomMessage(node, alice, [], true)
+    expect(branch).toMatchObject({ own: true, displayName: 'Alice', text: '主题消息' })
+    expect(firstText(branch.node)).toBe('主题消息')
+    expect(projectChatroomMessage(node, alice).displayName).toBe('这是群聊分支的主题消息。Alice')
+  })
   it('uses the durable participant id and removes its invisible display marker', () => {
     const node = userNode(identifyChatroomText('你好', alice))
     const own = projectChatroomMessage(node, alice)
@@ -363,8 +371,8 @@ describe('participant-specific native message projection', () => {
       sessionId: 'chatroom-v1-lobby' as never,
       messageId: 'assistant:2',
       useChatroom,
-      useSession: (selector: (snapshot: unknown) => unknown) => selector({
-        nodes: [{ kind: 'assistant', messageId: 'assistant:2', seq: 2, blocks: [{ kind: 'text', text: 'AI 结论' }], time: 2 }],
+      useChat: (selector: (snapshot: unknown) => unknown) => selector({
+        legacy: { nodes: [{ kind: 'assistant', messageId: 'assistant:2', seq: 2, blocks: [{ kind: 'text', text: 'AI 结论' }], time: 2 }] },
       }),
       setReply: vi.fn(),
       openThread,
@@ -372,7 +380,7 @@ describe('participant-specific native message projection', () => {
       openForward: vi.fn(),
       toggleMessageSelection,
     } as unknown as Parameters<typeof ChatroomAssistantReplyAction>[0]
-    render(<div data-time-hover-root><div data-testid="native-actions"><div><ChatroomAssistantReplyAction {...props} /></div></div></div>)
+    render(<div data-turn-tail="1"><div data-clock="end" data-testid="native-actions"><div><ChatroomAssistantReplyAction {...props} /></div></div></div>)
 
     const activity = screen.getByRole('button', { name: '打开分支，1 条回复' })
     expect(activity.parentElement?.className).toBe('dsh-chatroom-assistant-tools')
@@ -411,9 +419,9 @@ describe('participant-specific native message projection', () => {
         room: { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' },
       }),
       useTurnData: () => undefined,
-      useSession: (selector: (snapshot: unknown) => unknown) => selector({
-        nodes: [{ kind: 'assistant', messageId: 'assistant:summary', seq: 12, blocks: [{ kind: 'text', text }], time: 12 }],
-        chat: { order: [], nodes: new Map() },
+      useChat: (selector: (snapshot: unknown) => unknown) => selector({
+        legacy: { nodes: [{ kind: 'assistant', messageId: 'assistant:summary', seq: 12, blocks: [{ kind: 'text', text }], time: 12 }] },
+        order: [], nodes: new Map(),
       }),
       setReply,
       openThread: vi.fn(async () => undefined),
@@ -463,7 +471,7 @@ describe('participant-specific native message projection', () => {
         room: { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' },
       }),
       useTurnData: () => undefined,
-      useSession: (selector: (snapshot: unknown) => unknown) => selector({ chat: { order: [node.key], nodes } }),
+      useChat: (selector: (snapshot: unknown) => unknown) => selector({ order: [node.key], nodes }),
       updateQueuedPrompt,
     } as unknown as Parameters<typeof ChatroomAssistantNodeView>[0]
 
@@ -514,7 +522,7 @@ describe('participant-specific native message projection', () => {
         room: { id: 'lobby', title: 'AI 聊天室', aiDisplayName: 'DeepSeek', sessionId: 'chatroom-v1-lobby' },
       }),
       useTurnData: () => undefined,
-      useSession: (selector: (snapshot: unknown) => unknown) => selector({ chat: { order: [node.key], nodes } }),
+      useChat: (selector: (snapshot: unknown) => unknown) => selector({ order: [node.key], nodes }),
       updateQueuedPrompt: vi.fn(),
     } as unknown as Parameters<typeof ChatroomAssistantNodeView>[0]} />)
 
@@ -552,8 +560,8 @@ describe('participant-specific native message projection', () => {
       } as unknown as import('../src/client/store.js').ChatroomView),
       resolveTarget: () => ({ kind: 'thread', room: { id: 'lobby' }, threadId: 'thread-id' }),
       useTurnData: () => ({ closing: { finalNode: { seq: 4 } } }),
-      useSession: (selector: (snapshot: unknown) => unknown) => selector({
-        chat: { order: [...nodes.keys()], nodes },
+      useChat: (selector: (snapshot: unknown) => unknown) => selector({
+        order: [...nodes.keys()], nodes,
       }),
     } as unknown as Parameters<typeof ChatroomAssistantNodeView>[0]
 
@@ -635,8 +643,7 @@ function messageProps(
       membersOpen: false,
       error: undefined,
       composerRoomId: undefined,
-      pendingFiles: [],
-      reply: undefined,
+      compositions: {},
       composerBusy: false,
       composerError: undefined,
       sessionControlBusy: false,

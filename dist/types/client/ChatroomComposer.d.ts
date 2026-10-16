@@ -2,7 +2,7 @@ import type { ComponentType, ReactNode } from 'react';
 import type { ComposerAttachmentsProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots';
 import type { ChatroomReplyReference } from '../types.js';
-import type { ChatroomAgentTarget, ChatroomClientStore, ChatroomView } from './store.js';
+import { type ChatroomAgentTarget, type ChatroomClientStore, type ChatroomView } from './store.js';
 interface ChatroomComposerBaseInjected {
     useChatroom<T>(selector: (snapshot: ChatroomView) => T): T;
     resolveTarget(sessionId: string): ChatroomAgentTarget | undefined;
@@ -27,7 +27,7 @@ interface ChatroomSessionInjected extends ChatroomComposerBaseInjected {
     quickThreadMeeting(threadId: string): Promise<boolean>;
 }
 type FileActionProps = PropsRuntime<'conversation.input.left'> & ChatroomFileInjected;
-type ComposerDockProps = PropsRuntime<'conversation.input.dock'> & ChatroomFileInjected & ChatroomQueueInjected;
+type ComposerDockProps = PropsRuntime<'conversation.composer.dock'> & ChatroomFileInjected & ChatroomQueueInjected;
 type ComposerRightProps = PropsRuntime<'conversation.input.right'> & ChatroomSessionInjected;
 type ComposerAttachmentsInjected = ChatroomComposerBaseInjected & Pick<ChatroomFileInjected, 'clearReply'> & {
     nativeAttachmentsView: ComponentType<ComposerAttachmentsProps>;
