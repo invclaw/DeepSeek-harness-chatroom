@@ -30,4 +30,3 @@ export function invitedRoomFromLocation(
   const roomId = new URLSearchParams(location.search).get(ROOM_ID)
   return roomId === null || roomId === '' ? undefined : roomId
 }
-

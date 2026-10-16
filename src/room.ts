@@ -10,8 +10,8 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { agentPresetProjectionDefinition } from '@deepseek-ai/dsh-agent-preset-registry'
 import { AttachmentError, type ImageAttachmentRef, type ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { BlockAssembler, createAssistantMessage, createUserMessage, freezeMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
-import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
-import type {} from '@deepseek-ai/dsh-session-persistence'
+import { SessionId, type Session, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
+import type { SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-title'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-fs'
@@ -189,6 +189,11 @@ export class ChatroomRuntime {
   private readonly chatroomAgentContexts = new Map<Context, () => void>()
   private readonly wecom: WecomCliManager
   private readonly sessionActors = new Map<string, string>()
+  private readonly nativeImagePaths = new Map<string, {
+    source: Session | symbol
+    revision: number | string
+    paths: Promise<readonly string[]>
+  }>()
   private meetingPollTimer: ReturnType<typeof setTimeout> | undefined
   private meetingPoll: Promise<void> | undefined
   private readonly shutdown = new AbortController()
@@ -506,6 +511,7 @@ export class ChatroomRuntime {
     this.meetingPoll = undefined
     await this.wecom.stop()
     this.sessionActors.clear()
+    this.nativeImagePaths.clear()
     for (const dispose of this.chatroomAgentContexts.values()) dispose()
     this.chatroomAgentContexts.clear()
     for (const state of this.states.values()) {
@@ -671,27 +677,55 @@ export class ChatroomRuntime {
       const target = await this.ctx.fs.resolve(path, { signal })
       const root = await this.ctx.fs.resolve(this.config.cwd, { signal })
       if (!this.ctx.fs.contains(root, target)) throw denied()
+      // One lightweight directory snapshot also serves recursive subagent authorization.
+      const persisted = new Map((await this.ctx.sessionPersistence.list({ signal })).map(item => [String(item.header.id), item]))
+      const headers = new Map([...persisted].map(([id, item]) => [id, item.header]))
       const ids = new Set([
         ...[...this.states.values()].map(state => state.record.sessionId),
         ...[...this.threadStates.values()].map(state => state.record.sessionId),
         ...this.soloSessionIds(identity),
-        ...(await this.ctx.sessionPersistence.list()).map(item => String(item.header.id)),
+        ...persisted.keys(),
       ])
+      for (const id of this.nativeImagePaths.keys()) if (!ids.has(id)) this.nativeImagePaths.delete(id)
+      const resolved = new Map<string, ReturnType<Context['fs']['resolve']>>()
       for (const id of ids) {
-        if (!await this.canAccessNativeSession(id, identity)) continue
-        const live = this.ctx.agents.get(SessionId(id))?.session
-        const inspected = live === undefined
-          ? await this.ctx.sessionController.inspect(SessionId(id)).catch(() => undefined) : undefined
-        if (live === undefined && inspected === undefined) continue
-        const events = live?.snapshotEvents() ?? inspected!.events
-        const cwd = live?.header.cwd ?? inspected?.meta.cwd ?? this.config.cwd
-        for (const reference of referencedImagePaths(events, cwd)) {
-          const source = await this.ctx.fs.resolve(reference, { signal }).catch(() => undefined)
+        if (!await this.canAccessNativeSession(id, identity, new Set(), headers)) continue
+        for (const reference of await this.nativeSessionImagePaths(id, persisted.get(id))) {
+          signal.throwIfAborted()
+          // Resolve paths afresh: a cached canonical path must never survive a symlink change.
+          let resolution = resolved.get(reference)
+          if (resolution === undefined) {
+            resolution = this.ctx.fs.resolve(reference, { signal })
+            resolved.set(reference, resolution)
+          }
+          const source = await resolution.catch(() => undefined)
           if (source !== undefined && this.ctx.fs.contains(source, target) && this.ctx.fs.contains(target, source)) return
         }
       }
     } catch { throw denied() }
     throw denied()
+  }
+
+  private async nativeSessionImagePaths(id: string, persisted: SessionPersistenceSnapshot | undefined): Promise<readonly string[]> {
+    const live = this.ctx.agents.get(SessionId(id))?.session
+    if (live === undefined && persisted === undefined) return []
+    const source = live ?? this.ctx.sessionPersistence.identity
+    const revision = live?.seq ?? persisted!.revision
+    const cached = this.nativeImagePaths.get(id)
+    if (cached !== undefined && cached.source === source && cached.revision === revision) return cached.paths
+    // Install the promise before awaiting inspection so simultaneous images share the work.
+    // Cache authored paths only; membership and filesystem identity remain request-scoped.
+    const paths = (async () => {
+      if (live !== undefined) return referencedImagePaths(live.snapshotEvents(), live.header.cwd ?? this.config.cwd)
+      const inspected = await this.ctx.sessionController.inspect(SessionId(id))
+      return referencedImagePaths(inspected.events, inspected.meta.cwd ?? this.config.cwd)
+    })()
+    const entry = { source, revision, paths }
+    this.nativeImagePaths.set(id, entry)
+    try { return await paths } catch {
+      if (this.nativeImagePaths.get(id) === entry) this.nativeImagePaths.delete(id)
+      return []
+    }
   }
 
   /** Reserve an opaque native Session id as a private Solo conversation. */
@@ -735,7 +769,7 @@ export class ChatroomRuntime {
   }
 
   /** Only native subagents inherit access; a fork needs its own registered owner. */
-  async canAccessNativeSession(sessionId: string, identity: ChatroomIdentity, visited = new Set<string>()): Promise<boolean> {
+  async canAccessNativeSession(sessionId: string, identity: ChatroomIdentity, visited = new Set<string>(), persistedHeaders?: ReadonlyMap<string, SessionHeader>): Promise<boolean> {
     this.assertReady()
     if (!this.config.authEnabled) return true
     if (visited.has(sessionId)) return false
@@ -746,9 +780,11 @@ export class ChatroomRuntime {
     const solo = this.requireSoloSessions().get(sessionId)
     if (solo !== undefined) return solo.participantId === identity.participantId
     const header = this.ctx.agents.get(SessionId(sessionId))?.session.header
-      ?? (await this.ctx.sessionPersistence.list()).find(item => String(item.header.id) === sessionId)?.header
+      ?? (persistedHeaders === undefined
+        ? (await this.ctx.sessionPersistence.list()).find(item => String(item.header.id) === sessionId)?.header
+        : persistedHeaders.get(sessionId))
     return header?.origin === 'subagent' && header.parentSession !== undefined
-      && await this.canAccessNativeSession(String(header.parentSession), identity, visited)
+      && await this.canAccessNativeSession(String(header.parentSession), identity, visited, persistedHeaders)
   }
 
   /** Attribute a native fork to its creator before returning the child id to the browser. */

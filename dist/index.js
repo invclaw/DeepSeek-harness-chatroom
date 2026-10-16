@@ -2989,6 +2989,7 @@ var ChatroomRuntime = class {
   chatroomAgentContexts = /* @__PURE__ */ new Map();
   wecom;
   sessionActors = /* @__PURE__ */ new Map();
+  nativeImagePaths = /* @__PURE__ */ new Map();
   meetingPollTimer;
   meetingPoll;
   shutdown = new AbortController();
@@ -3246,6 +3247,7 @@ var ChatroomRuntime = class {
     this.meetingPoll = void 0;
     await this.wecom.stop();
     this.sessionActors.clear();
+    this.nativeImagePaths.clear();
     for (const dispose of this.chatroomAgentContexts.values()) dispose();
     this.chatroomAgentContexts.clear();
     for (const state of this.states.values()) {
@@ -3404,21 +3406,26 @@ var ChatroomRuntime = class {
       const target = await this.ctx.fs.resolve(path, { signal });
       const root = await this.ctx.fs.resolve(this.config.cwd, { signal });
       if (!this.ctx.fs.contains(root, target)) throw denied();
+      const persisted = new Map((await this.ctx.sessionPersistence.list({ signal })).map((item) => [String(item.header.id), item]));
+      const headers = new Map([...persisted].map(([id, item]) => [id, item.header]));
       const ids = /* @__PURE__ */ new Set([
         ...[...this.states.values()].map((state) => state.record.sessionId),
         ...[...this.threadStates.values()].map((state) => state.record.sessionId),
         ...this.soloSessionIds(identity),
-        ...(await this.ctx.sessionPersistence.list()).map((item) => String(item.header.id))
+        ...persisted.keys()
       ]);
+      for (const id of this.nativeImagePaths.keys()) if (!ids.has(id)) this.nativeImagePaths.delete(id);
+      const resolved = /* @__PURE__ */ new Map();
       for (const id of ids) {
-        if (!await this.canAccessNativeSession(id, identity)) continue;
-        const live = this.ctx.agents.get(SessionId(id))?.session;
-        const inspected = live === void 0 ? await this.ctx.sessionController.inspect(SessionId(id)).catch(() => void 0) : void 0;
-        if (live === void 0 && inspected === void 0) continue;
-        const events = live?.snapshotEvents() ?? inspected.events;
-        const cwd = live?.header.cwd ?? inspected?.meta.cwd ?? this.config.cwd;
-        for (const reference of referencedImagePaths(events, cwd)) {
-          const source = await this.ctx.fs.resolve(reference, { signal }).catch(() => void 0);
+        if (!await this.canAccessNativeSession(id, identity, /* @__PURE__ */ new Set(), headers)) continue;
+        for (const reference of await this.nativeSessionImagePaths(id, persisted.get(id))) {
+          signal.throwIfAborted();
+          let resolution = resolved.get(reference);
+          if (resolution === void 0) {
+            resolution = this.ctx.fs.resolve(reference, { signal });
+            resolved.set(reference, resolution);
+          }
+          const source = await resolution.catch(() => void 0);
           if (source !== void 0 && this.ctx.fs.contains(source, target) && this.ctx.fs.contains(target, source)) return;
         }
       }
@@ -3426,6 +3433,27 @@ var ChatroomRuntime = class {
       throw denied();
     }
     throw denied();
+  }
+  async nativeSessionImagePaths(id, persisted) {
+    const live = this.ctx.agents.get(SessionId(id))?.session;
+    if (live === void 0 && persisted === void 0) return [];
+    const source = live ?? this.ctx.sessionPersistence.identity;
+    const revision = live?.seq ?? persisted.revision;
+    const cached = this.nativeImagePaths.get(id);
+    if (cached !== void 0 && cached.source === source && cached.revision === revision) return cached.paths;
+    const paths = (async () => {
+      if (live !== void 0) return referencedImagePaths(live.snapshotEvents(), live.header.cwd ?? this.config.cwd);
+      const inspected = await this.ctx.sessionController.inspect(SessionId(id));
+      return referencedImagePaths(inspected.events, inspected.meta.cwd ?? this.config.cwd);
+    })();
+    const entry = { source, revision, paths };
+    this.nativeImagePaths.set(id, entry);
+    try {
+      return await paths;
+    } catch {
+      if (this.nativeImagePaths.get(id) === entry) this.nativeImagePaths.delete(id);
+      return [];
+    }
   }
   /** Reserve an opaque native Session id as a private Solo conversation. */
   async reserveSoloSession(identity) {
@@ -3460,7 +3488,7 @@ var ChatroomRuntime = class {
     return this.requireSoloSessions().get(String(SessionId(sessionId)))?.participantId === identity.participantId;
   }
   /** Only native subagents inherit access; a fork needs its own registered owner. */
-  async canAccessNativeSession(sessionId, identity, visited = /* @__PURE__ */ new Set()) {
+  async canAccessNativeSession(sessionId, identity, visited = /* @__PURE__ */ new Set(), persistedHeaders) {
     this.assertReady();
     if (!this.config.authEnabled) return true;
     if (visited.has(sessionId)) return false;
@@ -3469,8 +3497,8 @@ var ChatroomRuntime = class {
     if (room !== void 0) return this.requireMembers().get(`${room.record.id}:${identity.participantId}`) !== void 0;
     const solo = this.requireSoloSessions().get(sessionId);
     if (solo !== void 0) return solo.participantId === identity.participantId;
-    const header = this.ctx.agents.get(SessionId(sessionId))?.session.header ?? (await this.ctx.sessionPersistence.list()).find((item) => String(item.header.id) === sessionId)?.header;
-    return header?.origin === "subagent" && header.parentSession !== void 0 && await this.canAccessNativeSession(String(header.parentSession), identity, visited);
+    const header = this.ctx.agents.get(SessionId(sessionId))?.session.header ?? (persistedHeaders === void 0 ? (await this.ctx.sessionPersistence.list()).find((item) => String(item.header.id) === sessionId)?.header : persistedHeaders.get(sessionId));
+    return header?.origin === "subagent" && header.parentSession !== void 0 && await this.canAccessNativeSession(String(header.parentSession), identity, visited, persistedHeaders);
   }
   /** Attribute a native fork to its creator before returning the child id to the browser. */
   async ownNativeFork(sessionId, identity) {

@@ -1616,6 +1616,7 @@ describe('ChatroomRuntime', () => {
     const outside = join(root, 'outside.png')
     await Promise.all([image, unreferenced, outside].map(path => writeFile(path, 'synthetic image')))
     await symlink(outside, join(workspace, 'escape.png'))
+    await symlink(image, join(workspace, 'linked.png'))
     const { runtime, harness, alice, bob } = await authenticatedRoom({ cwd: workspace })
     Object.assign(harness.ctx, { fs: harness.makeAgentContext().fs })
     vi.mocked(harness.ctx.agents.get).mockImplementation(id => harness.agents.find(agent => agent.session.id === id))
@@ -1623,7 +1624,7 @@ describe('ChatroomRuntime', () => {
       const room = await runtime.createRoom('Private image group', alice)
       const session = harness.agents.find(agent => String(agent.session.id) === room.sessionId)!.session
       Object.assign(session, { header: { cwd: workspace } })
-      session.append('assistant/message', { turn: 1, step: 1, message: createAssistantMessage({ source: { provider: 'test', model: 'test' }, content: [{ type: 'text', text: '![chart](chart%20one.png) ![escape](escape.png)' }] }), stream: [] }, { surfaceOp: 'append' })
+      session.append('assistant/message', { turn: 1, step: 1, message: createAssistantMessage({ source: { provider: 'test', model: 'test' }, content: [{ type: 'text', text: '![chart](linked.png) ![escape](escape.png)' }] }), stream: [] }, { surfaceOp: 'append' })
       const signal = new AbortController().signal
       await expect(runtime.assertNativeFileAccess(image, alice, signal)).resolves.toBeUndefined()
       await expect(runtime.assertNativeFileAccess(image, bob, signal)).rejects.toThrow('无权访问')
@@ -1631,6 +1632,53 @@ describe('ChatroomRuntime', () => {
       await expect(runtime.assertNativeFileAccess(join(workspace, 'escape.png'), alice, signal)).rejects.toThrow('无权访问')
       await runtime.addRoomMembers(room.id, [bob.participantId], alice)
       await expect(runtime.assertNativeFileAccess(image, bob, signal)).resolves.toBeUndefined()
+      await rm(join(workspace, 'linked.png'))
+      await symlink(unreferenced, join(workspace, 'linked.png'))
+      await expect(runtime.assertNativeFileAccess(image, alice, signal)).rejects.toThrow('无权访问')
+      session.append('assistant/message', { turn: 2, step: 1, message: createAssistantMessage({ source: { provider: 'test', model: 'test' }, content: [{ type: 'text', text: '![new chart](chart%20one.png)' }] }), stream: [] }, { surfaceOp: 'append' })
+      await expect(runtime.assertNativeFileAccess(image, alice, signal)).resolves.toBeUndefined()
+    } finally { await runtime.stop(); await rm(root, { recursive: true, force: true }) }
+  })
+
+  it('reuses unchanged image histories across concurrent requests and invalidates revisions and ownership', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'chatroom-image-index-'))
+    const image = join(root, 'chart.png')
+    await writeFile(image, 'synthetic image')
+    const { runtime, harness, alice } = await authenticatedRoom({ cwd: root })
+    Object.assign(harness.ctx, { fs: harness.makeAgentContext().fs })
+    try {
+      const ids = await Promise.all(Array.from({ length: 3 }, () => runtime.reserveSoloSession(alice)))
+      let revision = 'first'
+      let referenced = true
+      const list = vi.fn(async () => [
+        ...ids.map(id => ({ header: { id, cwd: root }, revision })),
+        ...Array.from({ length: 20 }, (_, i) => ({ header: { id: `foreign-${i}`, cwd: root }, revision })),
+      ])
+      const inspect = vi.fn(async () => ({ meta: { cwd: root }, events: referenced ? [{
+        type: 'assistant/message', seq: SessionSeq(0), time: 1, surfaceOp: 'append',
+        data: { turn: 1, step: 1, message: createAssistantMessage({ source: { provider: 'test', model: 'test' }, content: [{ type: 'text', text: '![chart](chart.png)' }] }), stream: [] },
+      }] : [] }))
+      Object.assign(harness.ctx.sessionPersistence, { list })
+      Object.assign(harness.ctx, { sessionController: { inspect } })
+      const authorize = () => runtime.assertNativeFileAccess(image, alice, new AbortController().signal)
+      await Promise.all([authorize(), authorize()])
+      await authorize()
+      expect(inspect).toHaveBeenCalledTimes(1)
+      expect(list).toHaveBeenCalledTimes(3)
+      // Revisions invalidate both successful and empty derived indexes.
+      referenced = false
+      revision = 'removed'
+      await expect(authorize()).rejects.toThrow('无权访问')
+      expect(inspect).toHaveBeenCalledTimes(4)
+      expect(list).toHaveBeenCalledTimes(4)
+      await expect(authorize()).rejects.toThrow('无权访问')
+      expect(inspect).toHaveBeenCalledTimes(4)
+      referenced = true
+      revision = 'restored'
+      await authorize()
+      for (const id of ids) await runtime.releaseSoloSession(id, alice)
+      await expect(authorize()).rejects.toThrow('无权访问')
+      expect(inspect).toHaveBeenCalledTimes(5)
     } finally { await runtime.stop(); await rm(root, { recursive: true, force: true }) }
   })
 
@@ -1923,6 +1971,7 @@ function fakeHarness(initialEvents: SessionEvent[] = []): {
           id: sessionId,
           header: { cwd: process.cwd() },
           events,
+          get seq() { return session.events.length },
           snapshotEvents: () => session.events,
           get surface() { return foldSurface(session.events) },
           deriveEventMessage,
