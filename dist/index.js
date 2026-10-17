@@ -8230,7 +8230,7 @@ import { HostConnectionService } from "@deepseek-ai/dsh-client-connection";
 import { WebSocket, WebSocketServer } from "ws";
 var MUX_PATH = "/api/remote.mux";
 var PUBLIC = /* @__PURE__ */ new Set(["session/list", "session/search", "session/control", "workspace/follow", "agentPresets/list", "session/modelCatalog", "session/canOpenWorkspacePath", "llm/listProviders", "permissionPresets/catalog"]);
-var SESSION = /* @__PURE__ */ new Set(["session/page", "session/follow", "session/projections", "session/selectModel", "session/rename", "session/fork", "session/prompt", "session/attachment", "session/cancel", "session/updateQueue", "skills/list", "fileReferences/list", "fileUploads/upload", "userQuestions/answer", "userQuestions/attachWait", "messageFeedback/list", "messageFeedback/put", "messageFeedback/delete", "agentPresets/select", "commands/list", "commands/execute", "sessionReferenceResolver/candidates", "goals/get", "goals/create", "goals/edit", "goals/pause", "goals/resume", "goals/complete", "goals/clear", "workspace/archiveSession", "workspace/unarchiveSession", "workspace/pinSession", "workspace/unpinSession", "workspace/insertSessionBefore"]);
+var SESSION = /* @__PURE__ */ new Set(["job/list", "job/follow", "job/kill", "session/page", "session/follow", "session/projections", "session/selectModel", "session/rename", "session/fork", "session/prompt", "session/attachment", "session/cancel", "session/updateQueue", "skills/list", "fileReferences/list", "fileUploads/upload", "userQuestions/answer", "userQuestions/attachWait", "messageFeedback/list", "messageFeedback/put", "messageFeedback/delete", "agentPresets/select", "commands/list", "commands/execute", "sessionReferenceResolver/candidates", "goals/get", "goals/create", "goals/edit", "goals/pause", "goals/resume", "goals/complete", "goals/clear", "workspace/archiveSession", "workspace/unarchiveSession", "workspace/pinSession", "workspace/unpinSession", "workspace/insertSessionBefore"]);
 var ADMIN = /* @__PURE__ */ new Set(["settings/describe", "settings/update", "settings/replace", "settings/mutate", "settings/openSettingsDocument", "credentials/describe", "credentials/set", "credentials/unset", "llm/listConfigurableProviders", "llm/discoverModels", "agentPresets/read", "dynamicCordisRunner/inventory", "dynamicCordisRunner/syncInspectManifest", "pluginManager/listBundles", "pluginManager/listPlugins", "pluginInventory/list"]);
 var GLOBAL_EVENTS = /* @__PURE__ */ new Set(["llm/adapters-updated", "permission-presets/catalog-changed"]);
 var CarrierError = class extends Error {
@@ -8388,6 +8388,14 @@ var NativeGateway = class {
     if (SESSION.has(endpoint)) {
       await this.requireSession(sessionResourceId(input, args), identity);
       if (args.agentId !== void 0) await this.requireSession(args.agentId, identity);
+      if (endpoint === "job/follow" || endpoint === "job/kill") {
+        try {
+          const job = this.ctx.jobs.get(input.jobId, input.sessionId);
+          if (job.owner !== input.sessionId) throw new Error("not owned");
+        } catch {
+          throw new CarrierError(403, "\u4EFB\u52A1\u4E0D\u5B58\u5728\u6216\u4F60\u65E0\u6743\u8BBF\u95EE\u3002");
+        }
+      }
       if (record(input.address) && input.address.kind === "subagent") {
         await this.requireSession(input.address.parentSessionId, identity);
         await this.requireSession(input.address.childSessionId, identity);
@@ -8451,6 +8459,9 @@ var NativeGateway = class {
       }
     }
     if (!this.config.authEnabled || !record(value)) return value;
+    if (endpoint === "job/list" && value.type === "rows" && Array.isArray(value.jobs)) {
+      return { ...value, jobs: value.jobs.filter((job) => record(job) && job.owner === resourceId) };
+    }
     if (endpoint === "$events") {
       if (value.type === "ready" && typeof value.clientId === "string") {
         this.generations.set(value.clientId, { participantId: identity?.participantId, deliveries: /* @__PURE__ */ new Map() });

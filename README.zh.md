@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.4.6" src="https://img.shields.io/badge/version-1.4.6-4f6bff">
+    <img alt="版本 1.4.7" src="https://img.shields.io/badge/version-1.4.7-4f6bff">
     <img alt="Harness 0.2.0-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.2.0--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -109,6 +109,7 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.4.7** — 按 Session 授权原生后台任务列表、输出和停止操作，隐藏无归属的操作员任务，修复任务列表订阅导致整个原生连接反复断开。
 - **1.4.6** — 修复管理员打开原生模型设置时，可配置提供商目录接口返回 403；继续拒绝匿名及普通成员访问。
 - **1.4.5** — 适配 Harness 0.2.0-rc.2，按账号授权原生 Remote HTTP 与多路事件流，保留模型上下文的持久替换记录，将群聊目录就绪与 Agent 懒激活分离，并接入独立草稿的原生嵌入分支会话，优化紧凑分支树与单色消息操作图标。
 - **1.4.4** — 在 Host 统一校验原生 HTTP、WebSocket 和跨会话引用权限；按模型步骤认领的结构化身份固定企微凭据与邀请权限；文件交付使用实际 Agent 文件系统；先持久保存待接纳消息，再交接原生持久队列，并在卸载时回收借用 Agent 的注册和 CLI 子进程。
