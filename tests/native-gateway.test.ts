@@ -127,9 +127,15 @@ describe('native Remote account gateway', () => {
   it('routes group prompts through participant-aware intake', async () => {
     const f = fixture()
     vi.mocked(f.runtime.submitNativeSession).mockResolvedValue(true)
-    const response = await f.gateway.fetch(rpc('session/prompt', { sessionId: 'shared-room', mode: 'queue', content: [{ type: 'text', text: 'human discussion' }] }))
+    const response = await f.gateway.fetch(rpc('session/prompt', { sessionId: 'shared-room', requestId: 'native-request', clientTimeZone: 'Asia/Shanghai', mode: 'queue', content: [{ type: 'text', text: 'human discussion' }] }))
     expect((await response.json()).result.value.accepted).toBe(true)
-    expect(f.runtime.submitNativeSession).toHaveBeenCalledWith('shared-room', f.account, [{ type: 'text', text: 'human discussion' }], 'queue')
+    expect(f.runtime.submitNativeSession).toHaveBeenCalledWith('shared-room', f.account, [{ type: 'text', text: 'human discussion' }], 'queue', { requestId: 'native-request', clientTimeZone: 'Asia/Shanghai' })
+    expect(f.dispatch).not.toHaveBeenCalled()
+  })
+  it('rejects invalid native prompt time zones before intake', async () => {
+    const f = fixture()
+    expect((await f.gateway.fetch(rpc('session/prompt', { sessionId: 'shared-room', requestId: 'native-request', clientTimeZone: 'Invalid/Zone', mode: 'queue', content: [{ type: 'text', text: 'message' }] }))).status).toBe(400)
+    expect(f.runtime.submitNativeSession).not.toHaveBeenCalled()
     expect(f.dispatch).not.toHaveBeenCalled()
   })
   it('keeps empty groups visible while preserving reusable personal drafts', async () => {
