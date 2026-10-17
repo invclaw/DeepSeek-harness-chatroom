@@ -1,0 +1,1 @@
+{"version":3,"file":"settings-access.d.ts","sourceRoot":"","sources":["../../src/settings-access.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,MAAM,EAAE,MAAM,aAAa,CAAA;AACzC,OAAO,KAAK,EAAmB,gBAAgB,EAAE,MAAM,YAAY,CAAA;AAEnE,uFAAuF;AACvF,wBAAgB,uBAAuB,CAAC,MAAM,EAAE,MAAM,EAAE,QAAQ,EAAE,gBAAgB,GAAG,IAAI,GAAG,SAAS,GAAG,OAAO,CAI9G"}

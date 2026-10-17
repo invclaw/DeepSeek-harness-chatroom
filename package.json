@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-chatroom",
-  "version": "1.4.10",
+  "version": "1.4.11",
   "description": "Multi-user AI chatroom plugin for DeepSeek Harness Web",
   "type": "module",
   "main": "dist/index.js",
@@ -14,7 +14,11 @@
       "types": "./dist/types/client/index.d.ts",
       "default": "./dist/client.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./settings": {
+      "types": "./dist/types/settings.d.ts",
+      "default": "./dist/settings.js"
+    }
   },
   "files": [
     "dist",
@@ -46,7 +50,7 @@
     }
   },
   "scripts": {
-    "build:host": "tsup src/index.ts --format esm --clean --sourcemap --out-dir dist",
+    "build:host": "tsup src/index.ts src/settings.ts --format esm --clean --sourcemap --out-dir dist",
     "build:types": "tsc -p tsconfig.build.json",
     "build:client": "tsdown && node scripts/verify-client-bundle.mjs",
     "build": "npm run build:host && npm run build:types && npm run build:client",
@@ -170,7 +174,9 @@
     "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.2",
     "@deepseek-ai/dsh-client-store": "0.2.0-rc.2",
     "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-jobs": "0.2.0-rc.2"
+    "@deepseek-ai/dsh-jobs": "0.2.0-rc.2",
+    "immer": "^10.2.0",
+    "zustand": "~4.4.7"
   },
   "engines": {
     "node": ">=22.19",

@@ -31,3 +31,21 @@ The Chatroom bundle disables the profile's original `connection` entry, reuses t
 An edge `forward_auth` check establishes login, not room membership. Chatroom verifies the account and Session ownership on HTTP requests and outgoing WebSocket frames, including expiry and disabled-account revocation. The edge should still protect private static assets and other plugins' endpoints. Keep the Host bound to loopback behind the authenticated TLS proxy.
 
 Set `authPublicOrigin` to the public origin. `nativeTrustedHosts` inherits the Web profile's trusted hosts through the bundle; extend it only for explicit additional deployment hostnames. Native request bodies are limited by `nativeMaxRequestBytes` (314572800 by default), separately from Chatroom upload limits. Forward `Host`, `Origin`, cookies, and WebSocket upgrade headers without accepting client-supplied identity headers as verified identity.
+
+### Native settings on authenticated domain URLs
+
+DSH RC.2 normally keeps non-loopback browser settings in memory. To enable the
+native model forms for Chatroom administrators, replace the Web bundle's
+`ui-settings` module name with `deepseek-harness-chatroom/settings`, retaining the
+entry ID and its configuration. Named profile patches for that entry must use the
+same module name. This host-only subpath delegates the native Host preferences
+and enables the bundled native settings factory with a server-confirmed capability.
+Do not also mount the original settings provider. Without this entry, the plugin
+preserves the default Harness provider behavior.
+
+Super administrators and configured `settingsAdminParticipantIds` use Host
+persistence. Other authenticated members keep browser-local preferences. Each
+settings/credentials RPC and every settings invalidation rechecks the current
+account authority; the bootstrap capability grants no API access. The transport's
+loopback classification remains unchanged. Validate model settings with a domain
+hostname as well as localhost, since localhost alone misses this RC.2 behavior.

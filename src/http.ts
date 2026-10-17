@@ -4,6 +4,8 @@ import { ChatroomAuthError, ChatroomAuthRateLimitError } from './auth.js'
 import { automaticAuthRedirect } from './auth-redirect.js'
 import { renderAuthPage } from './auth-page.js'
 import type { Config } from './config.js'
+import { canManageNativeSettings } from './settings-access.js'
+import type {} from './settings.js'
 import { cookieValue, expiredSessionCookie, sessionCookie } from './cookies.js'
 import { matchChatroomApi } from './routes.js'
 import { ChatroomInputError, ChatroomRuntime, type NativePromptMetadata } from './room.js'
@@ -36,7 +38,7 @@ export class ChatroomHttpController {
   private readonly log
 
   constructor(
-    ctx: Context,
+    private readonly ctx: Context,
     private readonly runtime: ChatroomRuntime,
     private readonly config: Config,
   ) {
@@ -1162,6 +1164,7 @@ export class ChatroomHttpController {
       : this.runtime.roomsFor(identity)
     const initialRoom = rooms.find(room => room.id === this.config.roomId)
     return {
+      settings: { managed: this.ctx.get('chatroomManagedSettings') === true, canManage: canManageNativeSettings(this.config, account ?? identity) },
       auth: this.runtime.auth.state(account),
       identity,
       rooms,

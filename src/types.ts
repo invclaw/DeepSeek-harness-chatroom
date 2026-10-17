@@ -301,6 +301,8 @@ export interface ChatroomRoomManagementResponse extends ChatroomRoomManageRespon
 
 /** Initial identity lookup result. */
 export interface ChatroomSessionResponse {
+  /** Display capability only; all settings RPCs independently authorize the account. */
+  readonly settings?: { readonly managed: boolean; readonly canManage: boolean }
   readonly auth: ChatroomAuthState
   readonly identity: ChatroomIdentity | null
   readonly rooms: readonly ChatroomInfo[]

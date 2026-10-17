@@ -2,6 +2,13 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis';
 import type { InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client';
 import { ChatroomClientStore } from './store.js';
 export declare const inject: string[];
+declare module '@deepseek-ai/cordis' {
+    interface Context {
+        chatroomClientCapabilities: {
+            readonly canManage: boolean;
+        };
+    }
+}
 /** Start the native browser connection before installing its chatroom consumers. */
 export declare function apply(ctx: ClientContext): Promise<void>;
 /** Mount one wrapper only after its native renderer exists, independent of client-plugin load order. */
