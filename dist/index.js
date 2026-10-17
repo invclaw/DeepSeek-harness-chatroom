@@ -7703,14 +7703,17 @@ var ChatroomHttpController = class {
       threadId: fieldString(body, "threadId"),
       mode: parsed.mode,
       content: parsed.content,
-      ...parsed.reply === void 0 ? {} : { reply: parsed.reply }
+      ...parsed.reply === void 0 ? {} : { reply: parsed.reply },
+      ...parsed.requestId === void 0 ? {} : { requestId: parsed.requestId },
+      ...parsed.clientTimeZone === void 0 ? {} : { clientTimeZone: parsed.clientTimeZone }
     };
     const result = await this.runtime.submitThread(
       prompt.threadId,
       identity,
       prompt.content,
       prompt.mode,
-      prompt.reply
+      prompt.reply,
+      nativePromptCorrelation(prompt)
     );
     json(response, 200, result);
   }
@@ -7724,7 +7727,7 @@ var ChatroomHttpController = class {
     if (identity === void 0) return;
     const body = await readJson(request, this.runtime.maxPromptRequestBytes);
     const prompt = promptRequest(body, this.config);
-    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode, prompt.reply);
+    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode, prompt.reply, nativePromptCorrelation(prompt));
     json(response, 200, result);
   }
   async handleReactionToggle(request, response) {
@@ -8155,7 +8158,18 @@ function promptRequest(body, config) {
     throw new ChatroomInputError("\u6D88\u606F\u5185\u5BB9\u4E0D\u80FD\u4E3A\u7A7A\u3002");
   }
   const reply = replyRequest(body.reply);
-  return { roomId, mode, content, ...reply === void 0 ? {} : { reply } };
+  return { roomId, mode, content, ...reply === void 0 ? {} : { reply }, ...nativePromptCorrelation(body) ?? {} };
+}
+function nativePromptCorrelation(body) {
+  if (body.requestId === void 0) return void 0;
+  if (typeof body.requestId !== "string" || body.requestId.length === 0 || body.requestId.length > 256) throw new ChatroomInputError("\u539F\u751F\u53D1\u9001\u8BF7\u6C42\u6807\u8BC6\u65E0\u6548\u3002");
+  if (body.clientTimeZone === void 0) return { requestId: body.requestId };
+  if (typeof body.clientTimeZone !== "string") throw new ChatroomInputError("\u5BA2\u6237\u7AEF\u65F6\u533A\u65E0\u6548\u3002");
+  try {
+    return { requestId: body.requestId, clientTimeZone: new Intl.DateTimeFormat("en", { timeZone: body.clientTimeZone }).resolvedOptions().timeZone };
+  } catch {
+    throw new ChatroomInputError("\u5BA2\u6237\u7AEF\u65F6\u533A\u65E0\u6548\u3002");
+  }
 }
 function replyRequest(value) {
   if (value === void 0) return void 0;

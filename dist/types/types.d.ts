@@ -367,6 +367,9 @@ export interface ChatroomPromptRequest {
     readonly mode: 'queue' | 'steer';
     readonly content: readonly ChatroomPromptContentPart[];
     readonly reply?: ChatroomReplyReference;
+    /** Native composer correlation, preserved on the accepted message. */
+    readonly requestId?: string;
+    readonly clientTimeZone?: string;
 }
 /** Whether one accepted room message woke the AI. */
 export interface ChatroomPromptResponse {
@@ -438,6 +441,9 @@ export interface ChatroomThreadPromptRequest {
     readonly mode: 'queue' | 'steer';
     readonly content: readonly ChatroomPromptContentPart[];
     readonly reply?: ChatroomReplyReference;
+    /** Native composer correlation, preserved on the accepted message. */
+    readonly requestId?: string;
+    readonly clientTimeZone?: string;
 }
 /** Browser notification for a new human or AI message. */
 export interface ChatroomNotification {

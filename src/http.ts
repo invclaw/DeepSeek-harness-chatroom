@@ -6,7 +6,7 @@ import { renderAuthPage } from './auth-page.js'
 import type { Config } from './config.js'
 import { cookieValue, expiredSessionCookie, sessionCookie } from './cookies.js'
 import { matchChatroomApi } from './routes.js'
-import { ChatroomInputError, ChatroomRuntime } from './room.js'
+import { ChatroomInputError, ChatroomRuntime, type NativePromptMetadata } from './room.js'
 import { WecomCliError } from './wecom.js'
 import { isChatroomReactionEmoji } from './reactions.js'
 import type {
@@ -918,6 +918,8 @@ export class ChatroomHttpController {
       mode: parsed.mode,
       content: parsed.content,
       ...(parsed.reply === undefined ? {} : { reply: parsed.reply }),
+      ...(parsed.requestId === undefined ? {} : { requestId: parsed.requestId }),
+      ...(parsed.clientTimeZone === undefined ? {} : { clientTimeZone: parsed.clientTimeZone }),
     }
     const result = await this.runtime.submitThread(
       prompt.threadId,
@@ -925,6 +927,7 @@ export class ChatroomHttpController {
       prompt.content,
       prompt.mode,
       prompt.reply,
+      nativePromptCorrelation(prompt),
     )
     json(response, 200, result)
   }
@@ -939,7 +942,7 @@ export class ChatroomHttpController {
     if (identity === undefined) return
     const body = await readJson(request, this.runtime.maxPromptRequestBytes)
     const prompt = promptRequest(body, this.config)
-    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode, prompt.reply)
+    const result = await this.runtime.submit(prompt.roomId, identity, prompt.content, prompt.mode, prompt.reply, nativePromptCorrelation(prompt))
     json(response, 200, result)
   }
 
@@ -1456,7 +1459,16 @@ function promptRequest(body: Record<string, unknown>, config: Config): ChatroomP
     throw new ChatroomInputError('消息内容不能为空。')
   }
   const reply = replyRequest(body.reply)
-  return { roomId, mode, content, ...(reply === undefined ? {} : { reply }) }
+  return { roomId, mode, content, ...(reply === undefined ? {} : { reply }), ...(nativePromptCorrelation(body) ?? {}) }
+}
+
+function nativePromptCorrelation(body: Pick<ChatroomPromptRequest, 'requestId' | 'clientTimeZone'> | Record<string, unknown>): NativePromptMetadata | undefined {
+  if (body.requestId === undefined) return undefined
+  if (typeof body.requestId !== 'string' || body.requestId.length === 0 || body.requestId.length > 256) throw new ChatroomInputError('原生发送请求标识无效。')
+  if (body.clientTimeZone === undefined) return { requestId: body.requestId }
+  if (typeof body.clientTimeZone !== 'string') throw new ChatroomInputError('客户端时区无效。')
+  try { return { requestId: body.requestId, clientTimeZone: new Intl.DateTimeFormat('en', { timeZone: body.clientTimeZone }).resolvedOptions().timeZone } }
+  catch { throw new ChatroomInputError('客户端时区无效。') }
 }
 
 function replyRequest(value: unknown): ChatroomPromptRequest['reply'] {

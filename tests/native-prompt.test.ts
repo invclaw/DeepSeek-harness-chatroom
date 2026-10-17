@@ -58,6 +58,7 @@ describe('native prompt admission', () => {
 
     await api.session.prompt({
       requestId: 'request-test' as never,
+      clientTimeZone: 'Asia/Shanghai',
       sessionId: 'room-session' as never,
       mode: 'queue',
       content: [{ type: 'text', text: '人类消息' }],
@@ -67,6 +68,7 @@ describe('native prompt admission', () => {
         roomId: 'room',
         mode: 'queue',
         content: [{ type: 'text', text: '人类消息' }],
+        requestId: 'request-test', clientTimeZone: 'Asia/Shanghai',
       }),
     }))
     expect(original).not.toHaveBeenCalled()
@@ -161,13 +163,14 @@ describe('native prompt admission', () => {
     installNativePromptIdentity(api, store)
 
     await api.session.prompt({
-      requestId: 'request-test' as never,
+      requestId: 'branch-steer-request' as never,
+      clientTimeZone: 'Asia/Shanghai',
       sessionId: 'branch-session' as never,
       mode: 'steer',
       content: [{ type: 'text', text: '@AI 继续' }],
     })
     await api.session.prompt({
-      requestId: 'request-test' as never,
+      requestId: 'branch-queue-request' as never,
       sessionId: 'branch-session' as never,
       mode: 'queue',
       content: [{ type: 'text', text: '再发一条' }],
@@ -182,6 +185,7 @@ describe('native prompt admission', () => {
           { type: 'file', name: 'note.txt', mediaType: 'text/plain', data: 'aGVsbG8=' },
         ],
         reply: { messageId: 'user:1', displayName: 'Bob', text: '前文' },
+        requestId: 'branch-steer-request', clientTimeZone: 'Asia/Shanghai',
       }),
     }))
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/plugins/deepseek-harness-chatroom/api/threads/prompt', expect.objectContaining({
@@ -193,6 +197,7 @@ describe('native prompt admission', () => {
           { type: 'file', name: 'note.txt', mediaType: 'text/plain', data: 'aGVsbG8=' },
         ],
         reply: { messageId: 'user:1', displayName: 'Bob', text: '前文' },
+        requestId: 'branch-queue-request',
       }),
     }))
     expect(original).not.toHaveBeenCalled()
