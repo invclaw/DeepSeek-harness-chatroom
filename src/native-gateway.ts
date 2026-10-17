@@ -12,7 +12,8 @@ import { HostConnectionService, type ConnectionFetchHandler } from '@deepseek-ai
 import { WebSocket, WebSocketServer } from 'ws'
 import type { Config } from './config.js'
 import { cookieValue } from './cookies.js'
-import type { ChatroomAccount, ChatroomIdentity } from './types.js'
+import { canManageNativeSettings } from './settings-access.js'
+import type { ChatroomIdentity } from './types.js'
 import { ChatroomInputError, type ChatroomRuntime, type NativePromptMetadata } from './room.js'
 
 const MUX_PATH = '/api/remote.mux'
@@ -282,6 +283,7 @@ export class NativeGateway {
         return value
       }
       if (value.type === 'emit' && Array.isArray(value.args)) {
+        if (value.event === 'settings/document-updated') return this.isAdmin(identity) ? value : undefined
         if (GLOBAL_EVENTS.has(String(value.event))) return value
         const first = value.args[0]
         const id = typeof first === 'string' ? first : record(first) ? first.sessionId ?? first.agentId ?? first.id : undefined
@@ -454,7 +456,7 @@ export class NativeGateway {
     if (!await this.canAccess(id, identity)) throw new CarrierError(403, '会话不存在或你无权访问。')
   }
   private isAdmin(identity: Identity): boolean {
-    return identity !== undefined && (('role' in identity && (identity as ChatroomAccount).role === 'super-admin') || this.config.settingsAdminParticipantIds.includes(identity.participantId))
+    return canManageNativeSettings(this.config, identity)
   }
   private assertOrigin(request: Request): void {
     const url = new URL(request.url)

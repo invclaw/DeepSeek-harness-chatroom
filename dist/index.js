@@ -1123,6 +1123,11 @@ function scriptJson(value) {
   return JSON.stringify(value).replace(/</gu, "\\u003c").replace(/\u2028/gu, "\\u2028").replace(/\u2029/gu, "\\u2029");
 }
 
+// src/settings-access.ts
+function canManageNativeSettings(config, identity) {
+  return !config.authEnabled || identity != null && ("role" in identity && identity.role === "super-admin" || config.settingsAdminParticipantIds.includes(identity.participantId));
+}
+
 // src/cookies.ts
 function cookieValue(header, name2) {
   if (header === void 0) return void 0;
@@ -6889,10 +6894,12 @@ async function waitForIdle(agent, signal) {
 // src/http.ts
 var ChatroomHttpController = class {
   constructor(ctx, runtime, config) {
+    this.ctx = ctx;
     this.runtime = runtime;
     this.config = config;
     this.log = ctx.logger("deepseek-harness-chatroom");
   }
+  ctx;
   runtime;
   config;
   log;
@@ -7932,6 +7939,7 @@ var ChatroomHttpController = class {
     const rooms = this.config.authEnabled && account === void 0 || identity === null ? [] : this.runtime.roomsFor(identity);
     const initialRoom = rooms.find((room) => room.id === this.config.roomId);
     return {
+      settings: { managed: this.ctx.get("chatroomManagedSettings") === true, canManage: canManageNativeSettings(this.config, account ?? identity) },
       auth: this.runtime.auth.state(account),
       identity,
       rooms,
@@ -8521,6 +8529,7 @@ var NativeGateway = class {
         return value;
       }
       if (value.type === "emit" && Array.isArray(value.args)) {
+        if (value.event === "settings/document-updated") return this.isAdmin(identity) ? value : void 0;
         if (GLOBAL_EVENTS.has(String(value.event))) return value;
         const first = value.args[0];
         const id = typeof first === "string" ? first : record(first) ? first.sessionId ?? first.agentId ?? first.id : void 0;
@@ -8716,7 +8725,7 @@ var NativeGateway = class {
     if (!await this.canAccess(id, identity)) throw new CarrierError(403, "\u4F1A\u8BDD\u4E0D\u5B58\u5728\u6216\u4F60\u65E0\u6743\u8BBF\u95EE\u3002");
   }
   isAdmin(identity) {
-    return identity !== void 0 && ("role" in identity && identity.role === "super-admin" || this.config.settingsAdminParticipantIds.includes(identity.participantId));
+    return canManageNativeSettings(this.config, identity);
   }
   assertOrigin(request) {
     const url = new URL(request.url);

@@ -4,6 +4,7 @@ import type { Config } from './config.js';
 import { ChatroomRuntime } from './room.js';
 /** HTTP/SSE adapter for the browser client. */
 export declare class ChatroomHttpController {
+    private readonly ctx;
     private readonly runtime;
     private readonly config;
     private readonly log;

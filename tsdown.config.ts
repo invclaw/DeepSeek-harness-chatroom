@@ -1,3 +1,4 @@
+import { embeddedNativeSettings } from './scripts/native-settings.mjs'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import type { UserConfig } from 'tsdown'
@@ -38,6 +39,6 @@ export default {
     entryFileNames: 'client.js',
     banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify(id)}, factory: (require) => {`,
     footer: 'return module.exports; } });',
-    intro: `${embeddedConnection}\nvar module = { exports: {} }; var exports = module.exports;`,
+    intro: `${embeddedConnection}\n${embeddedNativeSettings()}\nvar module = { exports: {} }; var exports = module.exports;`,
   },
 } satisfies UserConfig

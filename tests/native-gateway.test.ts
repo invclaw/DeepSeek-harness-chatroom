@@ -111,6 +111,33 @@ describe('native Remote account gateway', () => {
     expect((await f.gateway.fetch(rpc(method))).status).toBe(200)
     expect(f.dispatch).toHaveBeenCalledOnce()
   })
+  it('forwards settings invalidations only while the stream account is an administrator', async () => {
+    const f = fixture()
+    const server = createServer()
+    server.on('upgrade', (req, socket, head) => { void f.gateway.upgrade(req, socket, head) })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const socket = new WebSocket(`ws://127.0.0.1:${(server.address() as { port: number }).port}/api/remote.mux`, { headers: { Cookie: 'chatroom-auth=alice-token' } })
+    const frames: unknown[] = []
+    socket.on('message', frame => frames.push(JSON.parse(String(frame)).value))
+    try {
+      await once(socket, 'open')
+      socket.send(JSON.stringify({ type: 'open', streamId: 'events', endpoint: '$events', payload: { args: {} } }))
+      await vi.waitFor(() => expect(f.events).toHaveBeenCalledOnce())
+      for (const admin of [false, true, false]) {
+        frames.length = 0
+        f.account.role = admin ? 'super-admin' : 'member'
+        const invalidation = { type: 'emit', event: 'settings/document-updated', args: [{ revision: 8 }] }
+        f.push(invalidation)
+        // The following allowed frame is a barrier: every previous frame has been filtered.
+        f.push({ type: 'emit', event: 'llm/adapters-updated', args: [] })
+        await vi.waitFor(() => expect(frames.some((frame: any) => frame.event === 'llm/adapters-updated')).toBe(true))
+        expect(frames).toContainEqual({ type: 'emit', event: 'llm/adapters-updated', args: [] })
+        expect(frames.filter((frame: any) => frame.event === 'settings/document-updated')).toEqual(admin ? [invalidation] : [])
+        expect((await f.gateway.fetch(rpc('settings/describe'))).status).toBe(admin ? 200 : 403)
+      }
+    } finally { socket.terminate(); await new Promise<void>(resolve => server.close(() => resolve())) }
+  })
   it.each(['job/follow', 'job/kill'])('permits only session-owned %s', async method => {
     const f = fixture()
     expect((await f.gateway.fetch(rpc(method, { sessionId: 'alice-solo', jobId: 'own-job' }))).status).toBe(200)

@@ -42,6 +42,10 @@ const roomServices = ['connection', 'inputTriggers', 'sessions', 'slots', 'works
 export const inject: string[] = []
 
 /** Supplied by the build adapter from the pinned native client factory. */
+declare const nativeSettings: { apply(ctx: ClientContext): void; inject: string[] }
+declare module '@deepseek-ai/cordis' {
+  interface Context { chatroomClientCapabilities: { readonly canManage: boolean } }
+}
 declare const nativeConnection: { apply(ctx: ClientContext): void }
 
 /** Start the native browser connection before installing its chatroom consumers. */
@@ -51,6 +55,10 @@ export async function apply(ctx: ClientContext): Promise<void> {
     const returnTo = `${location.pathname}${location.search}`
     location.replace(`${CHATROOM_API_PREFIX}/auth/page?returnTo=${encodeURIComponent(returnTo)}`)
     return
+  }
+  if (session.settings?.managed === true) {
+    ctx.provide('chatroomClientCapabilities', Object.freeze({ canManage: session.settings.canManage === true }))
+    ctx.plugin({ name: 'chatroom-native-settings', inject: nativeSettings.inject, apply: nativeSettings.apply })
   }
   ctx.plugin({ name: 'chatroom-native-connection', apply: nativeConnection.apply })
   let initialSession: typeof session | undefined = session
