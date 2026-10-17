@@ -11,6 +11,7 @@ import { agentPresetProjectionDefinition } from '@deepseek-ai/dsh-agent-preset-r
 import { AttachmentError, type ImageAttachmentRef, type ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { BlockAssembler, createAssistantMessage, createUserMessage, freezeMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
+import type { SessionRequestId } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-title'
 import type {} from '@deepseek-ai/dsh-system-prompt'
@@ -156,6 +157,9 @@ interface AgentToolTarget {
 
 /** Runtime validation failure safe to return to a browser. */
 export class ChatroomInputError extends Error {}
+
+/** Correlation supplied by the native RC.2 composer, distinct from server message ids. */
+export interface NativePromptMetadata { readonly requestId: string; readonly clientTimeZone?: string }
 
 /** Shared browser identities, room directory, presence, and native Harness Sessions. */
 export class ChatroomRuntime {
@@ -793,15 +797,15 @@ export class ChatroomRuntime {
   }
 
   /** Admit native group input through the same authenticated path as the chatroom composer. */
-  async submitNativeSession(sessionId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer'): Promise<boolean> {
+  async submitNativeSession(sessionId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', nativePrompt?: NativePromptMetadata): Promise<boolean> {
     const room = [...this.states.values()].find(state => state.record.sessionId === sessionId)
     if (room !== undefined) {
-      await this.submit(room.record.id, identity, content, mode)
+      await this.submit(room.record.id, identity, content, mode, undefined, nativePrompt)
       return true
     }
     const thread = [...this.threadStates.values()].find(state => state.record.sessionId === sessionId)
     if (thread === undefined) return false
-    await this.submitThread(thread.record.id, identity, content, mode)
+    await this.submitThread(thread.record.id, identity, content, mode, undefined, nativePrompt)
     return true
   }
 
@@ -1189,6 +1193,7 @@ export class ChatroomRuntime {
     content: readonly ChatroomPromptContentPart[],
     mode: 'queue' | 'steer',
     reply?: ChatroomReplyReference,
+    nativePrompt?: NativePromptMetadata,
   ): Promise<ChatroomPromptResponse> {
     this.assertReady()
     const state = this.requireState(roomId)
@@ -1196,6 +1201,7 @@ export class ChatroomRuntime {
     await this.assertPromptReferences(identity, content)
     const task = state.admission.then(async () => {
       const binding = await this.ensureRoom(roomId)
+      if (this.hasNativePrompt(binding.agent.session, nativePrompt)) return { accepted: true as const, aiTriggered: false }
       const aiTriggered = mentionsAi(content, state.record.aiDisplayName)
         || (state.record.autoTriggerEnabled === true && addressesAi(content, state.record.aiDisplayName))
       const { provider, model: modelId } = binding.agent.options
@@ -1206,7 +1212,7 @@ export class ChatroomRuntime {
         }
       }
       const durable = await this.durableContent(roomId, identity, identifyPrompt(content, identity, reply))
-      const message = createUserMessage({ content: durable, source: { kind: 'user', chatroomParticipantId: identity.participantId } })
+      const message = createUserMessage({ content: durable, source: this.promptSource(identity, nativePrompt) })
       await this.persistInput(state, binding, identity, message, aiTriggered ? 'respond' : state.record.autoTriggerEnabled === true ? 'decide' : 'passive')
       const pending = binding.agent.status === 'running'
         && mode === 'queue'
@@ -1888,6 +1894,7 @@ export class ChatroomRuntime {
     content: readonly ChatroomPromptContentPart[],
     mode: 'queue' | 'steer',
     reply?: ChatroomReplyReference,
+    nativePrompt?: NativePromptMetadata,
   ): Promise<ChatroomPromptResponse>
   async submitThread(
     threadId: string,
@@ -1895,6 +1902,7 @@ export class ChatroomRuntime {
     contentOrText: readonly ChatroomPromptContentPart[] | string,
     modeOrReply: 'queue' | 'steer' | ChatroomReplyReference = 'queue',
     explicitReply?: ChatroomReplyReference,
+    nativePrompt?: NativePromptMetadata,
   ): Promise<ChatroomPromptResponse> {
     this.assertReady()
     const state = this.requireThreadState(threadId)
@@ -1907,6 +1915,7 @@ export class ChatroomRuntime {
     await this.assertPromptReferences(identity, content)
     const task = state.admission.then(async () => {
       const binding = await this.ensureThread(threadId)
+      if (this.hasNativePrompt(binding.agent.session, nativePrompt)) return { accepted: true as const, aiTriggered: false }
       const roomState = this.requireState(state.record.roomId)
       const room = roomState.record
       const aiTriggered = mentionsAi(content, room.aiDisplayName)
@@ -1928,7 +1937,7 @@ export class ChatroomRuntime {
       const sequence = this.nextThreadSequence(threadId)
       const message = createUserMessage({
         content: durable,
-        source: { kind: 'user', chatroomParticipantId: identity.participantId },
+        source: this.promptSource(identity, nativePrompt),
       })
       const record: ThreadMessageRecord = {
         id: randomUUID(),
@@ -3371,6 +3380,19 @@ export class ChatroomRuntime {
   private requireInputs(): KvTable<string, InputRecord> {
     if (this.inputs === undefined) throw new Error('chatroom input storage is not ready')
     return this.inputs
+  }
+
+  private promptSource(identity: ChatroomIdentity, nativePrompt?: NativePromptMetadata): UserMessage['source'] & { chatroomParticipantId: string } {
+    return { kind: 'user', chatroomParticipantId: identity.participantId,
+      ...(nativePrompt === undefined ? {} : { rpcId: nativePrompt.requestId as SessionRequestId,
+        ...(nativePrompt.clientTimeZone === undefined ? {} : { clientTimeZone: nativePrompt.clientTimeZone }) }) }
+  }
+
+  private hasNativePrompt(session: Session, nativePrompt?: NativePromptMetadata): boolean {
+    if (nativePrompt === undefined) return false
+    const matches = (message: UserMessage): boolean => message.source.kind === 'user' && 'rpcId' in message.source && message.source.rpcId === nativePrompt.requestId
+    return session.snapshotEvents().some(event => event.type === 'user/message' && matches(event.data))
+      || [...this.requireInputs().entries()].some(([, input]) => input.sessionId === String(session.id) && matches(input.message))
   }
 
   private async persistInput(room: RoomState, binding: AgentBinding, identity: ChatroomIdentity, message: UserMessage, intent: InputRecord['intent'], thread?: ThreadState): Promise<void> {

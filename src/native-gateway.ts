@@ -13,7 +13,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import type { Config } from './config.js'
 import { cookieValue } from './cookies.js'
 import type { ChatroomAccount, ChatroomIdentity } from './types.js'
-import { ChatroomInputError, type ChatroomRuntime } from './room.js'
+import { ChatroomInputError, type ChatroomRuntime, type NativePromptMetadata } from './room.js'
 
 const MUX_PATH = '/api/remote.mux'
 const PUBLIC = new Set(['session/list', 'session/search', 'session/control', 'workspace/follow', 'agentPresets/list', 'session/modelCatalog', 'session/canOpenWorkspacePath', 'llm/listProviders', 'permissionPresets/catalog'])
@@ -114,7 +114,7 @@ export class NativeGateway {
           && Array.isArray(input.content) && (input.mode === 'queue' || input.mode === 'steer')) {
           const command = input.content.length === 1 && record(input.content[0]) && input.content[0].type === 'text'
             && typeof input.content[0].text === 'string' && input.content[0].text.startsWith('/')
-          if (!command && await this.runtime.submitNativeSession(input.sessionId, identity, input.content as never, input.mode)) {
+          if (!command && await this.runtime.submitNativeSession(input.sessionId, identity, input.content as never, input.mode, nativePromptMetadata(input))) {
             return this.success(body.rpcId, { accepted: true }, request)
           }
         }
@@ -467,6 +467,14 @@ export function registerNativeGateway(ctx: Context, runtime: ChatroomRuntime, co
   ctx.chatroomNativeGateway(gateway)
   const remove = ctx.webServer.register({ kind: 'prefix', path: '/api', handler: (req, res) => gateway.handle(req, res) })
   return async () => { remove(); ctx.chatroomNativeGateway(undefined); await gateway.close() }
+}
+function nativePromptMetadata(input: RecordValue): NativePromptMetadata | undefined {
+  if (input.requestId === undefined) return undefined
+  if (typeof input.requestId !== 'string' || input.requestId.length === 0 || input.requestId.length > 256) throw new CarrierError(400, 'Invalid prompt request identity')
+  if (input.clientTimeZone === undefined) return { requestId: input.requestId }
+  if (typeof input.clientTimeZone !== 'string') throw new CarrierError(400, 'Invalid client time zone')
+  try { return { requestId: input.requestId, clientTimeZone: new Intl.DateTimeFormat('en', { timeZone: input.clientTimeZone }).resolvedOptions().timeZone } }
+  catch { throw new CarrierError(400, 'Invalid client time zone') }
 }
 function record(value: unknown): value is RecordValue { return value !== null && typeof value === 'object' && !Array.isArray(value) }
 function sessionResourceId(input: RecordValue, args: RecordValue): unknown {

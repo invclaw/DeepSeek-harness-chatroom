@@ -10,6 +10,11 @@ import type { ChatroomAutomationOverview, ChatroomDirectConversation, ChatroomDi
 /** Runtime validation failure safe to return to a browser. */
 export declare class ChatroomInputError extends Error {
 }
+/** Correlation supplied by the native RC.2 composer, distinct from server message ids. */
+export interface NativePromptMetadata {
+    readonly requestId: string;
+    readonly clientTimeZone?: string;
+}
 /** Shared browser identities, room directory, presence, and native Harness Sessions. */
 export declare class ChatroomRuntime {
     private readonly ctx;
@@ -134,7 +139,7 @@ export declare class ChatroomRuntime {
     /** Attribute a native fork to its creator before returning the child id to the browser. */
     ownNativeFork(sessionId: string, identity: ChatroomIdentity): Promise<void>;
     /** Admit native group input through the same authenticated path as the chatroom composer. */
-    submitNativeSession(sessionId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer'): Promise<boolean>;
+    submitNativeSession(sessionId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', nativePrompt?: NativePromptMetadata): Promise<boolean>;
     /** Adopt one native Harness Session as a shared room, once, across concurrent browsers. */
     ensureSessionRoom(sessionId: string, title: string, identity: ChatroomIdentity): Promise<ChatroomInfo>;
     private createSessionRoom;
@@ -181,7 +186,7 @@ export declare class ChatroomRuntime {
     /** Add active platform accounts to a room as ordinary members. */
     addRoomMembers(roomId: string, participantIds: readonly string[], identity: ChatroomIdentity): Promise<readonly ChatroomMember[]>;
     /** Append human chat immediately and evaluate optional automatic responses in a separate queue. */
-    submit(roomId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
+    submit(roomId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference, nativePrompt?: NativePromptMetadata): Promise<ChatroomPromptResponse>;
     /** Guide, remove, or take back one queued AI prompt before the Agent claims it. */
     updateQueuedPrompt(target: {
         readonly roomId: string;
@@ -236,7 +241,7 @@ export declare class ChatroomRuntime {
     openThread(roomId: string, identity: ChatroomIdentity, root: ChatroomThreadRoot): Promise<ChatroomThreadResponse>;
     /** Append one branch message immediately and evaluate optional automatic responses in a separate queue. */
     submitThread(threadId: string, identity: ChatroomIdentity, text: string, reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
-    submitThread(threadId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference): Promise<ChatroomPromptResponse>;
+    submitThread(threadId: string, identity: ChatroomIdentity, content: readonly ChatroomPromptContentPart[], mode: 'queue' | 'steer', reply?: ChatroomReplyReference, nativePrompt?: NativePromptMetadata): Promise<ChatroomPromptResponse>;
     /** Project committed AI output into its parent room or branch stream. */
     handleSessionEvent(session: Session, event: SessionEvent): void;
     private createThread;
@@ -304,6 +309,8 @@ export declare class ChatroomRuntime {
     private resizeImage;
     private broadcastPresence;
     private requireInputs;
+    private promptSource;
+    private hasNativePrompt;
     private persistInput;
     private setInputIntent;
     private commitInput;

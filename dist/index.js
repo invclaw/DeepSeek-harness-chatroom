@@ -3505,15 +3505,15 @@ var ChatroomRuntime = class {
     await this.requireSoloSessions().put(sessionId, { sessionId, participantId: identity.participantId, createdAt: Date.now() });
   }
   /** Admit native group input through the same authenticated path as the chatroom composer. */
-  async submitNativeSession(sessionId, identity, content, mode) {
+  async submitNativeSession(sessionId, identity, content, mode, nativePrompt) {
     const room = [...this.states.values()].find((state) => state.record.sessionId === sessionId);
     if (room !== void 0) {
-      await this.submit(room.record.id, identity, content, mode);
+      await this.submit(room.record.id, identity, content, mode, void 0, nativePrompt);
       return true;
     }
     const thread = [...this.threadStates.values()].find((state) => state.record.sessionId === sessionId);
     if (thread === void 0) return false;
-    await this.submitThread(thread.record.id, identity, content, mode);
+    await this.submitThread(thread.record.id, identity, content, mode, void 0, nativePrompt);
     return true;
   }
   /** Adopt one native Harness Session as a shared room, once, across concurrent browsers. */
@@ -3850,13 +3850,14 @@ var ChatroomRuntime = class {
     return members;
   }
   /** Append human chat immediately and evaluate optional automatic responses in a separate queue. */
-  async submit(roomId, identity, content, mode, reply) {
+  async submit(roomId, identity, content, mode, reply, nativePrompt) {
     this.assertReady();
     const state = this.requireState(roomId);
     this.assertRoomAccess(roomId, identity);
     await this.assertPromptReferences(identity, content);
     const task = state.admission.then(async () => {
       const binding = await this.ensureRoom(roomId);
+      if (this.hasNativePrompt(binding.agent.session, nativePrompt)) return { accepted: true, aiTriggered: false };
       const aiTriggered = mentionsAi(content, state.record.aiDisplayName) || state.record.autoTriggerEnabled === true && addressesAi(content, state.record.aiDisplayName);
       const { provider, model: modelId } = binding.agent.options;
       if (aiTriggered && provider !== void 0 && modelId !== void 0 && content.some((part) => part.type === "image")) {
@@ -3866,7 +3867,7 @@ var ChatroomRuntime = class {
         }
       }
       const durable = await this.durableContent(roomId, identity, identifyPrompt(content, identity, reply));
-      const message = createUserMessage3({ content: durable, source: { kind: "user", chatroomParticipantId: identity.participantId } });
+      const message = createUserMessage3({ content: durable, source: this.promptSource(identity, nativePrompt) });
       await this.persistInput(state, binding, identity, message, aiTriggered ? "respond" : state.record.autoTriggerEnabled === true ? "decide" : "passive");
       const pending = binding.agent.status === "running" && mode === "queue" && (aiTriggered || state.record.autoTriggerEnabled === true) ? this.publishPendingMessage(state, identity, message, aiTriggered ? "queued" : "deciding") : void 0;
       let automaticSourceMessageId;
@@ -4425,7 +4426,7 @@ var ChatroomRuntime = class {
     room.admission = task.then(() => void 0, () => void 0);
     return await task;
   }
-  async submitThread(threadId, identity, contentOrText, modeOrReply = "queue", explicitReply) {
+  async submitThread(threadId, identity, contentOrText, modeOrReply = "queue", explicitReply, nativePrompt) {
     this.assertReady();
     const state = this.requireThreadState(threadId);
     this.assertRoomAccess(state.record.roomId, identity);
@@ -4435,6 +4436,7 @@ var ChatroomRuntime = class {
     await this.assertPromptReferences(identity, content);
     const task = state.admission.then(async () => {
       const binding = await this.ensureThread(threadId);
+      if (this.hasNativePrompt(binding.agent.session, nativePrompt)) return { accepted: true, aiTriggered: false };
       const roomState = this.requireState(state.record.roomId);
       const room = roomState.record;
       const aiTriggered = mentionsAi(content, room.aiDisplayName) || room.autoTriggerEnabled === true && addressesAi(content, room.aiDisplayName);
@@ -4455,7 +4457,7 @@ var ChatroomRuntime = class {
       const sequence = this.nextThreadSequence(threadId);
       const message = createUserMessage3({
         content: durable,
-        source: { kind: "user", chatroomParticipantId: identity.participantId }
+        source: this.promptSource(identity, nativePrompt)
       });
       const record2 = {
         id: randomUUID3(),
@@ -5709,6 +5711,21 @@ ${meeting.summary ?? ""}` }],
   requireInputs() {
     if (this.inputs === void 0) throw new Error("chatroom input storage is not ready");
     return this.inputs;
+  }
+  promptSource(identity, nativePrompt) {
+    return {
+      kind: "user",
+      chatroomParticipantId: identity.participantId,
+      ...nativePrompt === void 0 ? {} : {
+        rpcId: nativePrompt.requestId,
+        ...nativePrompt.clientTimeZone === void 0 ? {} : { clientTimeZone: nativePrompt.clientTimeZone }
+      }
+    };
+  }
+  hasNativePrompt(session, nativePrompt) {
+    if (nativePrompt === void 0) return false;
+    const matches = (message) => message.source.kind === "user" && "rpcId" in message.source && message.source.rpcId === nativePrompt.requestId;
+    return session.snapshotEvents().some((event) => event.type === "user/message" && matches(event.data)) || [...this.requireInputs().entries()].some(([, input]) => input.sessionId === String(session.id) && matches(input.message));
   }
   async persistInput(room, binding, identity, message, intent, thread) {
     await this.requireInputs().put(String(message.id), {
@@ -8325,7 +8342,7 @@ var NativeGateway = class {
         }
         if (endpoint === "session/prompt" && identity !== void 0 && typeof input.sessionId === "string" && Array.isArray(input.content) && (input.mode === "queue" || input.mode === "steer")) {
           const command = input.content.length === 1 && record(input.content[0]) && input.content[0].type === "text" && typeof input.content[0].text === "string" && input.content[0].text.startsWith("/");
-          if (!command && await this.runtime.submitNativeSession(input.sessionId, identity, input.content, input.mode)) {
+          if (!command && await this.runtime.submitNativeSession(input.sessionId, identity, input.content, input.mode, nativePromptMetadata(input))) {
             return this.success(body.rpcId, { accepted: true }, request);
           }
         }
@@ -8692,6 +8709,17 @@ function registerNativeGateway(ctx, runtime, config) {
     ctx.chatroomNativeGateway(void 0);
     await gateway.close();
   };
+}
+function nativePromptMetadata(input) {
+  if (input.requestId === void 0) return void 0;
+  if (typeof input.requestId !== "string" || input.requestId.length === 0 || input.requestId.length > 256) throw new CarrierError(400, "Invalid prompt request identity");
+  if (input.clientTimeZone === void 0) return { requestId: input.requestId };
+  if (typeof input.clientTimeZone !== "string") throw new CarrierError(400, "Invalid client time zone");
+  try {
+    return { requestId: input.requestId, clientTimeZone: new Intl.DateTimeFormat("en", { timeZone: input.clientTimeZone }).resolvedOptions().timeZone };
+  } catch {
+    throw new CarrierError(400, "Invalid client time zone");
+  }
 }
 function record(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);

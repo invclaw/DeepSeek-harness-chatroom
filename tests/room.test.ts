@@ -648,6 +648,22 @@ describe('ChatroomRuntime', () => {
     await runtime.stop()
   })
 
+  it('preserves native prompt identity in rooms and branches and deduplicates retries', async () => {
+    const harness = fakeHarness()
+    const runtime = new ChatroomRuntime(harness.ctx, config())
+    await runtime.start()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    const room = await runtime.selectRoom('lobby', identity)
+    const opened = await runtime.openThread('lobby', identity, { messageId: 'user:1', displayName: 'Alice', text: 'topic', role: 'human' })
+    for (const [sessionId, requestId] of [[room.sessionId, 'native-room-request'], [opened.thread.sessionId, 'native-branch-request']]) {
+      for (let retry = 0; retry < 2; retry++) await runtime.submitNativeSession(sessionId!, identity, [{ type: 'text', text: 'one accepted message' }], 'queue', { requestId: requestId!, clientTimeZone: 'Asia/Shanghai' })
+      const accepted = harness.agents.flatMap(agent => agent.session.snapshotEvents()).filter(event => event.type === 'user/message' && 'rpcId' in event.data.source && event.data.source.rpcId === requestId)
+      expect(accepted).toHaveLength(1)
+      expect(accepted[0]).toMatchObject({ data: { source: { kind: 'user', rpcId: requestId, clientTimeZone: 'Asia/Shanghai', chatroomParticipantId: identity.participantId } } })
+    }
+    await runtime.stop()
+  })
+
   it('applies the parent room automatic-response controller to branch messages', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
