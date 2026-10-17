@@ -41,10 +41,11 @@ function fixture() {
       if (value !== undefined) yield value
     }
   })
-  const ctx = { typertGateway: { wireStream: { open: events, failure: () => ({ code: 'denied', message: 'Access denied', details: {} }) } }, workspaceRegistry: { list: () => [] } } as unknown as Context
+  const jobs = { get: vi.fn((id: string) => { if (id === 'own-job') return { owner: 'alice-solo' }; if (id === 'unowned-job') return {}; throw new Error('not found') }) }
+  const ctx = { jobs, typertGateway: { wireStream: { open: events, failure: () => ({ code: 'denied', message: 'Access denied', details: {} }) } }, workspaceRegistry: { list: () => [] } } as unknown as Context
   const gateway = new NativeGateway(ctx, runtime, config, dispatch)
   gateways.push(gateway)
-  return { gateway, runtime, dispatch, permitted, events, account, revoke: () => { active = false }, push: (value: unknown) => { queue.push(value); notify() } }
+  return { gateway, runtime, dispatch, permitted, events, account, jobs, revoke: () => { active = false }, push: (value: unknown) => { queue.push(value); notify() } }
 }
 function rpc(method: string, request: Record<string, unknown> = {}, token = 'alice-token'): Request {
   if ((method === 'session/page' || method === 'session/follow') && request.sessionId !== undefined) {
@@ -59,7 +60,7 @@ describe('native Remote account gateway', () => {
     expect((await f.gateway.fetch(rpc(method, {}, 'invalid'))).status).toBe(401)
     expect(f.dispatch).not.toHaveBeenCalled()
   })
-  it.each(['session/page', 'session/projections', 'session/attachment', 'session/models', 'session/selectModel', 'session/prompt', 'session/cancel', 'session/fork', 'session/rename', 'session/updateQueue', 'agentPresets/select', 'workspace/archiveSession'])('denies foreign %s before side effects', async method => {
+  it.each(['job/list', 'job/follow', 'job/kill', 'session/page', 'session/projections', 'session/attachment', 'session/models', 'session/selectModel', 'session/prompt', 'session/cancel', 'session/fork', 'session/rename', 'session/updateQueue', 'agentPresets/select', 'workspace/archiveSession'])('denies foreign %s before side effects', async method => {
     const f = fixture()
     expect((await f.gateway.fetch(rpc(method, { sessionId: 'bob-solo' }))).status).toBe(403)
     expect(f.dispatch).not.toHaveBeenCalled()
@@ -84,6 +85,30 @@ describe('native Remote account gateway', () => {
     f.account.role = 'super-admin'
     expect((await f.gateway.fetch(rpc(method))).status).toBe(200)
     expect(f.dispatch).toHaveBeenCalledOnce()
+  })
+  it.each(['job/follow', 'job/kill'])('permits only session-owned %s', async method => {
+    const f = fixture()
+    expect((await f.gateway.fetch(rpc(method, { sessionId: 'alice-solo', jobId: 'own-job' }))).status).toBe(200)
+    for (const jobId of ['unowned-job', 'foreign-job']) expect((await f.gateway.fetch(rpc(method, { sessionId: 'alice-solo', jobId }))).status).toBe(403)
+    expect(f.dispatch).toHaveBeenCalledOnce()
+  })
+  it('keeps the real mux open for owned job rows and excludes unowned jobs', async () => {
+    const f = fixture()
+    const server = createServer()
+    server.on('upgrade', (req, socket, head) => { void f.gateway.upgrade(req, socket, head) })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const socket = new WebSocket(`ws://127.0.0.1:${(server.address() as { port: number }).port}/api/remote.mux`, { headers: { Cookie: 'chatroom-auth=alice-token' } })
+    try {
+      await once(socket, 'open')
+      socket.send(JSON.stringify({ type: 'open', streamId: 'jobs', endpoint: 'job/list', payload: { args: { request: { sessionId: 'alice-solo' } } } }))
+      await vi.waitFor(() => expect(f.events).toHaveBeenCalledOnce())
+      const pending = once(socket, 'message')
+      f.push({ type: 'rows', jobs: [{ id: 'own-job', owner: 'alice-solo' }, { id: 'foreign-job', owner: 'bob-solo' }, { id: 'unowned-job' }] })
+      const [frame] = await pending
+      expect(JSON.parse(String(frame)).value.jobs).toEqual([{ id: 'own-job', owner: 'alice-solo' }])
+      expect(socket.readyState).toBe(WebSocket.OPEN)
+    } finally { socket.terminate(); await new Promise<void>(resolve => server.close(() => resolve())) }
   })
   it('requires a reserved native Session and checks move anchors', async () => {
     const f = fixture()
