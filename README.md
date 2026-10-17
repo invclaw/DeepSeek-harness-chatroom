@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.4.5" src="https://img.shields.io/badge/version-1.4.5-4f6bff">
+    <img alt="Version 1.4.6" src="https://img.shields.io/badge/version-1.4.6-4f6bff">
     <img alt="Harness 0.2.0-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.2.0--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -109,6 +109,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Initializati
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.4.6** — allow authorized administrators to load the RC.2 configurable-provider directory in native model settings; keep anonymous and member access denied.
 - **1.4.5** — migrate to Harness 0.2.0-rc.2; authorize native Remote HTTP and multiplexed streams per account, preserve durable model-history replacements, start the room directory before lazy Agent activation, and refine compact branch rows, native embedded branch conversations with independent drafts, compact sidebar rows, and monochrome message actions.
 - **1.4.4** — authorize native HTTP, WebSocket, and cross-session references on the Host; bind Enterprise WeChat credentials and invitations to structured step admission; deliver files through the actual Agent filesystem; persist input before handing it to the native durable inbox; and dispose borrowed-Agent registrations and CLI children on unload.
 - **1.4.3** — isolate Enterprise WeChat QR credentials per platform account because the official meeting-create operation cannot override its authenticated organizer; create Quick meetings as the initiating user, invite every other conversation participant, keep lifecycle polling on the creating credential, and route Agent operations through the claimed turn speaker while retaining the former shared credential only for pre-upgrade meeting lifecycle records.

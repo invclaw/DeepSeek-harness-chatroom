@@ -54,7 +54,7 @@ function rpc(method: string, request: Record<string, unknown> = {}, token = 'ali
   return new Request(`http://127.0.0.1/api/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: `chatroom-auth=${token}` }, body: JSON.stringify({ type: 'client-request', rpcId: 'request-1', method, payload: { args: { request } } }) })
 }
 describe('native Remote account gateway', () => {
-  it.each(['session/list', 'session/page', 'session/prompt', 'settings/describe', 'commands/execute'])('rejects anonymous %s before dispatch', async method => {
+  it.each(['session/list', 'session/page', 'session/prompt', 'settings/describe', 'llm/listConfigurableProviders', 'commands/execute'])('rejects anonymous %s before dispatch', async method => {
     const f = fixture()
     expect((await f.gateway.fetch(rpc(method, {}, 'invalid'))).status).toBe(401)
     expect(f.dispatch).not.toHaveBeenCalled()
@@ -74,15 +74,15 @@ describe('native Remote account gateway', () => {
       expect(output).toContain('Alice')
     }
   })
-  it.each(['settings/describe', 'credentials/set', 'dynamicCordisRunner/inventory', 'directoryPicker/list', 'workspace/create', 'terminal/open', 'unknown/execute'])('denies member operator endpoint %s', async method => {
+  it.each(['settings/describe', 'llm/listConfigurableProviders', 'credentials/set', 'dynamicCordisRunner/inventory', 'directoryPicker/list', 'workspace/create', 'terminal/open', 'unknown/execute'])('denies member operator endpoint %s', async method => {
     const f = fixture()
     expect((await f.gateway.fetch(rpc(method))).status).toBe(403)
     expect(f.dispatch).not.toHaveBeenCalled()
   })
-  it('allows an authorized administrator to use native settings', async () => {
+  it.each(['settings/describe', 'llm/listConfigurableProviders'])('allows an authorized administrator to use %s', async method => {
     const f = fixture()
     f.account.role = 'super-admin'
-    expect((await f.gateway.fetch(rpc('settings/describe'))).status).toBe(200)
+    expect((await f.gateway.fetch(rpc(method))).status).toBe(200)
     expect(f.dispatch).toHaveBeenCalledOnce()
   })
   it('requires a reserved native Session and checks move anchors', async () => {
