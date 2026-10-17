@@ -772,6 +772,16 @@ export class ChatroomRuntime {
     return this.requireSoloSessions().get(String(SessionId(sessionId)))?.participantId === identity.participantId
   }
 
+  /** Authorize one directory snapshot without rereading persistence for every foreign row. */
+  async accessibleNativeSessionIds(sessionIds: readonly string[], identity: ChatroomIdentity): Promise<ReadonlySet<string>> {
+    this.assertReady()
+    if (!this.config.authEnabled) return new Set(sessionIds)
+    if (sessionIds.length === 0) return new Set()
+    const headers = new Map((await this.ctx.sessionPersistence.list()).map(item => [String(item.header.id), item.header]))
+    const allowed = await Promise.all(sessionIds.map(id => this.canAccessNativeSession(id, identity, new Set(), headers)))
+    return new Set(sessionIds.filter((_, index) => allowed[index]))
+  }
+
   /** Only native subagents inherit access; a fork needs its own registered owner. */
   async canAccessNativeSession(sessionId: string, identity: ChatroomIdentity, visited = new Set<string>(), persistedHeaders?: ReadonlyMap<string, SessionHeader>): Promise<boolean> {
     this.assertReady()

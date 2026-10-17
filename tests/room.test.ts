@@ -22,6 +22,29 @@ import {
 } from '../src/message.js'
 
 describe('ChatroomRuntime', () => {
+  it('bounds directory authorization to one persistence read and rechecks ownership on each batch', async () => {
+    const { runtime, harness, alice, bob } = await authenticatedRoom()
+    try {
+      const own = await runtime.reserveSoloSession(alice)
+      const foreign = await runtime.reserveSoloSession(bob)
+      const headers = [
+        { id: 'own-child', origin: 'subagent', parentSession: own },
+        { id: 'own-grandchild', origin: 'subagent', parentSession: 'own-child' },
+        { id: 'foreign-child', origin: 'subagent', parentSession: foreign },
+        { id: 'cycle', origin: 'subagent', parentSession: 'cycle' },
+        ...Array.from({ length: 120 }, (_, i) => ({ id: `unowned-${i}` })),
+      ]
+      const list = vi.fn(async () => headers.map(header => ({ header, revision: 'fixture' })))
+      Object.assign(harness.ctx.sessionPersistence, { list })
+      const ids = [own, foreign, ...headers.map(header => header.id)]
+      expect(await runtime.accessibleNativeSessionIds(ids, alice)).toEqual(new Set([own, 'own-child', 'own-grandchild']))
+      expect(list).toHaveBeenCalledOnce()
+      await runtime.releaseSoloSession(own, alice)
+      expect(await runtime.accessibleNativeSessionIds(ids, alice)).toEqual(new Set())
+      expect(list).toHaveBeenCalledTimes(2)
+    } finally { await runtime.stop() }
+  })
+
   it('appends human chat without waking AI and wakes only on explicit mention', async () => {
     const harness = fakeHarness()
     const runtime = new ChatroomRuntime(harness.ctx, config())
