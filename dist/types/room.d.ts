@@ -134,6 +134,8 @@ export declare class ChatroomRuntime {
     soloSessionIds(identity: ChatroomIdentity): readonly string[];
     /** Test whether one native Session is an identity-owned Solo conversation. */
     ownsSoloSession(sessionId: string, identity: ChatroomIdentity): boolean;
+    /** Authorize one directory snapshot without rereading persistence for every foreign row. */
+    accessibleNativeSessionIds(sessionIds: readonly string[], identity: ChatroomIdentity): Promise<ReadonlySet<string>>;
     /** Only native subagents inherit access; a fork needs its own registered owner. */
     canAccessNativeSession(sessionId: string, identity: ChatroomIdentity, visited?: Set<string>, persistedHeaders?: ReadonlyMap<string, SessionHeader>): Promise<boolean>;
     /** Attribute a native fork to its creator before returning the child id to the browser. */

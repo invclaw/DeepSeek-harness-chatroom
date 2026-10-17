@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.4.9" src="https://img.shields.io/badge/version-1.4.9-4f6bff">
+    <img alt="版本 1.4.10" src="https://img.shields.io/badge/version-1.4.10-4f6bff">
     <img alt="Harness 0.2.0-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.2.0--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -109,6 +109,7 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.4.10** — 原生会话列表与控制流基线使用每批一次的持久目录快照授权，避免逐条重复读库；每次响应仍重新检查账号归属。
 - **1.4.9** — 在群聊前端专用 HTTP 路径中完整传递原生发送关联标识，确保群聊及分支的已接纳消息清除本地回显。
 - **1.4.8** — 群聊与分支保留原生发送请求标识及客户端时区，正式消息到达后清除乐观回显，并对重试请求去重，避免刷新前重复显示。
 - **1.4.7** — 按 Session 授权原生后台任务列表、输出和停止操作，隐藏无归属的操作员任务，修复任务列表订阅导致整个原生连接反复断开。

@@ -222,19 +222,19 @@ export class NativeGateway {
     if (endpoint === 'session/list' && record(value) && Array.isArray(value.items)) value = { ...value, items: value.items.map(item => this.roomSummary(item)) }
     if (this.config.authEnabled && Array.isArray(value)
       && (endpoint === 'sessionReferenceResolver/candidates' || endpoint === 'dynamicCordisRunner/inventory')) {
-      return await filterAsync(value, item => record(item)
-        ? this.canAccess(endpoint === 'sessionReferenceResolver/candidates' ? item.sessionId : item.agentId, identity)
-        : Promise.resolve(false))
+      return await this.filterSessions(value, item => record(item)
+        ? endpoint === 'sessionReferenceResolver/candidates' ? item.sessionId : item.agentId
+        : undefined, identity)
     }
     if (!this.config.authEnabled || !record(value)) return value
     const output = { ...value }
     if ((endpoint === 'session/list' || endpoint === 'session/search') && Array.isArray(output.items)) {
-      output.items = await filterAsync(output.items, item => record(item) ? this.canAccess(item.sessionId ?? item.id, identity) : Promise.resolve(false))
+      output.items = await this.filterSessions(output.items, item => record(item) ? item.sessionId ?? item.id : undefined, identity)
       // A truncated global search cannot disclose whether somebody else's results remain.
       if (endpoint === 'session/search') output.hasMore = false
     }
     if (endpoint.startsWith('workspace/')) {
-      for (const key of ['archivedSessionIds', 'pinnedSessionIds']) if (Array.isArray(output[key])) output[key] = await filterAsync(output[key], id => this.canAccess(id, identity))
+      for (const key of ['archivedSessionIds', 'pinnedSessionIds']) if (Array.isArray(output[key])) output[key] = await this.filterSessions(output[key], id => id, identity)
       if (record(output.workspace)) output.workspace = await this.filterWorkspace(output.workspace, identity)
     }
     return output
@@ -242,7 +242,7 @@ export class NativeGateway {
 
   private async filterWorkspace(value: RecordValue, identity: Identity): Promise<RecordValue> {
     const output = { ...value }
-    if (Array.isArray(output.sessionIds)) output.sessionIds = await filterAsync(output.sessionIds, id => this.canAccess(id, identity))
+    if (Array.isArray(output.sessionIds)) output.sessionIds = await this.filterSessions(output.sessionIds, id => id, identity)
     return output
   }
 
@@ -291,8 +291,7 @@ export class NativeGateway {
     }
     if (endpoint === 'session/control') {
       if (value.type === 'baseline' && record(value.value) && record(value.value.projections)) {
-        const projections: RecordValue = {}
-        for (const [id, projection] of Object.entries(value.value.projections)) if (await this.canAccess(id, identity)) projections[id] = projection
+        const projections = Object.fromEntries(await this.filterSessions(Object.entries(value.value.projections), ([id]) => id, identity))
         return { ...value, value: { ...value.value, projections } }
       }
       return await this.canAccess(value.sessionId, identity) ? value : undefined
@@ -304,8 +303,8 @@ export class NativeGateway {
         return { ...value, value: {
           ...baseline,
           items: await Promise.all(items.map(item => this.filterWorkspace(item as RecordValue, identity))),
-          archivedSessionIds: await filterAsync(Array.isArray(baseline.archivedSessionIds) ? baseline.archivedSessionIds : [], id => this.canAccess(id, identity)),
-          pinnedSessionIds: await filterAsync(Array.isArray(baseline.pinnedSessionIds) ? baseline.pinnedSessionIds : [], id => this.canAccess(id, identity)),
+          archivedSessionIds: await this.filterSessions(Array.isArray(baseline.archivedSessionIds) ? baseline.archivedSessionIds : [], id => id, identity),
+          pinnedSessionIds: await this.filterSessions(Array.isArray(baseline.pinnedSessionIds) ? baseline.pinnedSessionIds : [], id => id, identity),
         } }
       }
       if (value.type === 'upsert' && record(value.workspace)) {
@@ -440,6 +439,13 @@ export class NativeGateway {
     if (result.renewalCookie !== undefined) this.renewals.set(request, result.renewalCookie)
     if (result.account === undefined) throw new CarrierError(401, '请先登录。')
     return result.account
+  }
+  private async filterSessions<T>(values: readonly T[], sessionId: (value: T) => unknown, identity: Identity): Promise<T[]> {
+    if (!this.config.authEnabled) return [...values]
+    if (identity === undefined) return []
+    const ids = values.map(sessionId)
+    const allowed = await this.runtime.accessibleNativeSessionIds([...new Set(ids.filter((id): id is string => typeof id === 'string'))], identity)
+    return values.filter((_, index) => typeof ids[index] === 'string' && allowed.has(ids[index] as string))
   }
   private canAccess(id: unknown, identity: Identity): Promise<boolean> {
     return typeof id !== 'string' ? Promise.resolve(false) : !this.config.authEnabled ? Promise.resolve(true) : identity === undefined ? Promise.resolve(false) : this.runtime.canAccessNativeSession(id, identity)

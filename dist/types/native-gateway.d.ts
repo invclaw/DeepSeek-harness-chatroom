@@ -43,6 +43,7 @@ export declare class NativeGateway {
     upgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void>;
     close(): Promise<void>;
     private identity;
+    private filterSessions;
     private canAccess;
     private requireSession;
     private isAdmin;

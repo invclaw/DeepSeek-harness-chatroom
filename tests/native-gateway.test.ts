@@ -17,6 +17,7 @@ function fixture() {
     isReady: true,
     auth: { accountForRequest: vi.fn(async (token: string) => token === 'alice-token' && active ? { account } : {}) },
     canAccessNativeSession: vi.fn(async (id: string) => permitted.has(id)),
+    accessibleNativeSessionIds: vi.fn(async (ids: string[]) => new Set(ids.filter(id => permitted.has(id)))),
     ownsSoloSession: vi.fn((id: string) => id === 'alice-solo'),
     ownsSession: vi.fn((id: string) => id === 'shared-room'),
     assertPromptReferences: vi.fn(), ownNativeFork: vi.fn(), prepareNativeModelSession: vi.fn(), assertNativeFileAccess: vi.fn(),
@@ -74,6 +75,30 @@ describe('native Remote account gateway', () => {
       expect(output).not.toContain('Bob')
       expect(output).toContain('Alice')
     }
+    expect(f.runtime.canAccessNativeSession).not.toHaveBeenCalled()
+    expect(f.runtime.accessibleNativeSessionIds).toHaveBeenCalledTimes(2)
+  })
+  it('filters control baselines in batches and rechecks access on the next baseline', async () => {
+    const f = fixture()
+    const server = createServer()
+    server.on('upgrade', (req, socket, head) => { void f.gateway.upgrade(req, socket, head) })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const socket = new WebSocket(`ws://127.0.0.1:${(server.address() as { port: number }).port}/api/remote.mux`, { headers: { Cookie: 'chatroom-auth=alice-token' } })
+    try {
+      await once(socket, 'open')
+      socket.send(JSON.stringify({ type: 'open', streamId: 'control', endpoint: 'session/control', payload: { args: { request: {} } } }))
+      await vi.waitFor(() => expect(f.events).toHaveBeenCalledOnce())
+      for (const allowed of [true, false]) {
+        if (!allowed) f.permitted.delete('alice-solo')
+        const pending = once(socket, 'message')
+        f.push({ type: 'baseline', value: { projections: { 'alice-solo': { state: 'own' }, 'bob-solo': { state: 'private' } } } })
+        const [frame] = await pending
+        expect(JSON.parse(String(frame)).value.value.projections).toEqual(allowed ? { 'alice-solo': { state: 'own' } } : {})
+      }
+      expect(f.runtime.canAccessNativeSession).not.toHaveBeenCalled()
+      expect(f.runtime.accessibleNativeSessionIds).toHaveBeenCalledTimes(2)
+    } finally { socket.terminate(); await new Promise<void>(resolve => server.close(() => resolve())) }
   })
   it.each(['settings/describe', 'llm/listConfigurableProviders', 'credentials/set', 'dynamicCordisRunner/inventory', 'directoryPicker/list', 'workspace/create', 'terminal/open', 'unknown/execute'])('denies member operator endpoint %s', async method => {
     const f = fixture()

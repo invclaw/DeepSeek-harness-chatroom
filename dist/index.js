@@ -3487,6 +3487,15 @@ var ChatroomRuntime = class {
     this.assertReady();
     return this.requireSoloSessions().get(String(SessionId(sessionId)))?.participantId === identity.participantId;
   }
+  /** Authorize one directory snapshot without rereading persistence for every foreign row. */
+  async accessibleNativeSessionIds(sessionIds, identity) {
+    this.assertReady();
+    if (!this.config.authEnabled) return new Set(sessionIds);
+    if (sessionIds.length === 0) return /* @__PURE__ */ new Set();
+    const headers = new Map((await this.ctx.sessionPersistence.list()).map((item) => [String(item.header.id), item.header]));
+    const allowed = await Promise.all(sessionIds.map((id) => this.canAccessNativeSession(id, identity, /* @__PURE__ */ new Set(), headers)));
+    return new Set(sessionIds.filter((_, index) => allowed[index]));
+  }
   /** Only native subagents inherit access; a fork needs its own registered owner. */
   async canAccessNativeSession(sessionId, identity, visited = /* @__PURE__ */ new Set(), persistedHeaders) {
     this.assertReady();
@@ -8458,23 +8467,23 @@ var NativeGateway = class {
     if (endpoint === "session/projections") value = this.roomProjections(resourceId, value);
     if (endpoint === "session/list" && record(value) && Array.isArray(value.items)) value = { ...value, items: value.items.map((item) => this.roomSummary(item)) };
     if (this.config.authEnabled && Array.isArray(value) && (endpoint === "sessionReferenceResolver/candidates" || endpoint === "dynamicCordisRunner/inventory")) {
-      return await filterAsync(value, (item) => record(item) ? this.canAccess(endpoint === "sessionReferenceResolver/candidates" ? item.sessionId : item.agentId, identity) : Promise.resolve(false));
+      return await this.filterSessions(value, (item) => record(item) ? endpoint === "sessionReferenceResolver/candidates" ? item.sessionId : item.agentId : void 0, identity);
     }
     if (!this.config.authEnabled || !record(value)) return value;
     const output = { ...value };
     if ((endpoint === "session/list" || endpoint === "session/search") && Array.isArray(output.items)) {
-      output.items = await filterAsync(output.items, (item) => record(item) ? this.canAccess(item.sessionId ?? item.id, identity) : Promise.resolve(false));
+      output.items = await this.filterSessions(output.items, (item) => record(item) ? item.sessionId ?? item.id : void 0, identity);
       if (endpoint === "session/search") output.hasMore = false;
     }
     if (endpoint.startsWith("workspace/")) {
-      for (const key of ["archivedSessionIds", "pinnedSessionIds"]) if (Array.isArray(output[key])) output[key] = await filterAsync(output[key], (id) => this.canAccess(id, identity));
+      for (const key of ["archivedSessionIds", "pinnedSessionIds"]) if (Array.isArray(output[key])) output[key] = await this.filterSessions(output[key], (id) => id, identity);
       if (record(output.workspace)) output.workspace = await this.filterWorkspace(output.workspace, identity);
     }
     return output;
   }
   async filterWorkspace(value, identity) {
     const output = { ...value };
-    if (Array.isArray(output.sessionIds)) output.sessionIds = await filterAsync(output.sessionIds, (id) => this.canAccess(id, identity));
+    if (Array.isArray(output.sessionIds)) output.sessionIds = await this.filterSessions(output.sessionIds, (id) => id, identity);
     return output;
   }
   /** Recheck identity and resource access at each delivered native stream item. */
@@ -8521,8 +8530,7 @@ var NativeGateway = class {
     }
     if (endpoint === "session/control") {
       if (value.type === "baseline" && record(value.value) && record(value.value.projections)) {
-        const projections = {};
-        for (const [id, projection] of Object.entries(value.value.projections)) if (await this.canAccess(id, identity)) projections[id] = projection;
+        const projections = Object.fromEntries(await this.filterSessions(Object.entries(value.value.projections), ([id]) => id, identity));
         return { ...value, value: { ...value.value, projections } };
       }
       return await this.canAccess(value.sessionId, identity) ? value : void 0;
@@ -8534,8 +8542,8 @@ var NativeGateway = class {
         return { ...value, value: {
           ...baseline,
           items: await Promise.all(items.map((item) => this.filterWorkspace(item, identity))),
-          archivedSessionIds: await filterAsync(Array.isArray(baseline.archivedSessionIds) ? baseline.archivedSessionIds : [], (id) => this.canAccess(id, identity)),
-          pinnedSessionIds: await filterAsync(Array.isArray(baseline.pinnedSessionIds) ? baseline.pinnedSessionIds : [], (id) => this.canAccess(id, identity))
+          archivedSessionIds: await this.filterSessions(Array.isArray(baseline.archivedSessionIds) ? baseline.archivedSessionIds : [], (id) => id, identity),
+          pinnedSessionIds: await this.filterSessions(Array.isArray(baseline.pinnedSessionIds) ? baseline.pinnedSessionIds : [], (id) => id, identity)
         } };
       }
       if (value.type === "upsert" && record(value.workspace)) {
@@ -8693,6 +8701,13 @@ var NativeGateway = class {
     if (result.renewalCookie !== void 0) this.renewals.set(request, result.renewalCookie);
     if (result.account === void 0) throw new CarrierError(401, "\u8BF7\u5148\u767B\u5F55\u3002");
     return result.account;
+  }
+  async filterSessions(values, sessionId, identity) {
+    if (!this.config.authEnabled) return [...values];
+    if (identity === void 0) return [];
+    const ids = values.map(sessionId);
+    const allowed = await this.runtime.accessibleNativeSessionIds([...new Set(ids.filter((id) => typeof id === "string"))], identity);
+    return values.filter((_, index) => typeof ids[index] === "string" && allowed.has(ids[index]));
   }
   canAccess(id, identity) {
     return typeof id !== "string" ? Promise.resolve(false) : !this.config.authEnabled ? Promise.resolve(true) : identity === void 0 ? Promise.resolve(false) : this.runtime.canAccessNativeSession(id, identity);
