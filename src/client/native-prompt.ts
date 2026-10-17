@@ -70,6 +70,8 @@ export function installNativePromptIdentity(
         mode: payload.mode,
         content,
         ...(composition.reply === undefined ? {} : { reply: composition.reply }),
+        requestId: payload.requestId,
+        ...(payload.clientTimeZone === undefined ? {} : { clientTimeZone: payload.clientTimeZone }),
       }, signal)
     } else {
       await submitRoomPrompt({
@@ -77,6 +79,8 @@ export function installNativePromptIdentity(
         mode: payload.mode,
         content,
         ...(composition.reply === undefined ? {} : { reply: composition.reply }),
+        requestId: payload.requestId,
+        ...(payload.clientTimeZone === undefined ? {} : { clientTimeZone: payload.clientTimeZone }),
       }, signal)
     }
     store.completeComposition(composition)
