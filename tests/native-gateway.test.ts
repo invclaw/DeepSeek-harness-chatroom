@@ -1,5 +1,8 @@
 import { createServer, request as httpRequest } from 'node:http'
 import { once } from 'node:events'
+import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { WebSocket } from 'ws'
@@ -9,7 +12,7 @@ import type { Config } from '../src/config.js'
 
 const gateways: NativeGateway[] = []
 afterEach(async () => { await Promise.all(gateways.splice(0).map(gateway => gateway.close())) })
-function fixture() {
+function fixture(cwd = process.cwd(), workspaces: { id: string; path: string }[] = []) {
   let active = true
   const permitted = new Set(['alice-solo', 'shared-room'])
   const account = { participantId: 'alice', displayName: 'Alice', avatarId: 'whale', role: 'member' }
@@ -23,7 +26,7 @@ function fixture() {
     assertPromptReferences: vi.fn(), ownNativeFork: vi.fn(), prepareNativeModelSession: vi.fn(), assertNativeFileAccess: vi.fn(),
     reserveSoloSession: vi.fn(async () => 'alice-solo'), submitNativeSession: vi.fn(async () => false),
   } as unknown as ChatroomRuntime
-  const config = { cwd: process.cwd(), authEnabled: true, authCookieName: 'chatroom-auth', authPublicOrigin: '', nativeTrustedHosts: [], settingsAdminParticipantIds: [] } as unknown as Config
+  const config = { cwd, authEnabled: true, authCookieName: 'chatroom-auth', authPublicOrigin: '', nativeTrustedHosts: [], settingsAdminParticipantIds: [] } as unknown as Config
   const dispatch = vi.fn(async (request: Request) => {
     const body = await request.clone().json() as { rpcId: string }
     return Response.json({ type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: {} } })
@@ -43,7 +46,7 @@ function fixture() {
     }
   })
   const jobs = { get: vi.fn((id: string) => { if (id === 'own-job') return { owner: 'alice-solo' }; if (id === 'unowned-job') return {}; throw new Error('not found') }) }
-  const ctx = { jobs, typertGateway: { wireStream: { open: events, failure: () => ({ code: 'denied', message: 'Access denied', details: {} }) } }, workspaceRegistry: { list: () => [] } } as unknown as Context
+  const ctx = { jobs, typertGateway: { wireStream: { open: events, failure: () => ({ code: 'denied', message: 'Access denied', details: {} }) } }, workspaceRegistry: { list: () => workspaces } } as unknown as Context
   const gateway = new NativeGateway(ctx, runtime, config, dispatch)
   gateways.push(gateway)
   return { gateway, runtime, dispatch, permitted, events, account, jobs, revoke: () => { active = false }, push: (value: unknown) => { queue.push(value); notify() } }
@@ -100,7 +103,7 @@ describe('native Remote account gateway', () => {
       expect(f.runtime.accessibleNativeSessionIds).toHaveBeenCalledTimes(2)
     } finally { socket.terminate(); await new Promise<void>(resolve => server.close(() => resolve())) }
   })
-  it.each(['settings/describe', 'llm/listConfigurableProviders', 'credentials/set', 'dynamicCordisRunner/inventory', 'directoryPicker/list', 'workspace/create', 'terminal/open', 'unknown/execute'])('denies member operator endpoint %s', async method => {
+  it.each(['settings/describe', 'llm/listConfigurableProviders', 'credentials/set', 'dynamicCordisRunner/inventory', 'terminal/open', 'unknown/execute'])('denies member operator endpoint %s', async method => {
     const f = fixture()
     expect((await f.gateway.fetch(rpc(method))).status).toBe(403)
     expect(f.dispatch).not.toHaveBeenCalled()
@@ -175,6 +178,106 @@ describe('native Remote account gateway', () => {
     expect((await request.json()).payload.args.request).toEqual({ sessionId: 'alice-solo', cwd: process.cwd() })
     expect((await f.gateway.fetch(rpc('session/create', { cwd: '/' }))).status).toBe(403)
     expect(f.dispatch).toHaveBeenCalledOnce()
+  })
+  it('browses, registers and creates a Solo in a child workspace through native RPCs', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'chatroom-workspaces-'))
+    const child = join(root, 'project')
+    await mkdir(child)
+    const f = fixture(root, [{ id: 'project-id', path: child }])
+    const direct = (method: string, args: object) => new Request(`http://127.0.0.1/api/${method}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: 'chatroom-auth=alice-token' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'workspace', method, payload: { args } }),
+    })
+    try {
+      f.dispatch.mockImplementation(async request => {
+        const body = await request.clone().json()
+        if (body.method === 'directoryPicker/list') {
+          expect(body.payload.args.path).toBe(root)
+          return Response.json({ result: { ok: true, value: { path: root, home: '/operator-home', crumbs: [{ path: '/', name: '/' }, { path: root, name: 'root' }], entries: [{ path: child, name: 'project' }, { path: '/etc', name: 'outside' }], truncated: false } } })
+        }
+        return Response.json({ result: { ok: true, value: {} } })
+      })
+      const listing = await f.gateway.fetch(direct('directoryPicker/list', {}))
+      expect(listing.status).toBe(200)
+      expect((await listing.json()).result.value).toMatchObject({ home: root, crumbs: [{ path: root }], entries: [{ path: child }] })
+      expect((await f.gateway.fetch(rpc('workspace/create', { path: child }))).status).toBe(200)
+      expect((await f.gateway.fetch(rpc('session/create', { workspaceId: 'project-id' }))).status).toBe(200)
+      expect((await f.gateway.fetch(rpc('session/create', { cwd: child }))).status).toBe(200)
+      const last = await f.dispatch.mock.calls.at(-1)![0].json()
+      expect(last.payload.args.request.cwd).toBe(child)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+  it('rejects directory traversal and symlink escapes before native effects, including for admins', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'chatroom-workspaces-'))
+    await symlink(tmpdir(), join(root, 'escape'))
+    const f = fixture(root)
+    f.account.role = 'super-admin'
+    const direct = (method: string, args: object, token = 'alice-token') => new Request(`http://127.0.0.1/api/${method}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: `chatroom-auth=${token}` },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'workspace', method, payload: { args } }),
+    })
+    try {
+      for (const path of ['/', join(root, '..'), join(root, 'escape'), 'relative', root + '\u0000']) {
+        expect((await f.gateway.fetch(direct('directoryPicker/list', { path }))).status).toBe(403)
+        expect((await f.gateway.fetch(rpc('workspace/create', { path }))).status).toBe(403)
+      }
+      for (const name of ['..', '../escape', 'a/b', 'a\\b', '', 'a\u0000']) expect((await f.gateway.fetch(direct('directoryPicker/createDirectory', { path: root, name }))).status).toBe(403)
+      expect((await f.gateway.fetch(direct('directoryPicker/list', { path: '/', request: { path: root } }))).status).toBe(403)
+      expect((await f.gateway.fetch(direct('directoryPicker/createDirectory', { path: '/', name: 'outside', request: { path: root, name: 'safe' } }))).status).toBe(403)
+      expect((await f.gateway.fetch(direct('directoryPicker/list', {}, 'invalid'))).status).toBe(401)
+      expect(f.dispatch).not.toHaveBeenCalled()
+      expect((await f.gateway.fetch(direct('directoryPicker/createDirectory', { path: root, name: 'new-project' }))).status).toBe(200)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+  it('publishes child workspaces with only owned Sessions and applies shared workspace administrator authority', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'chatroom-workspaces-'))
+    const child = join(root, 'project')
+    await mkdir(child)
+    const workspaces = [{ id: 'root', path: root }, { id: 'child', path: child }, { id: 'outside', path: tmpdir() }]
+    const f = fixture(root, workspaces)
+    const server = createServer()
+    server.on('upgrade', (req, socket, head) => { void f.gateway.upgrade(req, socket, head) })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const socket = new WebSocket(`ws://127.0.0.1:${(server.address() as { port: number }).port}/api/remote.mux`, { headers: { Cookie: 'chatroom-auth=alice-token' } })
+    try {
+      await once(socket, 'open')
+      socket.send(JSON.stringify({ type: 'open', streamId: 'workspaces', endpoint: 'workspace/follow', payload: { args: {} } }))
+      await vi.waitFor(() => expect(f.events).toHaveBeenCalledOnce())
+      let received = once(socket, 'message')
+      f.push({ type: 'baseline', value: { items: workspaces.map(({ id, path }) => ({ workspaceId: id, path, sessionIds: ['alice-solo', 'bob-solo'] })) } })
+      let [frame] = await received
+      expect(JSON.parse(String(frame)).value.value.items).toEqual(workspaces.slice(0, 2).map(({ id, path }) => ({ workspaceId: id, path, sessionIds: ['alice-solo'] })))
+      received = once(socket, 'message')
+      f.push({ type: 'upsert', workspace: { path: child, sessionIds: ['alice-solo', 'bob-solo'] } })
+      ;[frame] = await received
+      expect(JSON.parse(String(frame)).value.workspace).toEqual({ path: child, sessionIds: ['alice-solo'] })
+      received = once(socket, 'message')
+      f.push({ type: 'upsert', workspace: { path: tmpdir(), sessionIds: [] } })
+      f.push({ type: 'order', workspaceIds: ['outside', 'child', 'root'] })
+      ;[frame] = await received
+      expect(JSON.parse(String(frame)).value).toEqual({ type: 'order', workspaceIds: ['child', 'root'] })
+      for (const method of ['workspace/rename', 'workspace/delete', 'workspace/insertBefore']) {
+        expect((await f.gateway.fetch(rpc(method, { workspaceId: 'child' }))).status).toBe(403)
+        f.account.role = 'super-admin'
+        expect((await f.gateway.fetch(rpc(method, { workspaceId: 'child' }))).status).toBe(200)
+        expect((await f.gateway.fetch(rpc(method, { workspaceId: 'outside' }))).status).toBe(403)
+        expect((await f.gateway.fetch(rpc(method, { workspaceId: 'child', beforeWorkspaceId: 'outside' }))).status).toBe(403)
+        f.account.role = 'member'
+      }
+      // Native registry deletion precedes the remove notification.
+      workspaces.splice(1, 1)
+      received = once(socket, 'message')
+      f.push({ type: 'remove', workspaceId: 'outside' })
+      f.push({ type: 'remove', workspaceId: 'child' })
+      ;[frame] = await received
+      expect(JSON.parse(String(frame)).value).toEqual({ type: 'remove', workspaceId: 'child' })
+      received = once(socket, 'message')
+      f.push({ type: 'remove', workspaceId: 'child' })
+      f.push({ type: 'order', workspaceIds: ['root'] })
+      ;[frame] = await received
+      expect(JSON.parse(String(frame)).value).toEqual({ type: 'order', workspaceIds: ['root'] })
+    } finally { socket.terminate(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }) }
   })
   it('routes group prompts through participant-aware intake', async () => {
     const f = fixture()

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createUserMessage, createAssistantMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, createAssistantMessage, createSystemMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { deferChatroomMessage, hideChatroomMessages, resetChatroomContext, restoreDeferredChatroomMessages } from '../src/model-history.js'
 
@@ -11,7 +11,7 @@ describe('durable native chatroom model visibility', () => {
     session.append('user/message', message, { surfaceOp: 'append' })
     deferChatroomMessage(session, String(message.id))
     restoreDeferredChatroomMessages(session, new Set())
-    expect(session.deriveMessages()).toEqual([])
+    expect(session.deriveMessages().map(message => message.source.kind)).toEqual(['chatroom-control'])
     const replay = Session.create(SessionId('replayed-deferred'), session.snapshotEvents())
     replay.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
     restoreDeferredChatroomMessages(replay, new Set())
@@ -30,7 +30,7 @@ describe('durable native chatroom model visibility', () => {
     if (mode === 'recall') hideChatroomMessages(session, new Set([String(message.id)]))
     else resetChatroomContext(session)
     restoreDeferredChatroomMessages(session, new Set(), true)
-    expect(session.deriveMessages()).toEqual([])
+    expect(session.deriveMessages().map(message => message.source.kind)).toEqual(['chatroom-control'])
   })
   it('retains append-origin messages while resetting model context across replay', () => {
     const session = Session.create(SessionId('reset'))
@@ -38,13 +38,22 @@ describe('durable native chatroom model visibility', () => {
     const message = createAssistantMessage({ content: [{ type: 'text', text: 'old assistant answer' }], source: { provider: 'test', model: 'test' } })
     session.append('assistant/message', { turn: 0, step: 0, message, stream: [] }, { surfaceOp: 'append' })
     resetChatroomContext(session)
-    expect(session.deriveMessages()).toEqual([])
+    expect(session.deriveMessages().map(message => message.source.kind)).toEqual(['chatroom-control'])
     expect(session.snapshotEvents().filter(event => event.surfaceOp === 'append')).toHaveLength(2)
     const replay = Session.create(SessionId('replay'), session.snapshotEvents())
-    expect(replay.deriveMessages()).toEqual([])
+    expect(replay.deriveMessages().map(message => message.source.kind)).toEqual(['chatroom-control'])
     replay.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'new discussion' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
     expect(JSON.stringify(replay.deriveMessages())).toContain('new discussion')
     expect(JSON.stringify(replay.deriveMessages())).not.toContain('old human discussion')
+  })
+  it('preserves native system instructions while resetting human context', () => {
+    const session = Session.create(SessionId('reset-system'))
+    const system = createSystemMessage('system instructions')
+    session.append('system/message', { turn: 1, step: 1, message: system }, { surfaceOp: 'append' })
+    session.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'old discussion' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    resetChatroomContext(session)
+    expect(session.deriveMessages()[0]).toEqual(system)
+    expect(JSON.stringify(session.deriveMessages())).not.toContain('old discussion')
   })
   it('removes only the recalled message from future requests and stays idempotent', () => {
     const session = Session.create(SessionId('recall'))

@@ -992,9 +992,16 @@ export class ChatroomClientStore implements HostObservable<ChatroomView> {
     const roomId = this.pendingOpenRoomId
     if (roomId === undefined) return
     const room = this.snapshot.rooms.find(candidate => candidate.id === roomId)
-    if (room === undefined || !this.openSession(room.sessionId)) return
+    if (room === undefined) return
+    // Host navigation can synchronously publish another Session list update.
     this.pendingOpenRoomId = undefined
-    this.set({ open: false, error: undefined })
+    let opened = false
+    try {
+      opened = this.openSession(room.sessionId)
+    } finally {
+      if (!opened && this.pendingOpenRoomId === undefined) this.pendingOpenRoomId = roomId
+    }
+    if (opened) this.set({ open: false, error: undefined })
   }
 
   /** Track native navigation without changing unbound native Sessions into shared rooms. */

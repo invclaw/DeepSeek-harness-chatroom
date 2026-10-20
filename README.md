@@ -3,7 +3,7 @@
   <p><strong>A multi-user collaboration layer for the native DeepSeek Harness Web UI.</strong></p>
   <p><a href="README.zh.md">简体中文</a> · English</p>
   <p>
-    <img alt="Version 1.4.11" src="https://img.shields.io/badge/version-1.4.11-4f6bff">
+    <img alt="Version 1.4.12" src="https://img.shields.io/badge/version-1.4.12-4f6bff">
     <img alt="Harness 0.2.0-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.2.0--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -109,6 +109,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Initializati
 <details>
 <summary><strong>Recent releases</strong></summary>
 
+- **1.4.12** — restore native directory browsing, folder creation and child Workspaces within the shared root; Solo creation and Workspace streams follow the selected directory while retaining per-account Session filtering. Keep the Group/Solo chooser in the native input dock across welcome rerenders; prevent reentrant search navigation and persist recalls through valid native context injections.
 - **1.4.11** — optional `deepseek-harness-chatroom/settings` host entry retains native forms and revision checks while selecting Host persistence from server-confirmed administrator capability on domain URLs; settings invalidations remain administrator-only.
 - **1.4.10** — authorize native session directories and control baselines using one persistence snapshot per batch, avoiding repeated full-directory reads while rechecking ownership on every response.
 - **1.4.9** — carry native composer correlation through the shared-room HTTP path as well as native Remote, so accepted room/branch messages retire their local echoes.

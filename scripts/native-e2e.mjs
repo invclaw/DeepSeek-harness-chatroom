@@ -55,7 +55,7 @@ async function api(endpoint, user, body, status = 200) {
   return response.json()
 }
 async function rpc(method, user, input = {}, status = 200) {
-  const args = method === 'settings/describe' ? {} : method === 'session/list' ? { _request: input } : { request: input }
+  const args = method.startsWith('directoryPicker/') ? input : method === 'settings/describe' ? {} : method === 'session/list' ? { _request: input } : { request: input }
   const response = await request(`/api/${method}`, user, { type: 'client-request', rpcId: randomUUID(), method, payload: { args } })
   assert.equal(response.status, status, `Native ${method} status`)
   if (status !== 200) return
@@ -115,6 +115,11 @@ try {
   const bob = await register('smoke-bob')
   const room = (await api('/rooms', alice, { title: 'Alice private group' }, 201)).room
   await api('/prompt', alice, { roomId: room.id, mode: 'queue', content: [{ type: 'text', text: 'private group history' }] })
+  const history = await api('/search?q=private%20group%20history', alice)
+  const ownMessage = history.results.find(item => item.kind === 'message' && item.conversationId === room.id)
+  assert(ownMessage?.messageId, 'Own group message missing from search')
+  await api('/messages/recall', alice, { roomId: room.id, messageId: ownMessage.messageId })
+  await api('/prompt', alice, { roomId: room.id, mode: 'queue', content: [{ type: 'text', text: 'message after recall' }] })
   const thread = (await api('/threads/open', alice, { roomId: room.id, root: { messageId: 'smoke-root', displayName: 'smoke-alice', text: 'branch context', role: 'human' } })).thread
   const solo = await rpc('session/create', alice)
   await rpc('session/rename', alice, { sessionId: solo.sessionId, title: 'Alice private Solo' })
@@ -128,7 +133,21 @@ try {
     await rpc('session/page', alice, { address: { kind: 'session', sessionId }, throughSeq: -1 })
   }
   await rpc('settings/describe', bob, {}, 403)
-  await rpc('directoryPicker/list', bob, {}, 403)
+  const listing = await rpc('directoryPicker/list', bob)
+  assert.equal(listing.path, workspace)
+  assert.equal(listing.home, workspace)
+  assert(listing.crumbs.every(crumb => crumb.path === workspace || crumb.path.startsWith(workspace + '/')))
+  const childPath = await rpc('directoryPicker/createDirectory', bob, { path: workspace, name: 'member-project' })
+  const registered = await rpc('workspace/create', bob, { path: childPath })
+  const childDraft = await rpc('session/create', bob, { workspaceId: registered.workspace.workspaceId })
+  const childList = await rpc('session/list', bob)
+  assert(childList.items.some(item => (item.sessionId ?? item.id) === childDraft.sessionId && item.cwd === childPath), 'Added workspace did not create a native draft in its directory')
+  for (const user of [admin, bob]) {
+    await rpc('directoryPicker/list', user, { path: '/' }, 403)
+    await rpc('workspace/create', user, { path: '/' }, 403)
+  }
+  await rpc('workspace/delete', bob, { workspaceId: registered.workspace.workspaceId }, 403)
+
   await rpc('session/create', bob, { cwd: '/' }, 403)
   await rpc('settings/describe', admin)
   const list = JSON.stringify(await rpc('session/list', bob))
@@ -142,6 +161,11 @@ try {
   await live.wait('control')
   live.open('workspace', 'workspace/follow')
   await live.wait('workspace')
+  await rpc('workspace/delete', admin, { workspaceId: registered.workspace.workspaceId })
+  const removed = () => live.frames.some(frame => frame.streamId === 'workspace' && frame.type === 'item' && frame.value?.type === 'remove' && frame.value.workspaceId === registered.workspace.workspaceId)
+  for (let attempt = 0; attempt < 100 && !removed(); attempt++) await delay(50)
+  assert(removed(), 'Workspace removal was not delivered to an existing member subscription')
+
   assert(!JSON.stringify(live.frames).includes(room.sessionId), 'Remote baseline leaked foreign group')
   const hidden = await rpc('session/create', alice)
   const visible = await rpc('session/create', bob)
@@ -160,7 +184,7 @@ try {
   await live.wait('shared-follow', 'error')
   await api('/admin', admin, { action: 'update-user', userId: alice.identity.participantId, status: 'disabled' })
   await rpc('session/list', alice, {}, 401)
-  console.log(JSON.stringify({ status: 'passed', accounts: 3, boundary: 'real DSH HTTP + Remote WS', checked: ['group/branch/Solo isolation', 'list and stream baseline filtering', 'operator endpoint denial', 'directory denial', 'configured cwd', 'membership grant', 'HTTP and active-stream logout revocation'] }, null, 2))
+  console.log(JSON.stringify({ status: 'passed', accounts: 3, boundary: 'real DSH HTTP + Remote WS', checked: ['group/branch/Solo isolation', 'durable recall and subsequent send', 'list and stream baseline filtering', 'operator endpoint denial', 'scoped directory browsing and child Workspace creation', 'configured cwd', 'membership grant', 'HTTP and active-stream logout revocation'] }, null, 2))
 } catch (error) {
   let safe = diagnostic.replace(/([?&]token=)[^\s&]+/gu, '$1<redacted>')
   for (const value of [environment.DSH_CHATROOM_AUTH_SECRET, bootstrapToken]) safe = safe.replaceAll(value, '<redacted>')

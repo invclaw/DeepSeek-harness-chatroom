@@ -1,7 +1,6 @@
 /** Chatroom authorization boundary around the native DSH Remote carrier. */
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { realpath } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import type { Context } from '@deepseek-ai/cordis'
@@ -12,6 +11,7 @@ import { HostConnectionService, type ConnectionFetchHandler } from '@deepseek-ai
 import { WebSocket, WebSocketServer } from 'ws'
 import type { Config } from './config.js'
 import { cookieValue } from './cookies.js'
+import { WorkspaceScope } from './workspace-scope.js'
 import { canManageNativeSettings } from './settings-access.js'
 import type { ChatroomIdentity } from './types.js'
 import { ChatroomInputError, type ChatroomRuntime, type NativePromptMetadata } from './room.js'
@@ -20,6 +20,8 @@ const MUX_PATH = '/api/remote.mux'
 const PUBLIC = new Set(['session/list', 'session/search', 'session/control', 'workspace/follow', 'agentPresets/list', 'session/modelCatalog', 'session/canOpenWorkspacePath', 'llm/listProviders', 'permissionPresets/catalog'])
 const SESSION = new Set(['job/list', 'job/follow', 'job/kill', 'session/page', 'session/follow', 'session/projections', 'session/selectModel', 'session/rename', 'session/fork', 'session/prompt', 'session/attachment', 'session/cancel', 'session/updateQueue', 'skills/list', 'fileReferences/list', 'fileUploads/upload', 'userQuestions/answer', 'userQuestions/attachWait', 'messageFeedback/list', 'messageFeedback/put', 'messageFeedback/delete', 'agentPresets/select', 'commands/list', 'commands/execute', 'sessionReferenceResolver/candidates', 'goals/get', 'goals/create', 'goals/edit', 'goals/pause', 'goals/resume', 'goals/complete', 'goals/clear', 'workspace/archiveSession', 'workspace/unarchiveSession', 'workspace/pinSession', 'workspace/unpinSession', 'workspace/insertSessionBefore'])
 const ADMIN = new Set(['settings/describe', 'settings/update', 'settings/replace', 'settings/mutate', 'settings/openSettingsDocument', 'credentials/describe', 'credentials/set', 'credentials/unset', 'llm/listConfigurableProviders', 'llm/discoverModels', 'agentPresets/read', 'dynamicCordisRunner/inventory', 'dynamicCordisRunner/syncInspectManifest', 'pluginManager/listBundles', 'pluginManager/listPlugins', 'pluginInventory/list'])
+const WORKSPACE_ADMIN = new Set(['workspace/rename', 'workspace/delete', 'workspace/insertBefore'])
+const DIRECTORY = new Set(['directoryPicker/list', 'directoryPicker/createDirectory'])
 const GLOBAL_EVENTS = new Set(['llm/adapters-updated', 'permission-presets/catalog-changed'])
 type RecordValue = Record<string, unknown>
 type Identity = ChatroomIdentity | undefined
@@ -67,8 +69,9 @@ export class NativeGateway {
   private readonly generations = new Map<string, { participantId: string | undefined; deliveries: Map<string, string> }>()
   private stopped = false
   private readonly renewals = new WeakMap<Request, string>()
+  private readonly workspaceScope: WorkspaceScope
   constructor(private readonly ctx: Context, private readonly runtime: ChatroomRuntime,
-    private readonly config: Config, private readonly dispatch: FetchHandler) {}
+    private readonly config: Config, private readonly dispatch: FetchHandler) { this.workspaceScope = new WorkspaceScope(config.cwd) }
 
   async fetch(request: Request): Promise<Response> {
     try {
@@ -94,7 +97,7 @@ export class NativeGateway {
         await this.authorize(endpoint, body.payload, identity)
         if (endpoint === '$events/result' && record(body.payload.args)) eventResult = body.payload.args
         const args = record(body.payload.args) ? body.payload.args : {}
-        const input = record(args.request) ? args.request : args
+        const input = DIRECTORY.has(endpoint) ? args : record(args.request) ? args.request : args
         resourceId = sessionResourceId(input, args)
         if (endpoint === 'workspace/initializeDefault') {
           // The native default points at the operator's Documents directory.
@@ -106,9 +109,12 @@ export class NativeGateway {
           } }, identity)
           return this.success(body.rpcId, value, request)
         }
+        if (this.config.authEnabled && (DIRECTORY.has(endpoint) || endpoint === 'workspace/create')) {
+          authorizedRequest = new Request(request.url, { method: request.method, headers: request.headers, signal: request.signal, body: JSON.stringify(body) })
+        }
         if (endpoint === 'session/create') {
           if (identity !== undefined && input.sessionId === undefined) input.sessionId = await this.runtime.reserveSoloSession(identity)
-          if (input.workspaceId === undefined) input.cwd = this.config.cwd
+          if (input.workspaceId === undefined && input.cwd === undefined) input.cwd = this.config.cwd
           authorizedRequest = new Request(request.url, { method: request.method, headers: request.headers, signal: request.signal, body: JSON.stringify(body) })
         }
         if (endpoint === 'session/prompt' && identity !== undefined && typeof input.sessionId === 'string'
@@ -166,13 +172,28 @@ export class NativeGateway {
     }
     if (!record(payload.args)) throw new CarrierError(400, 'Invalid Remote arguments')
     const args = payload.args
-    const input = record(args.request) ? args.request : args
+    const input = DIRECTORY.has(endpoint) ? args : record(args.request) ? args.request : args
     if (PUBLIC.has(endpoint) || endpoint === 'workspace/initializeDefault') return
+    if (DIRECTORY.has(endpoint) || endpoint === 'workspace/create') {
+      if (endpoint === 'directoryPicker/createDirectory' && (typeof input.name !== 'string' || input.name.trim() === '' || input.name === '.' || input.name === '..' || /[/\\\u0000-\u001f\u007f]/u.test(input.name))) throw new CarrierError(403, '文件夹名称不可用。')
+      const path = input.path ?? (endpoint === 'directoryPicker/list' ? this.config.cwd : undefined)
+      try { input.path = await this.workspaceScope.resolve(path) }
+      catch { throw new CarrierError(403, '请选择共享工作区内的目录。') }
+      return
+    }
+    if (WORKSPACE_ADMIN.has(endpoint)) {
+      if (!this.isAdmin(identity)) throw new CarrierError(403, '仅管理员可修改共享工作区。')
+      await this.requireWorkspace(input.workspaceId)
+      if (input.beforeWorkspaceId !== undefined) await this.requireWorkspace(input.beforeWorkspaceId)
+      return
+    }
     if (endpoint === 'session/create') {
-      if (input.cwd !== undefined && input.cwd !== this.config.cwd) throw new CarrierError(403, '只能在聊天室工作区创建会话。')
+      if (input.cwd !== undefined) {
+        try { input.cwd = await this.workspaceScope.resolve(input.cwd) }
+        catch { throw new CarrierError(403, '只能在共享工作区内创建会话。') }
+      }
       if (input.workspaceId !== undefined) {
-        const workspace = this.ctx.workspaceRegistry.list().find(workspace => workspace.id === input.workspaceId)
-        if (workspace === undefined || !await samePath(workspace.path, this.config.cwd)) throw new CarrierError(403, '工作区不可用。')
+        await this.requireWorkspace(input.workspaceId)
       }
       if (input.sessionId !== undefined && (typeof input.sessionId !== 'string' || !this.runtime.ownsSoloSession(input.sessionId, identity))) throw new CarrierError(403, '请先预留自己的 Solo 会话。')
       return
@@ -193,8 +214,7 @@ export class NativeGateway {
       }
       if (input.beforeSessionId !== undefined) await this.requireSession(input.beforeSessionId, identity)
       if (input.workspaceId !== undefined) {
-        const workspace = this.ctx.workspaceRegistry.list().find(workspace => workspace.id === input.workspaceId)
-        if (workspace === undefined || !await samePath(workspace.path, this.config.cwd)) throw new CarrierError(403, '工作区不可用。')
+        await this.requireWorkspace(input.workspaceId)
       }
       if (endpoint === 'session/updateQueue' && this.runtime.ownsSession(String(input.sessionId))) throw new CarrierError(403, '请通过群聊队列操作自己的消息。')
       if ((endpoint === 'session/prompt' || endpoint === 'commands/execute') && typeof input.sessionId === 'string') await this.runtime.prepareNativeModelSession(input.sessionId)
@@ -234,6 +254,11 @@ export class NativeGateway {
       // A truncated global search cannot disclose whether somebody else's results remain.
       if (endpoint === 'session/search') output.hasMore = false
     }
+    if (endpoint === 'directoryPicker/list' && this.config.authEnabled) {
+      const root = await this.workspaceScope.resolve(this.config.cwd)
+      output.home = root
+      for (const key of ['crumbs', 'entries']) if (Array.isArray(output[key])) output[key] = await filterAsync(output[key], row => record(row) ? this.workspaceScope.contains(row.path, root) : Promise.resolve(false))
+    }
     if (endpoint.startsWith('workspace/')) {
       for (const key of ['archivedSessionIds', 'pinnedSessionIds']) if (Array.isArray(output[key])) output[key] = await this.filterSessions(output[key], id => id, identity)
       if (record(output.workspace)) output.workspace = await this.filterWorkspace(output.workspace, identity)
@@ -248,7 +273,7 @@ export class NativeGateway {
   }
 
   /** Recheck identity and resource access at each delivered native stream item. */
-  private async filterFrame(endpoint: string, value: unknown, identity: Identity, clientId: string | undefined, resourceId?: unknown): Promise<unknown | undefined> {
+  private async filterFrame(endpoint: string, value: unknown, identity: Identity, clientId: string | undefined, resourceId: unknown, publishedWorkspaces: Set<string>): Promise<unknown | undefined> {
     if (record(value)) {
       if (endpoint === 'session/follow' && value.type === 'snapshot') value = { ...value, projections: this.roomProjections(resourceId, value.projections) }
       else if (endpoint === 'session/control' && value.type === 'baseline' && record(value.value) && record(value.value.projections)) {
@@ -301,7 +326,9 @@ export class NativeGateway {
     if (endpoint === 'workspace/follow') {
       if (value.type === 'baseline' && record(value.value)) {
         const baseline = value.value
-        const items = Array.isArray(baseline.items) ? await filterAsync(baseline.items, item => record(item) && typeof item.path === 'string' ? samePath(item.path, this.config.cwd) : Promise.resolve(false)) : []
+        const items = Array.isArray(baseline.items) ? await filterAsync(baseline.items, item => record(item) && typeof item.path === 'string' ? this.workspaceScope.contains(item.path) : Promise.resolve(false)) : []
+        publishedWorkspaces.clear()
+        for (const item of items) if (record(item) && typeof item.workspaceId === 'string') publishedWorkspaces.add(item.workspaceId)
         return { ...value, value: {
           ...baseline,
           items: await Promise.all(items.map(item => this.filterWorkspace(item as RecordValue, identity))),
@@ -310,13 +337,15 @@ export class NativeGateway {
         } }
       }
       if (value.type === 'upsert' && record(value.workspace)) {
-        if (typeof value.workspace.path !== 'string' || !await samePath(value.workspace.path, this.config.cwd)) return undefined
+        if (typeof value.workspace.path !== 'string' || !await this.workspaceScope.contains(value.workspace.path)) return undefined
+        if (typeof value.workspace.workspaceId === 'string') publishedWorkspaces.add(value.workspace.workspaceId)
         return { ...value, workspace: await this.filterWorkspace(value.workspace, identity) }
       }
+      if (value.type === 'remove') return typeof value.workspaceId === 'string' && publishedWorkspaces.delete(value.workspaceId) ? value : undefined
       if (value.type === 'archived' || value.type === 'pinned') return await this.filterValue(endpoint, value, identity)
-      // Workspace order is deployment-wide; disclose only the configured workspace.
+      // Workspace registration is shared; Session IDs are still filtered per account.
       const workspaces = this.ctx.workspaceRegistry.list()
-      const visible = new Set((await filterAsync(workspaces, item => samePath(item.path, this.config.cwd))).map(item => String(item.id)))
+      const visible = new Set((await filterAsync(workspaces, item => this.workspaceScope.contains(item.path))).map(item => String(item.id)))
       if (value.type === 'order' && Array.isArray(value.workspaceIds)) return { ...value, workspaceIds: value.workspaceIds.filter(id => visible.has(String(id))) }
       return undefined
     }
@@ -397,6 +426,7 @@ export class NativeGateway {
           const entry = { abort: new AbortController(), endpoint: frame.endpoint, payload: frame.payload } as { abort: AbortController; endpoint: string; payload: RecordValue; clientId?: string }
           streams.set(id, entry)
           const pump = (async () => {
+            const publishedWorkspaces = new Set<string>()
             try {
               const source = await this.ctx.typertGateway.wireStream.open(entry.endpoint, entry.payload, (async function* () {})(), undefined, entry.abort.signal)
               for await (const value of source) {
@@ -405,7 +435,7 @@ export class NativeGateway {
                 await this.authorize(entry.endpoint, entry.payload, current)
                 const args = record(entry.payload.args) ? entry.payload.args : {}
                 const input = record(args.request) ? args.request : args
-                const filtered = await this.filterFrame(entry.endpoint, value, current, entry.clientId, sessionResourceId(input, args))
+                const filtered = await this.filterFrame(entry.endpoint, value, current, entry.clientId, sessionResourceId(input, args), publishedWorkspaces)
                 if (record(filtered) && filtered.type === 'ready' && typeof filtered.clientId === 'string') entry.clientId = filtered.clientId
                 if (filtered !== undefined) send({ type: 'item', streamId: id, value: filtered })
               }
@@ -455,6 +485,10 @@ export class NativeGateway {
   private async requireSession(id: unknown, identity: Identity): Promise<void> {
     if (!await this.canAccess(id, identity)) throw new CarrierError(403, '会话不存在或你无权访问。')
   }
+  private async requireWorkspace(id: unknown): Promise<void> {
+    const workspace = this.ctx.workspaceRegistry.list().find(workspace => workspace.id === id)
+    if (workspace === undefined || !await this.workspaceScope.contains(workspace.path)) throw new CarrierError(403, '工作区不可用。')
+  }
   private isAdmin(identity: Identity): boolean {
     return canManageNativeSettings(this.config, identity)
   }
@@ -490,5 +524,4 @@ function sessionResourceId(input: RecordValue, args: RecordValue): unknown {
   return input.sessionId ?? input.agentId ?? address.sessionId ?? address.childSessionId ?? args.agentId
 }
 async function filterAsync<T>(values: readonly T[], include: (value: T) => Promise<boolean>): Promise<T[]> { const allowed = await Promise.all(values.map(include)); return values.filter((_, index) => allowed[index]) }
-async function samePath(left: string, right: string): Promise<boolean> { try { return await realpath(left) === await realpath(right) } catch { return false } }
 function nodeHeaders(request: IncomingMessage): Headers { const headers = new Headers(); for (const [name, value] of Object.entries(request.headers)) if (value !== undefined) for (const item of Array.isArray(value) ? value : [value]) headers.append(name, item); return headers }

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { useSyncExternalStore } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NewGroupSetupDock } from '../src/client/NewGroupSetupDock.js'
@@ -28,7 +29,7 @@ describe('blank Session mode switch', () => {
     expect(chooseNewSessionMode).toHaveBeenCalledWith('native-session', 'group')
   })
 
-  it('reuses the native Harness welcome hero', () => {
+  it('keeps the mode switch visible when the native welcome content is replaced', () => {
     document.body.innerHTML = `
       <div data-native-composer>
         <div data-native-root>
@@ -37,31 +38,33 @@ describe('blank Session mode switch', () => {
             <div data-native-body></div>
           </div>
         </div>
-        <button aria-label="选择工作区"><span>deepseek-harness</span></button>
+        <button aria-label="选择工作区"><span>project-directory</span></button>
       </div>
     `
-    const { rerender, unmount } = render(<NewGroupSetupDock {...dockProps('group')} />)
-
-    expect(screen.getByText('今天有什么工作要处理？')).toBeTruthy()
-    expect(document.querySelector('[data-native-body] [aria-label="新会话模式"]')).toBeTruthy()
-    expect(document.querySelector('[data-dsh-chatroom-new-session-hero]')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '选择工作区' }).textContent).toBe('群聊')
-    expect(screen.getByRole('button', { name: '选择工作区' }).getAttribute('title'))
-      .toBe('当前会话类型：群聊；工作区：deepseek-harness')
-
+    const { rerender } = render(<NewGroupSetupDock {...dockProps('group')} />)
+    document.querySelector('[data-native-root]')!.replaceChildren(document.createElement('div'))
     rerender(<NewGroupSetupDock {...dockProps('solo')} />)
-    expect(screen.getByRole('button', { name: '选择工作区' }).textContent).toBe('Solo')
-
-    unmount()
-    expect(screen.getByText('探索未至之境')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '选择工作区' }).textContent).toBe('deepseek-harness')
+    expect(screen.getByRole('group', { name: '新会话模式' }).isConnected).toBe(true)
+    expect(screen.getByRole('button', { name: 'Solo' }).getAttribute('data-active')).toBe('true')
+    expect(screen.getByRole('button', { name: '选择工作区' }).textContent).toBe('project-directory')
   })
 
   it('registers a blank native Session when the Session list has not reported it yet', () => {
-    const registerNewSession = vi.fn()
-    render(<NewGroupSetupDock {...dockProps(undefined, undefined, true, registerNewSession)} />)
+    let snapshot = { newSessionModes: {} } as unknown as ChatroomView
+    const listeners = new Set<() => void>()
+    const props = dockProps(undefined)
+    props.useChatroom = selector => useSyncExternalStore(listener => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    }, () => selector(snapshot))
+    const registerNewSession = vi.fn(() => {
+      snapshot = { ...snapshot, newSessionModes: { 'native-session': 'group' } }
+      for (const listener of listeners) listener()
+    })
+    render(<NewGroupSetupDock {...props} registerNewSession={registerNewSession} />)
 
     expect(registerNewSession).toHaveBeenCalledWith('native-session')
+    expect(screen.getByRole('group', { name: '新会话模式' }).getAttribute('data-mode')).toBe('group')
   })
 
   it('stays absent after the Session has messages', () => {
@@ -78,6 +81,7 @@ function dockProps(
 ): Parameters<typeof NewGroupSetupDock>[0] {
   const snapshot = {
     phase: 'ready',
+    newSessionModes: mode === undefined ? {} : { 'native-session': mode },
     room: undefined,
     rooms: [],
     identity: { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' },

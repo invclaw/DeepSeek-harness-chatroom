@@ -327,14 +327,13 @@ function installChatroom(ctx: ClientContext, initialSession?: Awaited<ReturnType
     }),
   }, ChatroomSessionControls))
 
-  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
-    name: 'conversation.composer.dock',
+  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock',
     id: 'chatroom-group-setup',
     order: -30,
     inject: () => ({
       hooks: { chatroom: store },
       registerNewSession: store.registerNewSession,
-      newSessionMode: store.newSessionMode,
       chooseNewSessionMode: store.chooseNewSessionMode,
     }),
   }, NewGroupSetupDock))

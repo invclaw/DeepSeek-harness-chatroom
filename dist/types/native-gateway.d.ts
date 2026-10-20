@@ -27,6 +27,7 @@ export declare class NativeGateway {
     private readonly generations;
     private stopped;
     private readonly renewals;
+    private readonly workspaceScope;
     constructor(ctx: Context, runtime: ChatroomRuntime, config: Config, dispatch: FetchHandler);
     fetch(request: Request): Promise<Response>;
     private success;
@@ -46,6 +47,7 @@ export declare class NativeGateway {
     private filterSessions;
     private canAccess;
     private requireSession;
+    private requireWorkspace;
     private isAdmin;
     private assertOrigin;
 }
