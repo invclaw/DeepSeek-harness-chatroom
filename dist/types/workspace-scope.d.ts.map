@@ -1,0 +1,1 @@
+{"version":3,"file":"workspace-scope.d.ts","sourceRoot":"","sources":["../../src/workspace-scope.ts"],"names":[],"mappings":"AAGA,sFAAsF;AACtF,qBAAa,cAAc;IACb,OAAO,CAAC,QAAQ,CAAC,GAAG;gBAAH,GAAG,EAAE,MAAM;IAElC,OAAO,CAAC,IAAI,EAAE,OAAO,EAAE,IAAI,CAAC,EAAE,MAAM,GAAG,OAAO,CAAC,MAAM,CAAC;IAStD,QAAQ,CAAC,IAAI,EAAE,OAAO,EAAE,IAAI,CAAC,EAAE,MAAM,GAAG,OAAO,CAAC,OAAO,CAAC;CAG/D"}

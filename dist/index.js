@@ -8273,13 +8273,42 @@ function safeReturnPath(value) {
 // src/native-gateway.ts
 import { randomUUID as randomUUID4 } from "crypto";
 import { once } from "events";
-import { realpath } from "fs/promises";
 import { HostConnectionService } from "@deepseek-ai/dsh-client-connection";
 import { WebSocket, WebSocketServer } from "ws";
+
+// src/workspace-scope.ts
+import { realpath, stat as stat2 } from "fs/promises";
+import { isAbsolute as isAbsolute5, relative, sep } from "path";
+var WorkspaceScope = class {
+  constructor(cwd) {
+    this.cwd = cwd;
+  }
+  cwd;
+  async resolve(path, root) {
+    if (typeof path !== "string" || !isAbsolute5(path) || /[\u0000-\u001f\u007f]/u.test(path)) throw new Error("Invalid workspace directory");
+    const canonicalRoot = root ?? await realpath(this.cwd);
+    const canonical = await realpath(path);
+    const child = relative(canonicalRoot, canonical);
+    if (isAbsolute5(child) || child === ".." || child.startsWith(`..${sep}`) || !(await stat2(canonical)).isDirectory()) throw new Error("Workspace directory is outside the shared root");
+    return canonical;
+  }
+  async contains(path, root) {
+    try {
+      await this.resolve(path, root);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+
+// src/native-gateway.ts
 var MUX_PATH = "/api/remote.mux";
 var PUBLIC = /* @__PURE__ */ new Set(["session/list", "session/search", "session/control", "workspace/follow", "agentPresets/list", "session/modelCatalog", "session/canOpenWorkspacePath", "llm/listProviders", "permissionPresets/catalog"]);
 var SESSION = /* @__PURE__ */ new Set(["job/list", "job/follow", "job/kill", "session/page", "session/follow", "session/projections", "session/selectModel", "session/rename", "session/fork", "session/prompt", "session/attachment", "session/cancel", "session/updateQueue", "skills/list", "fileReferences/list", "fileUploads/upload", "userQuestions/answer", "userQuestions/attachWait", "messageFeedback/list", "messageFeedback/put", "messageFeedback/delete", "agentPresets/select", "commands/list", "commands/execute", "sessionReferenceResolver/candidates", "goals/get", "goals/create", "goals/edit", "goals/pause", "goals/resume", "goals/complete", "goals/clear", "workspace/archiveSession", "workspace/unarchiveSession", "workspace/pinSession", "workspace/unpinSession", "workspace/insertSessionBefore"]);
 var ADMIN = /* @__PURE__ */ new Set(["settings/describe", "settings/update", "settings/replace", "settings/mutate", "settings/openSettingsDocument", "credentials/describe", "credentials/set", "credentials/unset", "llm/listConfigurableProviders", "llm/discoverModels", "agentPresets/read", "dynamicCordisRunner/inventory", "dynamicCordisRunner/syncInspectManifest", "pluginManager/listBundles", "pluginManager/listPlugins", "pluginInventory/list"]);
+var WORKSPACE_ADMIN = /* @__PURE__ */ new Set(["workspace/rename", "workspace/delete", "workspace/insertBefore"]);
+var DIRECTORY = /* @__PURE__ */ new Set(["directoryPicker/list", "directoryPicker/createDirectory"]);
 var GLOBAL_EVENTS = /* @__PURE__ */ new Set(["llm/adapters-updated", "permission-presets/catalog-changed"]);
 var CarrierError = class extends Error {
   constructor(status, message) {
@@ -8318,6 +8347,7 @@ var NativeGateway = class {
     this.runtime = runtime;
     this.config = config;
     this.dispatch = dispatch;
+    this.workspaceScope = new WorkspaceScope(config.cwd);
   }
   ctx;
   runtime;
@@ -8330,6 +8360,7 @@ var NativeGateway = class {
   generations = /* @__PURE__ */ new Map();
   stopped = false;
   renewals = /* @__PURE__ */ new WeakMap();
+  workspaceScope;
   async fetch(request) {
     try {
       this.assertOrigin(request);
@@ -8352,7 +8383,7 @@ var NativeGateway = class {
         await this.authorize(endpoint, body.payload, identity);
         if (endpoint === "$events/result" && record(body.payload.args)) eventResult = body.payload.args;
         const args = record(body.payload.args) ? body.payload.args : {};
-        const input = record(args.request) ? args.request : args;
+        const input = DIRECTORY.has(endpoint) ? args : record(args.request) ? args.request : args;
         resourceId = sessionResourceId(input, args);
         if (endpoint === "workspace/initializeDefault") {
           const workspace = await this.ctx.workspaceRegistry.create(this.config.cwd);
@@ -8366,9 +8397,12 @@ var NativeGateway = class {
           } }, identity);
           return this.success(body.rpcId, value, request);
         }
+        if (this.config.authEnabled && (DIRECTORY.has(endpoint) || endpoint === "workspace/create")) {
+          authorizedRequest = new Request(request.url, { method: request.method, headers: request.headers, signal: request.signal, body: JSON.stringify(body) });
+        }
         if (endpoint === "session/create") {
           if (identity !== void 0 && input.sessionId === void 0) input.sessionId = await this.runtime.reserveSoloSession(identity);
-          if (input.workspaceId === void 0) input.cwd = this.config.cwd;
+          if (input.workspaceId === void 0 && input.cwd === void 0) input.cwd = this.config.cwd;
           authorizedRequest = new Request(request.url, { method: request.method, headers: request.headers, signal: request.signal, body: JSON.stringify(body) });
         }
         if (endpoint === "session/prompt" && identity !== void 0 && typeof input.sessionId === "string" && Array.isArray(input.content) && (input.mode === "queue" || input.mode === "steer")) {
@@ -8422,13 +8456,34 @@ var NativeGateway = class {
     }
     if (!record(payload.args)) throw new CarrierError(400, "Invalid Remote arguments");
     const args = payload.args;
-    const input = record(args.request) ? args.request : args;
+    const input = DIRECTORY.has(endpoint) ? args : record(args.request) ? args.request : args;
     if (PUBLIC.has(endpoint) || endpoint === "workspace/initializeDefault") return;
+    if (DIRECTORY.has(endpoint) || endpoint === "workspace/create") {
+      if (endpoint === "directoryPicker/createDirectory" && (typeof input.name !== "string" || input.name.trim() === "" || input.name === "." || input.name === ".." || /[/\\\u0000-\u001f\u007f]/u.test(input.name))) throw new CarrierError(403, "\u6587\u4EF6\u5939\u540D\u79F0\u4E0D\u53EF\u7528\u3002");
+      const path = input.path ?? (endpoint === "directoryPicker/list" ? this.config.cwd : void 0);
+      try {
+        input.path = await this.workspaceScope.resolve(path);
+      } catch {
+        throw new CarrierError(403, "\u8BF7\u9009\u62E9\u5171\u4EAB\u5DE5\u4F5C\u533A\u5185\u7684\u76EE\u5F55\u3002");
+      }
+      return;
+    }
+    if (WORKSPACE_ADMIN.has(endpoint)) {
+      if (!this.isAdmin(identity)) throw new CarrierError(403, "\u4EC5\u7BA1\u7406\u5458\u53EF\u4FEE\u6539\u5171\u4EAB\u5DE5\u4F5C\u533A\u3002");
+      await this.requireWorkspace(input.workspaceId);
+      if (input.beforeWorkspaceId !== void 0) await this.requireWorkspace(input.beforeWorkspaceId);
+      return;
+    }
     if (endpoint === "session/create") {
-      if (input.cwd !== void 0 && input.cwd !== this.config.cwd) throw new CarrierError(403, "\u53EA\u80FD\u5728\u804A\u5929\u5BA4\u5DE5\u4F5C\u533A\u521B\u5EFA\u4F1A\u8BDD\u3002");
+      if (input.cwd !== void 0) {
+        try {
+          input.cwd = await this.workspaceScope.resolve(input.cwd);
+        } catch {
+          throw new CarrierError(403, "\u53EA\u80FD\u5728\u5171\u4EAB\u5DE5\u4F5C\u533A\u5185\u521B\u5EFA\u4F1A\u8BDD\u3002");
+        }
+      }
       if (input.workspaceId !== void 0) {
-        const workspace = this.ctx.workspaceRegistry.list().find((workspace2) => workspace2.id === input.workspaceId);
-        if (workspace === void 0 || !await samePath(workspace.path, this.config.cwd)) throw new CarrierError(403, "\u5DE5\u4F5C\u533A\u4E0D\u53EF\u7528\u3002");
+        await this.requireWorkspace(input.workspaceId);
       }
       if (input.sessionId !== void 0 && (typeof input.sessionId !== "string" || !this.runtime.ownsSoloSession(input.sessionId, identity))) throw new CarrierError(403, "\u8BF7\u5148\u9884\u7559\u81EA\u5DF1\u7684 Solo \u4F1A\u8BDD\u3002");
       return;
@@ -8450,8 +8505,7 @@ var NativeGateway = class {
       }
       if (input.beforeSessionId !== void 0) await this.requireSession(input.beforeSessionId, identity);
       if (input.workspaceId !== void 0) {
-        const workspace = this.ctx.workspaceRegistry.list().find((workspace2) => workspace2.id === input.workspaceId);
-        if (workspace === void 0 || !await samePath(workspace.path, this.config.cwd)) throw new CarrierError(403, "\u5DE5\u4F5C\u533A\u4E0D\u53EF\u7528\u3002");
+        await this.requireWorkspace(input.workspaceId);
       }
       if (endpoint === "session/updateQueue" && this.runtime.ownsSession(String(input.sessionId))) throw new CarrierError(403, "\u8BF7\u901A\u8FC7\u7FA4\u804A\u961F\u5217\u64CD\u4F5C\u81EA\u5DF1\u7684\u6D88\u606F\u3002");
       if ((endpoint === "session/prompt" || endpoint === "commands/execute") && typeof input.sessionId === "string") await this.runtime.prepareNativeModelSession(input.sessionId);
@@ -8482,6 +8536,11 @@ var NativeGateway = class {
     if ((endpoint === "session/list" || endpoint === "session/search") && Array.isArray(output.items)) {
       output.items = await this.filterSessions(output.items, (item) => record(item) ? item.sessionId ?? item.id : void 0, identity);
       if (endpoint === "session/search") output.hasMore = false;
+    }
+    if (endpoint === "directoryPicker/list" && this.config.authEnabled) {
+      const root = await this.workspaceScope.resolve(this.config.cwd);
+      output.home = root;
+      for (const key of ["crumbs", "entries"]) if (Array.isArray(output[key])) output[key] = await filterAsync(output[key], (row) => record(row) ? this.workspaceScope.contains(row.path, root) : Promise.resolve(false));
     }
     if (endpoint.startsWith("workspace/")) {
       for (const key of ["archivedSessionIds", "pinnedSessionIds"]) if (Array.isArray(output[key])) output[key] = await this.filterSessions(output[key], (id) => id, identity);
@@ -8547,7 +8606,7 @@ var NativeGateway = class {
     if (endpoint === "workspace/follow") {
       if (value.type === "baseline" && record(value.value)) {
         const baseline = value.value;
-        const items = Array.isArray(baseline.items) ? await filterAsync(baseline.items, (item) => record(item) && typeof item.path === "string" ? samePath(item.path, this.config.cwd) : Promise.resolve(false)) : [];
+        const items = Array.isArray(baseline.items) ? await filterAsync(baseline.items, (item) => record(item) && typeof item.path === "string" ? this.workspaceScope.contains(item.path) : Promise.resolve(false)) : [];
         return { ...value, value: {
           ...baseline,
           items: await Promise.all(items.map((item) => this.filterWorkspace(item, identity))),
@@ -8556,12 +8615,12 @@ var NativeGateway = class {
         } };
       }
       if (value.type === "upsert" && record(value.workspace)) {
-        if (typeof value.workspace.path !== "string" || !await samePath(value.workspace.path, this.config.cwd)) return void 0;
+        if (typeof value.workspace.path !== "string" || !await this.workspaceScope.contains(value.workspace.path)) return void 0;
         return { ...value, workspace: await this.filterWorkspace(value.workspace, identity) };
       }
       if (value.type === "archived" || value.type === "pinned") return await this.filterValue(endpoint, value, identity);
       const workspaces = this.ctx.workspaceRegistry.list();
-      const visible = new Set((await filterAsync(workspaces, (item) => samePath(item.path, this.config.cwd))).map((item) => String(item.id)));
+      const visible = new Set((await filterAsync(workspaces, (item) => this.workspaceScope.contains(item.path))).map((item) => String(item.id)));
       if (value.type === "order" && Array.isArray(value.workspaceIds)) return { ...value, workspaceIds: value.workspaceIds.filter((id) => visible.has(String(id))) };
       return void 0;
     }
@@ -8724,6 +8783,10 @@ var NativeGateway = class {
   async requireSession(id, identity) {
     if (!await this.canAccess(id, identity)) throw new CarrierError(403, "\u4F1A\u8BDD\u4E0D\u5B58\u5728\u6216\u4F60\u65E0\u6743\u8BBF\u95EE\u3002");
   }
+  async requireWorkspace(id) {
+    const workspace = this.ctx.workspaceRegistry.list().find((workspace2) => workspace2.id === id);
+    if (workspace === void 0 || !await this.workspaceScope.contains(workspace.path)) throw new CarrierError(403, "\u5DE5\u4F5C\u533A\u4E0D\u53EF\u7528\u3002");
+  }
   isAdmin(identity) {
     return canManageNativeSettings(this.config, identity);
   }
@@ -8769,13 +8832,6 @@ function sessionResourceId(input, args) {
 async function filterAsync(values, include) {
   const allowed = await Promise.all(values.map(include));
   return values.filter((_, index) => allowed[index]);
-}
-async function samePath(left, right) {
-  try {
-    return await realpath(left) === await realpath(right);
-  } catch {
-    return false;
-  }
 }
 function nodeHeaders(request) {
   const headers = new Headers();

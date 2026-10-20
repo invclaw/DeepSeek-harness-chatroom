@@ -49,3 +49,14 @@ settings/credentials RPC and every settings invalidation rechecks the current
 account authority; the bootstrap capability grants no API access. The transport's
 loopback classification remains unchanged. Validate model settings with a domain
 hostname as well as localhost, since localhost alone misses this RC.2 behavior.
+
+### Directory selection and child Workspaces
+
+Authenticated accounts can use the native directory chooser, create a folder,
+and register an existing child directory as a Workspace inside `cwd`, the shared
+deployment root. Directory listings start at that root, show its breadcrumbs,
+and omit links resolving outside it. Explicit paths and symlinks are checked
+against the canonical root before dispatch. Native Solo Sessions and Workspace
+feeds include these child Workspaces, with Session IDs filtered per account.
+Shared Workspace rename, removal and ordering use the existing administrator
+identity policy; removing a registration retains the directory and Sessions.
