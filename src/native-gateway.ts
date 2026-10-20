@@ -273,7 +273,7 @@ export class NativeGateway {
   }
 
   /** Recheck identity and resource access at each delivered native stream item. */
-  private async filterFrame(endpoint: string, value: unknown, identity: Identity, clientId: string | undefined, resourceId?: unknown): Promise<unknown | undefined> {
+  private async filterFrame(endpoint: string, value: unknown, identity: Identity, clientId: string | undefined, resourceId: unknown, publishedWorkspaces: Set<string>): Promise<unknown | undefined> {
     if (record(value)) {
       if (endpoint === 'session/follow' && value.type === 'snapshot') value = { ...value, projections: this.roomProjections(resourceId, value.projections) }
       else if (endpoint === 'session/control' && value.type === 'baseline' && record(value.value) && record(value.value.projections)) {
@@ -327,6 +327,8 @@ export class NativeGateway {
       if (value.type === 'baseline' && record(value.value)) {
         const baseline = value.value
         const items = Array.isArray(baseline.items) ? await filterAsync(baseline.items, item => record(item) && typeof item.path === 'string' ? this.workspaceScope.contains(item.path) : Promise.resolve(false)) : []
+        publishedWorkspaces.clear()
+        for (const item of items) if (record(item) && typeof item.workspaceId === 'string') publishedWorkspaces.add(item.workspaceId)
         return { ...value, value: {
           ...baseline,
           items: await Promise.all(items.map(item => this.filterWorkspace(item as RecordValue, identity))),
@@ -336,8 +338,10 @@ export class NativeGateway {
       }
       if (value.type === 'upsert' && record(value.workspace)) {
         if (typeof value.workspace.path !== 'string' || !await this.workspaceScope.contains(value.workspace.path)) return undefined
+        if (typeof value.workspace.workspaceId === 'string') publishedWorkspaces.add(value.workspace.workspaceId)
         return { ...value, workspace: await this.filterWorkspace(value.workspace, identity) }
       }
+      if (value.type === 'remove') return typeof value.workspaceId === 'string' && publishedWorkspaces.delete(value.workspaceId) ? value : undefined
       if (value.type === 'archived' || value.type === 'pinned') return await this.filterValue(endpoint, value, identity)
       // Workspace registration is shared; Session IDs are still filtered per account.
       const workspaces = this.ctx.workspaceRegistry.list()
@@ -422,6 +426,7 @@ export class NativeGateway {
           const entry = { abort: new AbortController(), endpoint: frame.endpoint, payload: frame.payload } as { abort: AbortController; endpoint: string; payload: RecordValue; clientId?: string }
           streams.set(id, entry)
           const pump = (async () => {
+            const publishedWorkspaces = new Set<string>()
             try {
               const source = await this.ctx.typertGateway.wireStream.open(entry.endpoint, entry.payload, (async function* () {})(), undefined, entry.abort.signal)
               for await (const value of source) {
@@ -430,7 +435,7 @@ export class NativeGateway {
                 await this.authorize(entry.endpoint, entry.payload, current)
                 const args = record(entry.payload.args) ? entry.payload.args : {}
                 const input = record(args.request) ? args.request : args
-                const filtered = await this.filterFrame(entry.endpoint, value, current, entry.clientId, sessionResourceId(input, args))
+                const filtered = await this.filterFrame(entry.endpoint, value, current, entry.clientId, sessionResourceId(input, args), publishedWorkspaces)
                 if (record(filtered) && filtered.type === 'ready' && typeof filtered.clientId === 'string') entry.clientId = filtered.clientId
                 if (filtered !== undefined) send({ type: 'item', streamId: id, value: filtered })
               }

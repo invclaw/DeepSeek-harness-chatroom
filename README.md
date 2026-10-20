@@ -109,7 +109,7 @@ The plugin is out-of-tree and does **not** modify DeepSeek Harness. Initializati
 <details>
 <summary><strong>Recent releases</strong></summary>
 
-- **1.4.12** — restore native directory browsing, folder creation and child Workspaces within the shared root; Solo creation and Workspace streams follow the selected directory while retaining per-account Session filtering.
+- **1.4.12** — restore native directory browsing, folder creation and child Workspaces within the shared root; Solo creation and Workspace streams follow the selected directory while retaining per-account Session filtering. Keep the Group/Solo chooser in the native input dock across welcome rerenders; prevent reentrant search navigation and persist recalls through valid native context injections.
 - **1.4.11** — optional `deepseek-harness-chatroom/settings` host entry retains native forms and revision checks while selecting Host persistence from server-confirmed administrator capability on domain URLs; settings invalidations remain administrator-only.
 - **1.4.10** — authorize native session directories and control baselines using one persistence snapshot per batch, avoiding repeated full-directory reads while rechecking ownership on every response.
 - **1.4.9** — carry native composer correlation through the shared-room HTTP path as well as native Remote, so accepted room/branch messages retire their local echoes.

@@ -163,6 +163,22 @@ describe('ChatroomClientStore', () => {
     expect(store.getSnapshot().open).toBe(false)
   })
 
+  it('consumes pending navigation before a synchronous Host list update', async () => {
+    const room = roomInfo()
+    const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(sessionResponse(identity, [room])))
+      .mockResolvedValueOnce(jsonResponse({ room })))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const openSession = vi.fn(() => { store.resumeOpen(); return true })
+    const store = new ChatroomClientStore(openSession)
+    await store.start()
+    await store.selectRoom(room.id)
+    expect(openSession).toHaveBeenCalledTimes(1)
+    expect(store.getSnapshot().open).toBe(false)
+    store.stop()
+  })
+
   it('searches visible content and opens the selected room message', async () => {
     const identity = { participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const }
     const room = roomInfo()

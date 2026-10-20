@@ -233,7 +233,8 @@ describe('native Remote account gateway', () => {
     const root = await mkdtemp(join(tmpdir(), 'chatroom-workspaces-'))
     const child = join(root, 'project')
     await mkdir(child)
-    const f = fixture(root, [{ id: 'root', path: root }, { id: 'child', path: child }, { id: 'outside', path: tmpdir() }])
+    const workspaces = [{ id: 'root', path: root }, { id: 'child', path: child }, { id: 'outside', path: tmpdir() }]
+    const f = fixture(root, workspaces)
     const server = createServer()
     server.on('upgrade', (req, socket, head) => { void f.gateway.upgrade(req, socket, head) })
     server.listen(0, '127.0.0.1')
@@ -244,9 +245,9 @@ describe('native Remote account gateway', () => {
       socket.send(JSON.stringify({ type: 'open', streamId: 'workspaces', endpoint: 'workspace/follow', payload: { args: {} } }))
       await vi.waitFor(() => expect(f.events).toHaveBeenCalledOnce())
       let received = once(socket, 'message')
-      f.push({ type: 'baseline', value: { items: [root, child, tmpdir()].map(path => ({ path, sessionIds: ['alice-solo', 'bob-solo'] })) } })
+      f.push({ type: 'baseline', value: { items: workspaces.map(({ id, path }) => ({ workspaceId: id, path, sessionIds: ['alice-solo', 'bob-solo'] })) } })
       let [frame] = await received
-      expect(JSON.parse(String(frame)).value.value.items).toEqual([root, child].map(path => ({ path, sessionIds: ['alice-solo'] })))
+      expect(JSON.parse(String(frame)).value.value.items).toEqual(workspaces.slice(0, 2).map(({ id, path }) => ({ workspaceId: id, path, sessionIds: ['alice-solo'] })))
       received = once(socket, 'message')
       f.push({ type: 'upsert', workspace: { path: child, sessionIds: ['alice-solo', 'bob-solo'] } })
       ;[frame] = await received
@@ -264,6 +265,18 @@ describe('native Remote account gateway', () => {
         expect((await f.gateway.fetch(rpc(method, { workspaceId: 'child', beforeWorkspaceId: 'outside' }))).status).toBe(403)
         f.account.role = 'member'
       }
+      // Native registry deletion precedes the remove notification.
+      workspaces.splice(1, 1)
+      received = once(socket, 'message')
+      f.push({ type: 'remove', workspaceId: 'outside' })
+      f.push({ type: 'remove', workspaceId: 'child' })
+      ;[frame] = await received
+      expect(JSON.parse(String(frame)).value).toEqual({ type: 'remove', workspaceId: 'child' })
+      received = once(socket, 'message')
+      f.push({ type: 'remove', workspaceId: 'child' })
+      f.push({ type: 'order', workspaceIds: ['root'] })
+      ;[frame] = await received
+      expect(JSON.parse(String(frame)).value).toEqual({ type: 'order', workspaceIds: ['root'] })
     } finally { socket.terminate(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }) }
   })
   it('routes group prompts through participant-aware intake', async () => {

@@ -115,6 +115,11 @@ try {
   const bob = await register('smoke-bob')
   const room = (await api('/rooms', alice, { title: 'Alice private group' }, 201)).room
   await api('/prompt', alice, { roomId: room.id, mode: 'queue', content: [{ type: 'text', text: 'private group history' }] })
+  const history = await api('/search?q=private%20group%20history', alice)
+  const ownMessage = history.results.find(item => item.kind === 'message' && item.conversationId === room.id)
+  assert(ownMessage?.messageId, 'Own group message missing from search')
+  await api('/messages/recall', alice, { roomId: room.id, messageId: ownMessage.messageId })
+  await api('/prompt', alice, { roomId: room.id, mode: 'queue', content: [{ type: 'text', text: 'message after recall' }] })
   const thread = (await api('/threads/open', alice, { roomId: room.id, root: { messageId: 'smoke-root', displayName: 'smoke-alice', text: 'branch context', role: 'human' } })).thread
   const solo = await rpc('session/create', alice)
   await rpc('session/rename', alice, { sessionId: solo.sessionId, title: 'Alice private Solo' })
@@ -156,6 +161,11 @@ try {
   await live.wait('control')
   live.open('workspace', 'workspace/follow')
   await live.wait('workspace')
+  await rpc('workspace/delete', admin, { workspaceId: registered.workspace.workspaceId })
+  const removed = () => live.frames.some(frame => frame.streamId === 'workspace' && frame.type === 'item' && frame.value?.type === 'remove' && frame.value.workspaceId === registered.workspace.workspaceId)
+  for (let attempt = 0; attempt < 100 && !removed(); attempt++) await delay(50)
+  assert(removed(), 'Workspace removal was not delivered to an existing member subscription')
+
   assert(!JSON.stringify(live.frames).includes(room.sessionId), 'Remote baseline leaked foreign group')
   const hidden = await rpc('session/create', alice)
   const visible = await rpc('session/create', bob)
@@ -174,7 +184,7 @@ try {
   await live.wait('shared-follow', 'error')
   await api('/admin', admin, { action: 'update-user', userId: alice.identity.participantId, status: 'disabled' })
   await rpc('session/list', alice, {}, 401)
-  console.log(JSON.stringify({ status: 'passed', accounts: 3, boundary: 'real DSH HTTP + Remote WS', checked: ['group/branch/Solo isolation', 'list and stream baseline filtering', 'operator endpoint denial', 'scoped directory browsing and child Workspace creation', 'configured cwd', 'membership grant', 'HTTP and active-stream logout revocation'] }, null, 2))
+  console.log(JSON.stringify({ status: 'passed', accounts: 3, boundary: 'real DSH HTTP + Remote WS', checked: ['group/branch/Solo isolation', 'durable recall and subsequent send', 'list and stream baseline filtering', 'operator endpoint denial', 'scoped directory browsing and child Workspace creation', 'configured cwd', 'membership grant', 'HTTP and active-stream logout revocation'] }, null, 2))
 } catch (error) {
   let safe = diagnostic.replace(/([?&]token=)[^\s&]+/gu, '$1<redacted>')
   for (const value of [environment.DSH_CHATROOM_AUTH_SECRET, bootstrapToken]) safe = safe.replaceAll(value, '<redacted>')
