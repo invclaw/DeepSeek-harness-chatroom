@@ -3,7 +3,7 @@
   <p><strong>为 DeepSeek Harness 原生 Web 界面补上一套完整的多人协作层。</strong></p>
   <p>简体中文 · <a href="README.md">English</a></p>
   <p>
-    <img alt="版本 1.4.12" src="https://img.shields.io/badge/version-1.4.12-4f6bff">
+    <img alt="版本 1.4.13" src="https://img.shields.io/badge/version-1.4.13-4f6bff">
     <img alt="Harness 0.2.0-rc.2" src="https://img.shields.io/badge/DeepSeek_Harness-0.2.0--rc.2-111827">
     <img alt="pnpm 10.33.4" src="https://img.shields.io/badge/pnpm-10.33.4-f69220">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e">
@@ -109,6 +109,7 @@
 <details>
 <summary><strong>近期版本</strong></summary>
 
+- **1.4.13** — 群聊沿用原生 Session 自己的目录，分支继承父工作区，重新打开持久会话后仍保持一致。
 - **1.4.12** — 恢复共享根目录内的原生目录选择、新建文件夹和子目录工作区；Solo 创建与工作区事件流跟随所选目录，并保持逐账号 Session 隔离。群聊/Solo 开关固定在原生输入扩展槽内，欢迎区重绘后仍可使用；修复搜索切群的同步递归，并用合法的原生上下文注入持久化撤回。
 - **1.4.11** — 可选 `deepseek-harness-chatroom/settings` Host 入口保留原生表单和版本冲突检查，按服务器确认的管理员权限开放域名下的设置持久化；设置变更通知仅向管理员转发。
 - **1.4.10** — 原生会话列表与控制流基线使用每批一次的持久目录快照授权，避免逐条重复读库；每次响应仍重新检查账号归属。

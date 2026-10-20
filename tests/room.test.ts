@@ -779,7 +779,7 @@ describe('ChatroomRuntime', () => {
     harness.agents.push({
       id: 'native-session-1',
       options: { provider: 'deepseek', model: 'chat' },
-      session: { events: [], snapshotEvents: () => [], append: vi.fn() },
+      session: { header: { cwd: '/workspace/project' }, events: [], snapshotEvents: () => [], append: vi.fn() },
       ctx: harness.makeAgentContext(),
       inbox: { nextTurn: [], nextStep: [] },
       followup: vi.fn(),
@@ -787,6 +787,12 @@ describe('ChatroomRuntime', () => {
     } as never)
     vi.mocked(harness.ctx.agents.get).mockImplementation(id =>
       harness.agents.find(agent => String(agent.id) === String(id)))
+    // The real registry refuses attaching a Session to a different directory.
+    vi.mocked(harness.ctx.workspaceRegistry.resolveByPath).mockImplementation(async path => ({
+      attachSession: async () => {
+        if (path !== '/workspace/project') throw new Error('Session cwd differs from Workspace')
+      },
+    }) as never)
     const alice = {
       participantId: 'alice-id', displayName: 'Alice', avatarId: 'whale' as const,
       avatarUrl: 'https://images.example.com/alice.png',
@@ -839,7 +845,7 @@ describe('ChatroomRuntime', () => {
     harness.agents.push({
       id: sessionId,
       options: { provider: 'deepseek', model: 'chat' },
-      session: { id: sessionId, events: [], snapshotEvents: () => [], append: vi.fn() },
+      session: { id: sessionId, header: { cwd: process.cwd() }, events: [], snapshotEvents: () => [], append: vi.fn() },
       ctx: harness.makeAgentContext(),
       inbox: { nextTurn: [], nextStep: [] },
       followup: vi.fn(),
@@ -869,7 +875,7 @@ describe('ChatroomRuntime', () => {
     harness.agents.push({
       id: 'native-live-session',
       options: { provider: 'deepseek', model: 'chat' },
-      session: { id: 'native-live-session', events: [], snapshotEvents: () => [], append: vi.fn() },
+      session: { id: 'native-live-session', header: { cwd: process.cwd() }, events: [], snapshotEvents: () => [], append: vi.fn() },
       inbox: { nextTurn: [], nextStep: [] },
       ctx: agentCtx,
       followup: vi.fn(),

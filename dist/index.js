@@ -5109,7 +5109,7 @@ var ChatroomRuntime = class {
   async activateSharedSession(sessionId, parentSessionId) {
     const binding = await this.acquireAgent(sessionId, parentSessionId);
     try {
-      await this.attachWorkspace(sessionId);
+      await this.attachWorkspace(sessionId, binding.agent.session.header.cwd ?? this.config.cwd);
       this.applyModelVisibility(binding.agent.session, binding.agent.status === "idle");
       return binding;
     } catch (error) {
@@ -5129,7 +5129,8 @@ var ChatroomRuntime = class {
       this.augmentChatroomAgentContext(live.ctx, sessionId);
       return borrowAgent(live);
     }
-    const persisted = (await this.ctx.sessionPersistence.list()).some(({ header }) => header.id === id);
+    const persistedSessions = await this.ctx.sessionPersistence.list();
+    const persisted = persistedSessions.some(({ header }) => header.id === id);
     const model = this.ctx.agentDefaultModel.currentSelection();
     const agentOptions = { provider: model.provider, model: model.model };
     if (persisted) {
@@ -5152,11 +5153,12 @@ var ChatroomRuntime = class {
         throw error;
       }
     }
+    const parentCwd = parentSessionId === void 0 ? void 0 : this.ctx.agents.get(SessionId(parentSessionId))?.session.header.cwd ?? persistedSessions.find(({ header }) => String(header.id) === parentSessionId)?.header.cwd;
     try {
       return ownAgent(await this.ctx.agents.create({
         sessionId: id,
         meta: {
-          cwd: this.config.cwd,
+          cwd: parentCwd ?? this.config.cwd,
           agentPreset: this.config.agentPreset,
           ...parentSessionId === void 0 ? {} : { parentSession: SessionId(parentSessionId) }
         },
@@ -5614,8 +5616,8 @@ ${meeting.summary ?? ""}` }],
     });
   }
   /** Ensure one shared Session uses native Workspace navigation. */
-  async attachWorkspace(sessionId) {
-    const workspace = await this.ctx.workspaceRegistry.resolveByPath(this.config.cwd) ?? await this.ctx.workspaceRegistry.create(this.config.cwd);
+  async attachWorkspace(sessionId, cwd) {
+    const workspace = await this.ctx.workspaceRegistry.resolveByPath(cwd) ?? await this.ctx.workspaceRegistry.create(cwd);
     await workspace.attachSession(SessionId(sessionId));
   }
   async durableContent(roomId, identity, content) {
