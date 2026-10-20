@@ -142,6 +142,13 @@ try {
   const childDraft = await rpc('session/create', bob, { workspaceId: registered.workspace.workspaceId })
   const childList = await rpc('session/list', bob)
   assert(childList.items.some(item => (item.sessionId ?? item.id) === childDraft.sessionId && item.cwd === childPath), 'Added workspace did not create a native draft in its directory')
+  const childRoom = (await api('/rooms/ensure', bob, { sessionId: childDraft.sessionId, title: 'Child workspace Group' })).room
+  await api('/prompt', bob, { roomId: childRoom.id, mode: 'queue', content: [{ type: 'text', text: 'child workspace history' }] })
+  const childThread = (await api('/threads/open', bob, { roomId: childRoom.id, root: { messageId: 'child-root', displayName: 'smoke-bob', text: 'branch context', role: 'human' } })).thread
+  const childSessions = await rpc('session/list', bob)
+  for (const id of [childRoom.sessionId, childThread.sessionId]) {
+    assert(childSessions.items.some(item => (item.sessionId ?? item.id) === id && item.cwd === childPath), 'Group or branch lost its selected Workspace directory')
+  }
   for (const user of [admin, bob]) {
     await rpc('directoryPicker/list', user, { path: '/' }, 403)
     await rpc('workspace/create', user, { path: '/' }, 403)
